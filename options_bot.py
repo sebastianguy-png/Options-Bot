@@ -26,7 +26,8 @@ Run:
 # ──────────────────────────────────────────────────────────────
 import os, sys, json, uuid, threading, webbrowser, time, warnings
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from math import log, sqrt, exp
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 import threading as _threading
 
 import yfinance as yf
@@ -39,11 +40,30 @@ warnings.filterwarnings("ignore")
 # All yfinance calls that hit Yahoo's API (options chain, calendar,
 # expiry lists) go through this semaphore so we never fire more
 # than 2 concurrent requests regardless of thread count.
-_YF_SEM = _threading.Semaphore(2)
+_YF_SEM = _threading.Semaphore(8)
+
+def _yf_refresh_session():
+    """
+    Force yfinance to re-fetch its cookie and crumb from Yahoo Finance.
+    Uses the YfData singleton's own _get_cookie_and_crumb() method —
+    the correct way to re-authenticate in yfinance 1.x.
+    """
+    try:
+        import yfinance.data as _yfd
+        yd = _yfd.YfData()          # returns the singleton instance
+        yd._crumb  = None           # clear stale crumb so it re-fetches
+        yd._cookie = None           # clear stale cookie
+        yd._get_cookie_and_crumb()  # re-authenticate properly
+        print("  [Auth] yfinance crumb refreshed successfully")
+    except Exception as e:
+        print(f"  [Auth] crumb refresh failed ({e}) — will retry request anyway")
+
 
 def _yf_call(fn, *args, retries=4, base_delay=6, **kwargs):
     """
     Call any yfinance method with rate-limit retry + semaphore.
+    Automatically handles Yahoo Finance 401 crumb errors by refreshing
+    the yfinance session and retrying.
     Usage:  chain = _yf_call(tkr.option_chain, exp)
     """
     import time
@@ -55,7 +75,13 @@ def _yf_call(fn, *args, retries=4, base_delay=6, **kwargs):
                 msg = str(e).lower()
                 is_rate = any(x in msg for x in
                               ("too many requests", "rate limit", "429", "rate limited"))
-                if is_rate and attempt < retries:
+                is_crumb = any(x in msg for x in
+                               ("401", "unauthorized", "invalid crumb", "crumb"))
+                if is_crumb and attempt < retries:
+                    print(f"  [Auth] 401 crumb error — refreshing session (attempt {attempt+1}/{retries})")
+                    _yf_refresh_session()
+                    time.sleep(2)
+                elif is_rate and attempt < retries:
                     wait = base_delay * (2 ** attempt)
                     print(f"  [Rate limit] retrying in {wait}s (attempt {attempt+1}/{retries})")
                     time.sleep(wait)
@@ -82,10 +108,11 @@ PREMIUM_PCT_MIN      = 3.0     # Put/call mid ÷ stock price × 100 threshold
 BB_PERIOD            = 20      # Bollinger Band window
 BB_STD_DEV           = 2       # Bollinger Band std-devs
 RSI_PERIOD           = 14      # RSI lookback
+DC_PERIOD            = 20      # Donchian Channel window (highest high / lowest low)
 MIN_DTE              = 14      # Min days to expiry
 MAX_DTE              = 45      # Max days to expiry
 MIN_OPEN_INTEREST    = 10      # Min OI on selected option
-MAX_WORKERS          = 2       # Parallel scan threads (keep low to avoid rate limits)
+MAX_WORKERS          = 8       # Parallel scan threads (I/O-bound; Yahoo latency is the bottleneck)
 SCAN_DELAY_S         = 0.15    # Seconds to sleep between ticker fetches (throttle)
 SERVER_PORT          = 5000    # Web dashboard port
 LIVE_REFRESH_MINS    = 5       # How often to re-check current signal tickers (minutes)
@@ -94,6 +121,20 @@ LIVE_REFRESH_MINS    = 5       # How often to re-check current signal tickers (m
 # "focus"  → ~80 high-liquidity names with active options markets
 # "full"   → entire S&P 500 universe (~503 tickers, slower)
 SCAN_MODE            = "focus"   # default; overridden by UI toggle
+
+# ── Green candle confirmation (buy calls only) ─────────────────
+# When True: buy call signals require the current bar to close ABOVE
+# the previous close — confirming buyers showed up before entering.
+# Reduces early entries on falling knives at the cost of some signals.
+# Toggle live via the UI button without restarting.
+REQUIRE_GREEN_CANDLE = False
+
+# ── Red candle confirmation (buy puts only) ──────────────────────
+# When True: buy put signals require the current bar to close BELOW
+# the previous close — confirming sellers showed up before entering.
+# Avoids entering puts on overbought stocks that are still grinding up.
+# Toggle live via the UI button without restarting.
+REQUIRE_RED_CANDLE = False
 
 FOCUS_LIST = [
     # Mega-cap tech
@@ -121,7 +162,7 @@ FOCUS_LIST = [
 
 # ── Monte Carlo ───────────────────────────────────────────────
 N_MC_SIMS            = 10_000  # Simulations per signal (higher = slower but more accurate)
-RISK_FREE_RATE       = 0.05    # Annual risk-free rate used in GBM price model
+RISK_FREE_RATE       = 0.044   # Fallback: ~current 6-month T-bill. Auto-updated on startup via FRED.
 
 # ── Guardrail ─────────────────────────────────────────────────
 GUARDRAIL_LIMIT      = 1000.00  # $ threshold requiring explicit CONFIRM
@@ -141,14 +182,16 @@ AUTO_SUBMIT          = False
 QUEUE_FILE           = "trade_queue.json"
 HISTORY_FILE         = "trade_history.json"
 TRACK_FILE           = "tracked_positions.json"
+PERFORMANCE_FILE     = "performance.json"
+WFO_FILE             = "wfo_results.json"     # persists last WFO run across restarts
 
 # ── Tracked position sell-signal thresholds ───────────────────
 # A sell signal fires when ANY of these conditions are met:
-SELL_PROFIT_TARGET   = 40    # % gain on the option premium  → take profit
-SELL_STOP_LOSS       = 35    # % loss on the option premium  → cut loss
-# RSI reversal thresholds (original signal must be gone):
-SELL_RSI_BULL_TARGET = 58    # Buy Call: RSI back above this → signal consumed
-SELL_RSI_BEAR_TARGET = 42    # Buy Put:  RSI back below this → signal consumed
+SELL_PROFIT_TARGET   = 50    # % gain on the option premium  → take profit
+SELL_STOP_LOSS       = 25    # % loss on the option premium  → cut loss (2:1 reward:risk)
+# RSI reversal thresholds — exit when mean reversion is complete:
+SELL_RSI_BULL_TARGET = 55    # Buy Call: RSI back above this → bounce done, take profit
+SELL_RSI_BEAR_TARGET = 45    # Buy Put:  RSI back below this → pullback done, take profit
 TRACK_CHECK_MINS     = 10    # How often (minutes) to re-scan tracked tickers
 
 # ──────────────────────────────────────────────────────────────
@@ -209,6 +252,132 @@ def calc_bb(closes, period=20, nstd=2):
     return sma + nstd * std, sma, sma - nstd * std
 
 
+def calc_donchian(hist, period=20):
+    """
+    Donchian Channels: upper = highest high, lower = lowest low over N periods.
+    Middle = (upper + lower) / 2.
+    Returns (upper, middle, lower) as pandas Series.
+    Unlike Bollinger Bands (which measure volatility), Donchian Channels measure
+    pure price range extremes — useful for confirming breakouts and breakdowns.
+    """
+    highs  = hist["High"]  if "High"  in hist.columns else hist["Close"]
+    lows   = hist["Low"]   if "Low"   in hist.columns else hist["Close"]
+    upper  = highs.rolling(period).max()
+    lower  = lows.rolling(period).min()
+    middle = (upper + lower) / 2
+    return upper, middle, lower
+
+
+def calc_garch_vol(closes, fallback_window=20):
+    """
+    Estimate annualised forward volatility using GJR-GARCH(1,1,1) with
+    Student-t innovations — a jump-aware volatility model.
+
+    GJR-GARCH adds an asymmetric leverage term (γ) to standard GARCH:
+        σ²_t = ω + α·ε²_(t-1) + γ·ε²_(t-1)·I(ε_(t-1)<0) + β·σ²_(t-1)
+    The γ term fires only on negative shocks, capturing the well-documented
+    asymmetry where crashes spike vol more than rallies of equal magnitude.
+
+    Student-t innovations replace the normal distribution assumption with
+    fat tails, capturing jump-like extreme return behaviour without requiring
+    an explicit (and fragile) Poisson jump process.
+
+    Falls back in order:
+      1. Standard GARCH(1,1) with normal innovations   (if GJR-t fails)
+      2. 20-day rolling historical vol                  (if arch unavailable)
+      3. 20% flat default                               (last resort)
+
+    Returns annualised vol as a decimal (e.g. 0.32 = 32%).
+    """
+    import warnings
+    import numpy as np
+
+    try:
+        log_ret = np.log(closes / closes.shift(1)).dropna() * 100  # % returns
+        if len(log_ret) < 60:
+            raise ValueError("insufficient data")
+
+        from arch import arch_model
+
+        def _fit_and_validate(am, max_daily_vol=0.08):
+            """
+            Fit an arch model and validate the result is financially sensible.
+            Returns (annual_vol, ok) where ok=False means the fit is suspect.
+            max_daily_vol: reject fits implying > this daily vol (8% = ~127% annual)
+            """
+            res = am.fit(disp="off", show_warning=False,
+                         options={"maxiter": 300})
+            fc       = res.forecast(horizon=1, reindex=False)
+            var_pct2 = float(fc.variance.iloc[-1, 0])
+
+            # Reject non-finite or negative variance
+            if not np.isfinite(var_pct2) or var_pct2 <= 0:
+                return None, False
+
+            daily_vol  = (var_pct2 ** 0.5) / 100
+            annual_vol = daily_vol * (252 ** 0.5)
+
+            # Reject if daily vol is implausibly high (model diverged)
+            if daily_vol > max_daily_vol:
+                return None, False
+
+            # For GJR: check stationarity condition α + γ/2 + β < 1
+            p = res.params
+            if "gamma[1]" in p.index:
+                persistence = (p.get("alpha[1]", 0) +
+                               p.get("gamma[1]", 0) / 2 +
+                               p.get("beta[1]", 0))
+                if persistence >= 1.0:
+                    return None, False
+
+            # For Student-t: degrees of freedom < 4 means variance is unreliable
+            if "nu" in p.index and float(p["nu"]) < 4:
+                return None, False
+
+            return float(np.clip(annual_vol, 0.05, 2.0)), True
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+
+            annual_vol = None
+
+            # ── Primary: GJR-GARCH(1,1,1) with Student-t ─────────
+            try:
+                am  = arch_model(log_ret, vol="Garch", p=1, o=1, q=1,
+                                 dist="t", rescale=False)
+                annual_vol, ok = _fit_and_validate(am)
+                if not ok:
+                    annual_vol = None
+            except Exception:
+                annual_vol = None
+
+            # ── Fallback 1: plain GARCH(1,1) with normal ──────────
+            if annual_vol is None:
+                try:
+                    am  = arch_model(log_ret, vol="Garch", p=1, q=1,
+                                     dist="normal", rescale=False)
+                    annual_vol, ok = _fit_and_validate(am)
+                    if not ok:
+                        annual_vol = None
+                except Exception:
+                    annual_vol = None
+
+        if annual_vol is not None:
+            return annual_vol
+
+        # Both GARCH fits failed or diverged — fall through to HV fallback
+        raise ValueError("GARCH fits did not produce sensible estimates")
+
+    except Exception:
+        # ── Fallback 2: rolling historical vol ────────────────────
+        try:
+            log_ret = np.log(closes / closes.shift(1)).dropna()
+            hv = float(log_ret.rolling(fallback_window).std().iloc[-1]) * (252 ** 0.5)
+            return float(np.clip(hv, 0.05, 2.0))
+        except Exception:
+            return 0.20   # last-resort default
+
+
 def black_scholes(S, K, T, r, sigma, option_type="call"):
     """
     Black-Scholes option pricing model.
@@ -220,7 +389,6 @@ def black_scholes(S, K, T, r, sigma, option_type="call"):
     Returns theoretical fair value, delta, and mispricing info.
     """
     try:
-        from math import log, sqrt, exp
         from scipy.stats import norm
 
         if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
@@ -279,6 +447,40 @@ def calc_iv_rank(hist_closes, current_iv):
         return None
 
 
+# ── 6-month T-bill rate (FRED DTB6, refreshed every 6 hours) ─
+_rfr_cache = {"value": None, "ts": None}
+
+def fetch_risk_free_rate():
+    """
+    Fetch the current 6-month US T-bill rate from FRED (series DTB6).
+    Updates the global RISK_FREE_RATE. Cached for 6 hours.
+    Falls back to the hardcoded value if fetch fails.
+    FRED URL: https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTB6
+    """
+    import time as _time
+    import urllib.request
+    global RISK_FREE_RATE
+    now = _time.time()
+    if _rfr_cache["value"] is not None and (now - _rfr_cache["ts"]) < 21600:
+        return _rfr_cache["value"]
+    try:
+        url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTB6"
+        with urllib.request.urlopen(url, timeout=6) as resp:
+            lines = resp.read().decode().strip().split('\n')
+        # CSV: DATE,DTB6 — find last non-missing value
+        for line in reversed(lines[1:]):
+            parts = line.strip().split(',')
+            if len(parts) == 2 and parts[1].strip() not in ('.', ''):
+                rate = round(float(parts[1].strip()) / 100.0, 5)
+                _rfr_cache.update(value=rate, ts=now)
+                RISK_FREE_RATE = rate
+                print(f"  [RFR] 6-month T-bill rate updated: {rate*100:.3f}%")
+                return rate
+    except Exception as e:
+        print(f"  [RFR] FRED fetch failed ({e}) — using fallback {RISK_FREE_RATE*100:.2f}%")
+    return RISK_FREE_RATE
+
+
 # ── VIX regime cache (refreshed every 30 min) ────────────────
 _vix_cache = {"value": None, "ts": None}
 
@@ -314,6 +516,54 @@ def vix_regime(vix):
     return "normal"
 
 
+# ── SPY market regime cache (refreshed every 30 min) ─────────
+_spy_cache = {"trend": None, "ts": None}
+
+def get_market_trend():
+    """
+    Return broad market trend based on SPY vs its 200-day MA + ADX.
+
+    Returns one of:
+      "bull_strong"  → SPY above 200 MA with ADX > 25 (confirmed uptrend)
+      "bull_weak"    → SPY above 200 MA but trend not strong
+      "bear_strong"  → SPY below 200 MA with ADX > 25 (confirmed downtrend)
+      "bear_weak"    → SPY below 200 MA but trend not strong
+      "neutral"      → unable to determine
+
+    Cached for 30 minutes to avoid repeated fetches.
+    """
+    import time as _time
+    now = _time.time()
+    if _spy_cache["trend"] is not None and (now - _spy_cache["ts"]) < 1800:
+        return _spy_cache["trend"]
+    try:
+        hist = yf.Ticker("SPY").history(period="12mo")
+        if hist.empty or len(hist) < 200:
+            return _spy_cache["trend"] or "neutral"
+        closes = hist["Close"]
+        price  = float(closes.iloc[-1])
+        ma200  = float(closes.rolling(200).mean().iloc[-1])
+        above  = price > ma200
+        # ADX for trend strength
+        adx_ser, pdi_ser, ndi_ser = calc_adx(hist)
+        adx = float(adx_ser.iloc[-1]) if adx_ser is not None else 0
+        strong = adx > 25
+        if above and strong:
+            trend = "bull_strong"
+        elif above:
+            trend = "bull_weak"
+        elif not above and strong:
+            trend = "bear_strong"
+        else:
+            trend = "bear_weak"
+        _spy_cache.update(trend=trend, ts=now)
+        print(f"  [Market] SPY trend = {trend}  (price={price:.2f} ma200={ma200:.2f} adx={adx:.1f})")
+        return trend
+    except Exception as e:
+        print(f"  [Market] SPY trend fetch failed: {e}")
+        return _spy_cache["trend"] or "neutral"
+
+
 def volume_confirmation(hist, lookback=20, multiplier=1.2):
     """
     True if today's volume is at least `multiplier` × 20-day avg.
@@ -331,14 +581,16 @@ def volume_confirmation(hist, lookback=20, multiplier=1.2):
         return False, None, None
 
 
-def get_short_interest(tkr_obj):
+def get_short_interest(tkr_obj, info=None):
     """
     Return (short_pct_float, short_ratio) from yfinance info.
     short_pct_float: e.g. 0.15 = 15% of float is short.
     short_ratio: days-to-cover.
+    Pass info= to reuse an already-fetched info dict and avoid a second API call.
     """
     try:
-        info = tkr_obj.info
+        if info is None:
+            info = _yf_call(lambda: tkr_obj.info)
         pct  = info.get("shortPercentOfFloat")   # 0.0–1.0
         ratio = info.get("shortRatio")
         return (round(float(pct) * 100, 1) if pct else None,
@@ -535,17 +787,20 @@ def macd_crossover(macd_line, signal_line, lookback=3):
     return None
 
 
-def calc_put_call_ratio(tkr_obj):
+def calc_put_call_ratio(tkr_obj, chain=None, exp=None):
     """
     Put/Call volume ratio for the nearest eligible expiry.
     > 1.2  → bearish sentiment (fear / hedging)
     < 0.7  → bullish sentiment (greed / speculation)
+    Pass chain=, exp= to reuse pre-fetched data and avoid extra API calls.
     """
     try:
-        exp, _ = _best_exp(tkr_obj)
+        if exp is None:
+            exp, _ = _best_exp(tkr_obj)
         if not exp:
             return None
-        chain    = _yf_call(tkr_obj.option_chain, exp)
+        if chain is None:
+            chain = _yf_call(tkr_obj.option_chain, exp)
         put_vol  = float(chain.puts["volume"].fillna(0).sum())
         call_vol = float(chain.calls["volume"].fillna(0).sum())
         if call_vol <= 0:
@@ -555,17 +810,15 @@ def calc_put_call_ratio(tkr_obj):
         return None
 
 
-def get_next_earnings_dte(tkr_obj):
+def _parse_earnings_dte(cal):
     """
-    Return days until the next earnings date, or None if unavailable.
-    Works with both dict and DataFrame variants of yfinance calendar.
+    Parse a pre-fetched calendar dict/DataFrame and return days until next earnings.
+    Extracted so _prefetch_ticker can call this without needing the tkr object.
     """
+    from datetime import date as _date, datetime as _dt
     try:
-        cal = tkr_obj.calendar
         if cal is None:
             return None
-        from datetime import date as _date, datetime as _dt
-
         ed = None
         if isinstance(cal, dict):
             ed = cal.get("Earnings Date")
@@ -576,7 +829,6 @@ def get_next_earnings_dte(tkr_obj):
                 ed = cal.loc["Earnings Date"].iloc[0]
             elif "Earnings Date" in (cal.columns if hasattr(cal, "columns") else []):
                 ed = cal["Earnings Date"].iloc[0]
-
         if ed is None:
             return None
         if hasattr(ed, "date"):
@@ -585,6 +837,20 @@ def get_next_earnings_dte(tkr_obj):
             ed = _dt.strptime(ed[:10], "%Y-%m-%d").date()
         days = (ed - _date.today()).days
         return int(days) if days >= 0 else None
+    except Exception:
+        return None
+
+
+def get_next_earnings_dte(tkr_obj, cal=None):
+    """
+    Return days until the next earnings date, or None if unavailable.
+    Works with both dict and DataFrame variants of yfinance calendar.
+    Pass cal= to reuse a pre-fetched calendar and avoid an extra API call.
+    """
+    try:
+        if cal is None:
+            cal = _yf_call(lambda: tkr_obj.calendar)
+        return _parse_earnings_dte(cal)
     except Exception:
         return None
 
@@ -613,17 +879,20 @@ def _best_exp(tkr_obj):
 
 
 def pick_option(tkr_obj, stock_price, option_type="put",
-                otm_factor=1.0, require_oi=True):
+                otm_factor=1.0, require_oi=True, chain=None, exp=None, dte=None):
     """
     Find ATM (or slightly OTM) option for the best expiry.
     otm_factor > 1.0 → OTM call; < 1.0 → OTM put.
+    Pass chain=, exp=, dte= to reuse pre-fetched data and avoid extra API calls.
     """
-    exp, dte = _best_exp(tkr_obj)
+    if exp is None:
+        exp, dte = _best_exp(tkr_obj)
     if not exp:
         return None
 
     try:
-        chain = _yf_call(tkr_obj.option_chain, exp)
+        if chain is None:
+            chain = _yf_call(tkr_obj.option_chain, exp)
         opts  = chain.puts if option_type == "put" else chain.calls
         if opts.empty:
             return None
@@ -639,7 +908,7 @@ def pick_option(tkr_obj, stock_price, option_type="put",
 
         bid = float(row.get("bid") or 0)
         ask = float(row.get("ask") or 0)
-        mid = (bid + ask) / 2 if bid > 0 else float(row.get("lastPrice") or 0)
+        mid = _option_mid(row)
         iv  = float(row.get("impliedVolatility") or 0) * 100
 
         if mid < 0.01 or iv < 1:
@@ -788,18 +1057,62 @@ def _yf_history_with_retry(sym, period="1y", retries=3, base_delay=5):
     return tkr, tkr.history(period=period)
 
 
-def scan_ticker(sym, pre_hist=None, scan_condors=False):
+def _prefetch_ticker(sym):
+    """
+    Fetch all per-ticker network data for one symbol in one shot.
+    Fires tkr.info and tkr.calendar concurrently in sub-threads,
+    then fetches the option chain once.
+    Returns dict: {info, calendar, exp, dte, chain} — all may be None on error.
+    """
+    result = {"info": None, "calendar": None, "exp": None, "dte": None, "chain": None}
+    try:
+        tkr = yf.Ticker(sym)
+        # Fire info and calendar concurrently
+        info_box = [None]
+        cal_box  = [None]
+        def _get_info():
+            try:
+                info_box[0] = _yf_call(lambda: tkr.info)
+            except Exception:
+                pass
+        def _get_cal():
+            try:
+                cal_box[0] = _yf_call(lambda: tkr.calendar)
+            except Exception:
+                pass
+        t1 = threading.Thread(target=_get_info, daemon=True)
+        t2 = threading.Thread(target=_get_cal,  daemon=True)
+        t1.start(); t2.start()
+        t1.join(timeout=15); t2.join(timeout=15)
+        result["info"]     = info_box[0]
+        result["calendar"] = cal_box[0]
+        # Best expiry + chain
+        exp, dte = _best_exp(tkr)
+        if exp:
+            result["exp"] = exp
+            result["dte"] = dte
+            try:
+                result["chain"] = _yf_call(tkr.option_chain, exp)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return result
+
+
+def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
     """
     Returns dict with keys: sell_put, buy_call, buy_put, covered_call
     Each value is either a signal dict or None.
     pre_hist:      optional pre-fetched DataFrame (from bulk yf.download)
     scan_condors:  if True, also evaluate iron condor setups (slow — on demand only)
+    pre_fetch:     optional dict from _prefetch_ticker (avoids extra network calls)
     """
     import time
     try:
         if pre_hist is not None and not pre_hist.empty and len(pre_hist) >= 60:
             hist = pre_hist
-            tkr  = yf.Ticker(sym)   # still needed for options chain
+            tkr  = yf.Ticker(sym)   # still needed if pre_fetch not supplied
         else:
             time.sleep(SCAN_DELAY_S)   # throttle only when fetching individually
             tkr, hist = _yf_history_with_retry(sym)
@@ -818,14 +1131,25 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
         closes        = hist["Close"]
         rsi           = calc_rsi(closes, RSI_PERIOD)
         bb_u, bb_m, bb_l = calc_bb(closes, BB_PERIOD, BB_STD_DEV)
+        dc_u, dc_m, dc_l = calc_donchian(hist, DC_PERIOD)
 
         cur_rsi  = float(rsi.iloc[-1])
         cur_bb_u = float(bb_u.iloc[-1])
         cur_bb_m = float(bb_m.iloc[-1])
         cur_bb_l = float(bb_l.iloc[-1])
+        cur_dc_u = float(dc_u.iloc[-1])
+        cur_dc_m = float(dc_m.iloc[-1])
+        cur_dc_l = float(dc_l.iloc[-1])
 
-        oversold    = cur_rsi < RSI_OVERSOLD or price < cur_bb_l
-        overbought  = cur_rsi > RSI_OVERBOUGHT or price > cur_bb_u
+        # Donchian signals — price at range extreme (independent of volatility)
+        dc_at_lower   = price <= cur_dc_l * 1.01   # within 1% of lower channel
+        dc_at_upper   = price >= cur_dc_u * 0.99   # within 1% of upper channel
+        # Donchian squeeze: range is narrow relative to price (consolidation)
+        dc_range_pct  = (cur_dc_u - cur_dc_l) / price * 100 if price > 0 else 0
+        dc_squeeze    = dc_range_pct < 8            # < 8% range = tight consolidation
+
+        oversold    = cur_rsi < RSI_OVERSOLD or price < cur_bb_l or dc_at_lower
+        overbought  = cur_rsi > RSI_OVERBOUGHT or price > cur_bb_u or dc_at_upper
         reversal_up = rsi_turning_up(rsi)
 
         # ── 200-day MA trend direction ────────────────────────
@@ -844,9 +1168,10 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
         # Knife / roar guards:
         #   falling_knife = confirmed strong downtrend → protect Buy Call and Sell Put
         _raw_knife = trend_bear and strong_trend and (cur_ndi or 0) > (cur_pdi or 0)
-        # Exception: extreme oversold (RSI < 25) with RSI turning up = exhaustion bounce
-        #   — allow even in a downtrend, the selling is likely exhausted
-        exhaustion_bounce = cur_rsi < 25 and reversal_up
+        # Exception: deeply oversold (RSI < 30) with RSI turning up = exhaustion bounce
+        #   — allow even in a downtrend when selling is likely exhausted.
+        #   Threshold raised from 25→30 so more stocks pass in broad market sell-offs.
+        exhaustion_bounce = cur_rsi < 30 and reversal_up
         falling_knife = _raw_knife and not exhaustion_bounce
 
         #   melt_up = confirmed strong uptrend → protect Buy Put
@@ -876,6 +1201,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
         bull_signals = sum([
             cur_rsi < 30,
             price < cur_bb_l,
+            dc_at_lower,            # Donchian lower band = N-period price low
             reversal_up,
             macd_bull,
             vol_confirmed,          # volume backing the move adds a signal
@@ -885,19 +1211,49 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
         bear_signals = sum([
             cur_rsi > RSI_OVERBOUGHT,
             price > cur_bb_u,
+            dc_at_upper,            # Donchian upper band = N-period price high
             macd_bear,
             vol_confirmed,
         ])
 
         # ── WFO param overrides (applied via /api/optimizer/apply) ──
         _wfo_p    = scan_state.get("wfo_params", {})
-        _bull_min = _wfo_p.get("bull_min", 1)
-        _bear_min = _wfo_p.get("bear_min", 2)
+        # Cap WFO recommendations — WFO optimises on historical data and can
+        # recommend thresholds that are too strict for current market conditions.
+        # bull_min capped at 2: requiring 3+ simultaneous bull signals is too rare
+        # bear_min capped at 2: SPY regime can add +1 on top, so max effective = 3
+        _bull_min = min(_wfo_p.get("bull_min", 1), 2)
+        _bear_min = min(_wfo_p.get("bear_min", 2), 2)
+
+        # ── Broad market regime (SPY 200 MA + ADX) ───────────────
+        # In a confirmed broad bull market, raise the bar for buy puts —
+        # overbought stocks in a rising tide can stay overbought far longer.
+        # bull_strong → require 3 bear signals instead of 2
+        # bear_strong → lower the bar for buy puts to 1 (broad selling aids the trade)
+        market_trend = get_market_trend()
+        if market_trend == "bull_strong":
+            _bear_min = min(_bear_min + 1, 3)   # add 1, cap at 3
+        elif market_trend == "bear_strong":
+            _bear_min = max(1, _bear_min - 1)  # easier gate when broad market is falling
+
+        # ── Green candle confirmation (buy calls only, optional) ──
+        # True when the latest close is above the previous close —
+        # buyers showed up and price is already bouncing.
+        # Bypassed automatically when exhaustion_bounce is confirmed —
+        # RSI < 30 + RSI turning up is a stronger signal than a single green day.
+        green_candle = float(closes.iloc[-1]) > float(closes.iloc[-2]) if len(closes) >= 2 else True
+        green_ok     = (not REQUIRE_GREEN_CANDLE) or green_candle or exhaustion_bounce
+
+        # ── Red candle confirmation (buy puts only, optional) ──
+        # True when the latest close is below the previous close —
+        # sellers showed up and the rollover has actually started.
+        red_candle = float(closes.iloc[-1]) < float(closes.iloc[-2]) if len(closes) >= 2 else True
+        red_ok     = (not REQUIRE_RED_CANDLE) or red_candle
 
         # Early exit — skip meta + options fetch if no strategy can trigger
         has_sell_put     = (oversold or macd_bear) and price <= MAX_PRICE_SELL and not falling_knife
-        has_buy_call     = oversold and bull_signals >= _bull_min and not falling_knife
-        has_buy_put      = (overbought or macd_bear) and bear_signals >= _bear_min and not melt_up
+        has_buy_call     = oversold and bull_signals >= _bull_min and not falling_knife and green_ok
+        has_buy_put      = (overbought or macd_bear) and bear_signals >= _bear_min and not melt_up and red_ok
         has_covered_call = price <= MAX_PRICE_SELL
         # Iron condors are skipped during main scan (slow); run separately on demand
         has_iron_condor  = (not oversold) and (not overbought) and (35 <= cur_rsi <= 65) and scan_condors
@@ -905,25 +1261,28 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
             return None
 
         # ── Company meta (only fetched when a signal is possible) ─
+        pf = pre_fetch or {}
         try:
-            info   = tkr.info
-            name   = info.get("shortName", sym)
-            sector = info.get("sector", "N/A")
+            info   = pf.get("info") or _yf_call(lambda: tkr.info)
+            name   = info.get("shortName", sym) if info else sym
+            sector = info.get("sector", "N/A")  if info else "N/A"
         except Exception:
-            name, sector = sym, "N/A"
+            info, name, sector = None, sym, "N/A"
 
         # ── Short interest ────────────────────────────────────
-        short_pct, short_ratio = get_short_interest(tkr)
+        short_pct, short_ratio = get_short_interest(tkr, info=info)
         # Squeeze setup: high short interest + oversold = potential short squeeze
         squeeze_setup = (short_pct is not None and short_pct >= 10 and oversold)
 
         # ── Put/Call ratio for nearest expiry ─────────────────
-        pc_ratio = calc_put_call_ratio(tkr)
+        pf_chain = pf.get("chain")
+        pf_exp   = pf.get("exp")
+        pc_ratio = calc_put_call_ratio(tkr, chain=pf_chain, exp=pf_exp)
         pc_bearish = pc_ratio is not None and pc_ratio > 1.2
         pc_bullish = pc_ratio is not None and pc_ratio < 0.7
 
         # ── Next earnings date ────────────────────────────────
-        earnings_dte  = get_next_earnings_dte(tkr)
+        earnings_dte  = get_next_earnings_dte(tkr, cal=pf.get("calendar"))
         earnings_soon = (earnings_dte is not None and
                          MIN_DTE <= earnings_dte <= MAX_DTE)
 
@@ -948,6 +1307,13 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
             "bb_upper": round(cur_bb_u, 3),
             "bb_mid":   round(cur_bb_m, 3),
             "bb_lower": round(cur_bb_l, 3),
+            "dc_upper":    round(cur_dc_u, 3),
+            "dc_mid":      round(cur_dc_m, 3),
+            "dc_lower":    round(cur_dc_l, 3),
+            "dc_at_lower": dc_at_lower,
+            "dc_at_upper": dc_at_upper,
+            "dc_squeeze":  dc_squeeze,
+            "dc_range_pct": round(dc_range_pct, 1),
             # MACD
             "macd_bull":    macd_bull,
             "macd_bear":    macd_bear,
@@ -977,8 +1343,14 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
             # VIX regime
             "vix":           cur_vix,
             "vix_regime":    regime,
+            # Broad market trend (SPY)
+            "market_trend":  market_trend,
+            # GARCH(1,1) volatility estimate
+            "garch_vol":     round(calc_garch_vol(closes) * 100, 1),  # as % e.g. 32.4
             # Volume confirmation
             "vol_confirmed": vol_confirmed,
+            "green_candle":  green_candle,
+            "red_candle":    red_candle,
             "cur_vol":       int(cur_vol) if cur_vol else None,
             "avg_vol":       int(avg_vol) if avg_vol else None,
             # Short interest
@@ -992,7 +1364,8 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
 
         # ── 1. SELL PUT ───────────────────────────────────────
         if (oversold or macd_bear) and price <= MAX_PRICE_SELL and not falling_knife:
-            opt = pick_option(tkr, price, "put", otm_factor=1.0)
+            opt = pick_option(tkr, price, "put", otm_factor=1.0,
+                              chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["bid"] >= 0.01:
                 iv_rank = calc_iv_rank(closes, opt["iv"])
                 iv_high  = iv_rank is not None and iv_rank >= IV_RANK_THRESHOLD
@@ -1013,8 +1386,10 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
                                            "mc": mc, "bs": _bs, "bs_misprice": _bs_mp}
 
         # ── 2. BUY CALL ───────────────────────────────────────
-        if oversold and bull_signals >= 1 and not falling_knife:
-            opt = pick_option(tkr, price, "call", otm_factor=1.0)
+        # green_ok must match the early-exit condition (has_buy_call) exactly
+        if oversold and bull_signals >= _bull_min and not falling_knife and green_ok:
+            opt = pick_option(tkr, price, "call", otm_factor=1.0,
+                              chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["ask"] >= 0.01:
                 score = _score_buy_call(cur_rsi, price, cur_bb_l, reversal_up)
                 mc = run_monte_carlo(price, opt["strike"], opt["iv"], opt["dte"], "buy_call", opt["mid"])
@@ -1030,8 +1405,10 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
                                         "mc": mc, "bs": _bs, "bs_misprice": _bs_mp}
 
         # ── 3. BUY PUT ────────────────────────────────────────
-        if (overbought or macd_bear) and bear_signals >= 2 and not melt_up:
-            opt = pick_option(tkr, price, "put", otm_factor=1.0)
+        # red_ok must match the early-exit condition (has_buy_put) exactly
+        if (overbought or macd_bear) and bear_signals >= _bear_min and not melt_up and red_ok:
+            opt = pick_option(tkr, price, "put", otm_factor=1.0,
+                              chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["ask"] >= 0.01:
                 score = _score_buy_put(cur_rsi, price, cur_bb_u)
                 mc = run_monte_carlo(price, opt["strike"], opt["iv"], opt["dte"], "buy_put", opt["mid"])
@@ -1048,7 +1425,8 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False):
         # ── 4. COVERED CALL ───────────────────────────────────
         # Only for cheaper stocks — covered calls require owning 100 shares
         if price <= MAX_PRICE_SELL:
-            opt_cc = pick_option(tkr, price, "call", otm_factor=1.05)
+            opt_cc = pick_option(tkr, price, "call", otm_factor=1.05,
+                                 chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
         else:
             opt_cc = None
         if opt_cc:
@@ -1306,6 +1684,60 @@ def run_monte_carlo(price, strike, iv_pct, dte, strategy, premium, n_sims=None, 
 #  TRACKED POSITIONS  (load / save / sell-signal logic)
 # ══════════════════════════════════════════════════════════════
 
+def _option_mid(row_series):
+    """
+    Compute a reliable mid price from an option chain row.
+
+    Priority:
+      1. (bid + ask) / 2           when both quotes look fresh (bid >= ask * 0.5)
+      2. ask * 0.95                when bid is stale/zero but ask is present
+                                   (ask is always the current market offer — reliable)
+      3. lastPrice                 only when no ask is available (last resort —
+                                   lastPrice can be days old for illiquid options)
+
+    Never use lastPrice when ask > 0: ask is current, lastPrice can be stale.
+    Also returns data_quality flag for the tracker UI.
+    """
+    bid        = float(row_series.get("bid")       or 0)
+    ask        = float(row_series.get("ask")       or 0)
+    last_price = float(row_series.get("lastPrice") or 0)
+
+    if ask > 0 and bid > 0 and bid >= ask * 0.5:
+        # Both quotes fresh — true mid
+        return (bid + ask) / 2
+    elif ask > 0 and bid > 0:
+        # Bid suspiciously low (stale) — ask-weighted estimate
+        return ask * 0.9 + bid * 0.1
+    elif ask > 0:
+        # No valid bid — ask is current; lastPrice may be stale so ignore it
+        return ask * 0.95
+    elif last_price > 0:
+        # No live quotes at all — last resort
+        return last_price
+    return 0.0
+
+
+def _option_price_detail(row_series):
+    """Return (mid, bid, ask, last_price, quality_label) for tracker display."""
+    bid        = float(row_series.get("bid")       or 0)
+    ask        = float(row_series.get("ask")       or 0)
+    last_price = float(row_series.get("lastPrice") or 0)
+    mid        = _option_mid(row_series)
+
+    if ask > 0 and bid > 0 and bid >= ask * 0.5:
+        quality = "live"          # fresh two-sided quote
+    elif ask > 0 and bid > 0:
+        quality = "stale_bid"     # bid looks old, ask is current
+    elif ask > 0:
+        quality = "ask_only"      # no bid yet (common at market open)
+    elif last_price > 0:
+        quality = "last_only"     # no live quote — using last traded price
+    else:
+        quality = "unavailable"
+
+    return mid, bid, ask, last_price, quality
+
+
 def load_tracked():
     if os.path.exists(TRACK_FILE):
         try:
@@ -1319,6 +1751,61 @@ def load_tracked():
 def save_tracked(positions):
     with open(TRACK_FILE, "w") as f:
         json.dump(positions, f, indent=2, default=str)
+
+
+# ══════════════════════════════════════════════════════════════
+#  PERFORMANCE TRACKER  (realized P&L history)
+# ══════════════════════════════════════════════════════════════
+
+_perf_lock = threading.Lock()
+
+def load_performance():
+    if os.path.exists(PERFORMANCE_FILE):
+        try:
+            with open(PERFORMANCE_FILE) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_performance(trades):
+    with open(PERFORMANCE_FILE, "w") as f:
+        json.dump(trades, f, indent=2, default=str)
+
+def calc_performance_summary(trades):
+    """Compute aggregate stats across all closed trades."""
+    if not trades:
+        return {
+            "total_trades": 0, "winners": 0, "losers": 0,
+            "win_rate": 0, "total_pnl": 0,
+            "avg_win_pct": 0, "avg_loss_pct": 0,
+            "best_trade": 0, "worst_trade": 0,
+            "avg_pnl_pct": 0,
+        }
+    pnls     = [t["pnl_total"]   for t in trades]
+    pnl_pcts = [t["pnl_pct"]     for t in trades]
+    winners  = [p for p in pnl_pcts if p > 0]
+    losers   = [p for p in pnl_pcts if p <= 0]
+    # Total P&L % = total dollar gain / total capital deployed
+    total_invested = sum(
+        float(t.get("entry_price", 0)) * int(t.get("contracts", 1)) * 100
+        for t in trades
+    )
+    total_pnl_pct = round(sum(pnls) / total_invested * 100, 1) if total_invested > 0 else 0
+    return {
+        "total_trades":   len(trades),
+        "winners":        len(winners),
+        "losers":         len(losers),
+        "win_rate":       round(len(winners) / len(trades) * 100, 1),
+        "total_pnl":      round(sum(pnls), 2),
+        "total_pnl_pct":  total_pnl_pct,
+        "total_invested": round(total_invested, 2),
+        "avg_win_pct":    round(sum(winners) / len(winners), 1) if winners else 0,
+        "avg_loss_pct":   round(sum(losers)  / len(losers),  1) if losers  else 0,
+        "best_trade":     round(max(pnl_pcts), 1),
+        "worst_trade":    round(min(pnl_pcts), 1),
+        "avg_pnl_pct":    round(sum(pnl_pcts) / len(pnl_pcts), 1),
+    }
 
 
 def get_sell_signal(position: dict) -> dict:
@@ -1350,8 +1837,8 @@ def get_sell_signal(position: dict) -> dict:
 
     try:
         tkr  = yf.Ticker(sym)
-        hist = tkr.history(period="3mo")
-        if hist.empty or len(hist) < 30:
+        hist = _yf_call(tkr.history, period="3mo")
+        if hist is None or hist.empty or len(hist) < 30:
             return result
 
         closes  = hist["Close"]
@@ -1365,8 +1852,101 @@ def get_sell_signal(position: dict) -> dict:
         result["current_rsi"]   = round(cur_rsi, 1)
         result["current_price"] = round(price, 3)
 
+        # ── RSI momentum / trajectory ──────────────────────────
+        # slope = average RSI change per day over last 3 sessions
+        rsi_vals = rsi_ser.dropna()
+        if len(rsi_vals) >= 4:
+            rsi_slope = float((rsi_vals.iloc[-1] - rsi_vals.iloc[-4]) / 3)
+        elif len(rsi_vals) >= 2:
+            rsi_slope = float(rsi_vals.iloc[-1] - rsi_vals.iloc[-2])
+        else:
+            rsi_slope = 0.0
+        rsi_slope = round(rsi_slope, 2)
+
+        # Distance and ETA to the relevant exit threshold
+        if strategy in ("buy_call",):
+            rsi_distance = SELL_RSI_BULL_TARGET - cur_rsi   # positive = still has room
+            direction_ok = rsi_slope > 0                    # want RSI rising
+        elif strategy in ("buy_put",):
+            rsi_distance = cur_rsi - SELL_RSI_BEAR_TARGET   # positive = still has room
+            direction_ok = rsi_slope < 0                    # want RSI falling
+        else:
+            rsi_distance = 0.0
+            direction_ok = True
+
+        # ETA in trading days (None if slope is wrong direction or flat)
+        if abs(rsi_slope) >= 0.1 and direction_ok and rsi_distance > 0:
+            eta_days = round(rsi_distance / abs(rsi_slope))
+        else:
+            eta_days = None
+
+        # Momentum label
+        # Key distinction: "Reversing" only applies when the bounce/pullback has
+        # STARTED and then turned the wrong way. If RSI is still in oversold/overbought
+        # territory (same zone that triggered entry), a wrong-direction slope just means
+        # the stock is still in the setup — not that the trade has failed.
+        abs_slope = abs(rsi_slope)
+        if strategy == "buy_call":
+            if cur_rsi <= RSI_OVERSOLD:
+                # Still in oversold zone — slope doesn't determine reversal
+                if rsi_slope > 0.3:
+                    momentum_label = "turning_up"   # bounce just starting
+                elif abs_slope < 0.3:
+                    momentum_label = "basing"        # consolidating, waiting for turn
+                else:
+                    momentum_label = "basing"        # still falling into oversold
+            else:
+                # Bounce has started (RSI > 35) — now slope direction matters
+                if rsi_slope < -0.5:
+                    momentum_label = "reversing"
+                elif abs_slope < 0.3:
+                    momentum_label = "stalling"
+                elif rsi_slope >= 2.0:
+                    momentum_label = "accelerating"
+                else:
+                    momentum_label = "on_track"
+        elif strategy == "buy_put":
+            if cur_rsi >= RSI_OVERBOUGHT:
+                # Still in overbought zone — slope doesn't determine reversal
+                if rsi_slope < -0.3:
+                    momentum_label = "turning_down"  # pullback just starting
+                elif abs_slope < 0.3:
+                    momentum_label = "basing"
+                else:
+                    momentum_label = "basing"
+            else:
+                # Pullback has started (RSI < 65) — now slope direction matters
+                if rsi_slope > 0.5:
+                    momentum_label = "reversing"
+                elif abs_slope < 0.3:
+                    momentum_label = "stalling"
+                elif rsi_slope <= -2.0:
+                    momentum_label = "accelerating"
+                else:
+                    momentum_label = "on_track"
+        else:
+            # sell_put, covered_call etc — simple slope check
+            if not direction_ok and abs_slope >= 0.5:
+                momentum_label = "reversing"
+            elif abs_slope < 0.3:
+                momentum_label = "stalling"
+            elif direction_ok and abs_slope >= 2.0:
+                momentum_label = "accelerating"
+            elif direction_ok:
+                momentum_label = "on_track"
+            else:
+                momentum_label = "stalling"
+
+        result["rsi_slope"]       = rsi_slope
+        result["rsi_distance"]    = round(rsi_distance, 1) if rsi_distance else 0
+        result["eta_days"]        = eta_days
+        result["momentum_label"]  = momentum_label
+
         # ── Fetch current option price ─────────────────────────
-        current_mid = 0.0
+        current_mid     = 0.0
+        current_bid_val = 0.0
+        current_ask_val = 0.0
+        price_quality   = "unavailable"
         try:
             opt    = position.get("option", {})
             exp    = opt.get("expiration")
@@ -1377,14 +1957,17 @@ def get_sell_signal(position: dict) -> dict:
                 opts  = chain.calls if otype == "call" else chain.puts
                 row   = opts[abs(opts["strike"] - strike) < 0.01]
                 if not row.empty:
-                    bid = float(row.iloc[0].get("bid") or 0)
-                    ask = float(row.iloc[0].get("ask") or 0)
-                    current_mid = (bid + ask) / 2
+                    row_data                         = row.iloc[0]
+                    current_mid, current_bid_val, \
+                    current_ask_val, _, price_quality = _option_price_detail(row_data)
         except Exception:
             pass
 
         # ── Profit / loss check (if we have entry & current price) ──
         result["current_option_mid"] = round(current_mid, 3) if current_mid > 0 else None
+        result["current_bid"]        = round(current_bid_val, 3) if current_bid_val > 0 else None
+        result["current_ask"]        = round(current_ask_val, 3) if current_ask_val > 0 else None
+        result["price_quality"]      = price_quality
         if entry_price > 0 and current_mid > 0:
             pct_change = (current_mid - entry_price) / entry_price * 100
             dollar_change = (current_mid - entry_price) * 100   # per contract
@@ -1403,45 +1986,51 @@ def get_sell_signal(position: dict) -> dict:
 
         # ── RSI / BB reversal checks ───────────────────────────
         if strategy == "buy_call":
-            # Original signal: oversold RSI — sell when RSI recovers
+            # Entered on oversold bounce — exit when RSI reaches neutral or price hits upper BB
             if cur_rsi >= SELL_RSI_BULL_TARGET:
                 result["triggered"] = True
                 result["reasons"].append(
-                    f"📈 RSI recovered to {cur_rsi:.1f} (target ≥{SELL_RSI_BULL_TARGET}) — take profit"
+                    f"📈 RSI recovered to {cur_rsi:.1f} (target ≥{SELL_RSI_BULL_TARGET}) — mean reversion complete, take profit"
                 )
             if price >= cur_bb_u:
                 result["triggered"] = True
                 result["reasons"].append(
-                    f"📈 Price ${price:.2f} hit upper Bollinger Band ${cur_bb_u:.2f}"
+                    f"📈 Price ${price:.2f} hit upper Bollinger Band ${cur_bb_u:.2f} — extended, take profit"
                 )
-            result["signal_still_valid"] = cur_rsi < RSI_OVERSOLD or price < cur_bb_l
+            # Signal still valid while RSI is below the exit threshold (bounce in progress)
+            # Goes False only if RSI fully reaches the sell target (thesis consumed) or
+            # stock reverses back into overbought (bounce failed and reversed)
+            result["signal_still_valid"] = cur_rsi < SELL_RSI_BULL_TARGET and cur_rsi < RSI_OVERBOUGHT
 
         elif strategy == "buy_put":
-            # Original signal: overbought RSI — sell when RSI pulls back
+            # Entered on overbought pullback — exit when RSI reaches neutral or price hits lower BB
             if cur_rsi <= SELL_RSI_BEAR_TARGET:
                 result["triggered"] = True
                 result["reasons"].append(
-                    f"📉 RSI pulled back to {cur_rsi:.1f} (target ≤{SELL_RSI_BEAR_TARGET}) — take profit"
+                    f"📉 RSI pulled back to {cur_rsi:.1f} (target ≤{SELL_RSI_BEAR_TARGET}) — mean reversion complete, take profit"
                 )
             if price <= cur_bb_l:
                 result["triggered"] = True
                 result["reasons"].append(
-                    f"📉 Price ${price:.2f} hit lower Bollinger Band ${cur_bb_l:.2f}"
+                    f"📉 Price ${price:.2f} hit lower Bollinger Band ${cur_bb_l:.2f} — extended, take profit"
                 )
-            result["signal_still_valid"] = cur_rsi > RSI_OVERBOUGHT or price > cur_bb_u
+            # Still valid while RSI is above the exit threshold (pullback in progress)
+            result["signal_still_valid"] = cur_rsi > SELL_RSI_BEAR_TARGET and cur_rsi > RSI_OVERSOLD
 
         elif strategy == "sell_put":
-            # Original signal: oversold — close early if stock drops further
-            if price < cur_bb_l * 0.95:
+            # Sold put for premium — warn if stock breaks below lower BB (put at risk)
+            if price < cur_bb_l:
                 result["triggered"] = True
                 result["reasons"].append(
-                    f"⚠️ Stock ${price:.2f} fell significantly below BB lower ${cur_bb_l:.2f} — consider closing"
+                    f"⚠️ Stock ${price:.2f} broke below BB lower ${cur_bb_l:.2f} — short put at risk, consider closing"
                 )
+            # Good outcome: RSI has recovered, put is near worthless or at max profit
             if cur_rsi > 55:
                 result["reasons"].append(
-                    f"✅ RSI {cur_rsi:.1f} — put likely expired worthless or near max profit"
+                    f"✅ RSI {cur_rsi:.1f} — stock recovered, put likely near max profit"
                 )
-            result["signal_still_valid"] = cur_rsi < RSI_OVERSOLD
+            # Still valid while stock is above the lower band
+            result["signal_still_valid"] = price >= cur_bb_l
 
         elif strategy == "covered_call":
             if price > float(entry.get("strike", 0)) * 1.05:
@@ -1475,6 +2064,7 @@ def get_sell_signal(position: dict) -> dict:
 
 def _run_tracked_check():
     """Background thread — re-check sell signals on all tracked positions."""
+    import time as _time
     positions = load_tracked()
     if not positions:
         return
@@ -1487,6 +2077,7 @@ def _run_tracked_check():
                 pos["last_signal"]   = sig
         except Exception:
             pass
+        _time.sleep(2)   # space out option chain fetches to avoid rate limits
     with track_lock:
         save_tracked(positions)
     print(f"[Track] Done checking tracked positions.")
@@ -1605,19 +2196,162 @@ def _bt_signals(closes, highs, lows, volumes, idx, params=None):
 def _bt_option_price(S, K, T, sigma, option_type):
     """Black-Scholes option price. T in years. Returns 0 on error."""
     try:
-        return max(0.0, black_scholes(S, K, T, RISK_FREE_RATE, sigma, option_type))
+        result = black_scholes(S, K, T, RISK_FREE_RATE, sigma, option_type)
+        if result is None:
+            return 0.0
+        return max(0.0, result["fair_value"])
     except Exception:
         return 0.0
 
 
+def _precompute_indicators(hist):
+    """
+    Pre-compute ALL indicator arrays for a ticker's history DataFrame.
+    Returns a dict of numpy arrays so the WFO combo sweep never recomputes them.
+    """
+    closes  = hist["Close"]
+    highs   = hist["High"]
+    lows    = hist["Low"]
+    volumes = hist["Volume"]
+    n       = len(closes)
+
+    # RSI
+    rsi_s = calc_rsi(closes, RSI_PERIOD)
+
+    # Bollinger Bands
+    bb_upper_s, bb_mid_s, bb_lower_s = calc_bb(closes, BB_PERIOD, BB_STD_DEV)
+
+    # MACD
+    ema12   = closes.ewm(span=12, adjust=False).mean()
+    ema26   = closes.ewm(span=26, adjust=False).mean()
+    macd_s  = ema12 - ema26
+    signal_s = macd_s.ewm(span=9, adjust=False).mean()
+
+    # ADX (simple approximation)
+    tr       = pd.concat([highs - lows,
+                           (highs - closes.shift()).abs(),
+                           (lows  - closes.shift()).abs()], axis=1).max(axis=1)
+    atr14    = tr.rolling(14).mean()
+    adx_s    = atr14.rolling(14).mean()  # simplified proxy
+
+    # MA200
+    ma200_s  = closes.rolling(200).mean()
+
+    # Vectorized MACD crossover: macd crossed above signal in last 3 bars
+    macd_cross_s = (macd_s > signal_s) & (macd_s.shift(1) <= signal_s.shift(1))
+    macd_bull_s  = macd_cross_s.rolling(3).max().astype(bool)
+    macd_bear_s  = ((macd_s < signal_s) & (macd_s.shift(1) >= signal_s.shift(1))).rolling(3).max().astype(bool)
+
+    # Vectorized RSI turning-up: RSI now > min of last 4 bars + 1.5
+    rsi_min4_s   = rsi_s.shift(1).rolling(4).min()
+    rsi_turn_up_s = rsi_s > (rsi_min4_s + 1.5)
+
+    # Volume confirmation: current volume >= 1.2x 20-day avg
+    vol_avg20_s  = volumes.rolling(20).mean()
+    vol_ok_s     = volumes >= (vol_avg20_s * 1.2)
+
+    # IV estimation per bar — GARCH(1,1) forward vol, falls back to 20-day HV
+    # We compute one GARCH estimate for the full series (end of history) and
+    # use it as a constant across all backtest bars. Per-bar GARCH would be
+    # prohibitively slow inside the WFO combo sweep.
+    _garch_vol   = calc_garch_vol(closes)
+    iv_est_s     = pd.Series(np.full(len(closes), _garch_vol), index=closes.index)
+    iv_est_s     = iv_est_s.clip(lower=0.05, upper=2.0)
+
+    # Pre-convert date strings
+    dates = [d.strftime("%Y-%m-%d") for d in hist.index]
+
+    return {
+        "closes":      closes.values,
+        "highs":       highs.values,
+        "lows":        lows.values,
+        "volumes":     volumes.values,
+        "rsi":         rsi_s.values,
+        "bb_upper":    bb_upper_s.values,
+        "bb_lower":    bb_lower_s.values,
+        "macd_bull":   macd_bull_s.values,
+        "macd_bear":   macd_bear_s.values,
+        "rsi_turn_up": rsi_turn_up_s.values,
+        "vol_ok":      vol_ok_s.values,
+        "adx":         adx_s.values,
+        "ma200":       ma200_s.values,
+        "iv_est":      iv_est_s.values,
+        "dates":       dates,
+        "n":           n,
+    }
+
+
+def _bt_signals_fast(pc, idx, params=None):
+    """
+    Fast signal check using precomputed arrays from _precompute_indicators.
+    pc  : dict returned by _precompute_indicators
+    idx : bar index into the arrays
+    Returns the same dict shape as _bt_signals, or None if no signal.
+    """
+    p          = params or {}
+    rsi_os     = p.get("rsi_oversold",  RSI_OVERSOLD)
+    rsi_ob     = p.get("rsi_overbought", RSI_OVERBOUGHT)
+    bull_min   = p.get("bull_min",       1)
+    bear_min   = p.get("bear_min",       1)
+    adx_thr    = p.get("adx_threshold",  30)
+
+    rsi        = float(pc["rsi"][idx])       if not np.isnan(pc["rsi"][idx])       else 50.0
+    bb_upper   = float(pc["bb_upper"][idx])  if not np.isnan(pc["bb_upper"][idx])  else 1e9
+    bb_lower   = float(pc["bb_lower"][idx])  if not np.isnan(pc["bb_lower"][idx])  else 0.0
+    price      = float(pc["closes"][idx])
+    adx        = float(pc["adx"][idx])       if not np.isnan(pc["adx"][idx])       else 0.0
+    ma200      = float(pc["ma200"][idx])     if not np.isnan(pc["ma200"][idx])     else price
+
+    sig_rsi_os    = rsi < rsi_os
+    sig_rsi_ob    = rsi > rsi_ob
+    sig_bb_low    = price <= bb_lower
+    sig_bb_high   = price >= bb_upper
+    sig_reversal  = bool(pc["rsi_turn_up"][idx])
+    sig_macd_bull = bool(pc["macd_bull"][idx])
+    sig_macd_bear = bool(pc["macd_bear"][idx])
+    sig_vol_ok    = bool(pc["vol_ok"][idx])
+
+    oversold  = sig_rsi_os and sig_bb_low
+    overbought = sig_rsi_ob and sig_bb_high
+
+    bull_count = sum([sig_rsi_os, sig_bb_low, sig_reversal, sig_macd_bull, sig_vol_ok])
+    bear_count = sum([sig_rsi_ob, sig_bb_high, sig_macd_bear])
+
+    above_ma200     = price > ma200
+    falling_knife   = sig_rsi_os and not sig_reversal and adx > adx_thr and not above_ma200
+
+    has_buy_call  = bull_count >= bull_min and not falling_knife
+    has_buy_put   = bear_count >= bear_min
+    has_sell_put  = (oversold or sig_macd_bear) and price <= MAX_PRICE_SELL and not falling_knife
+
+    if not (has_buy_call or has_buy_put or has_sell_put):
+        return None
+
+    return {
+        "price":         price,
+        "sig_rsi_os":    sig_rsi_os,
+        "sig_rsi_ob":    sig_rsi_ob,
+        "sig_bb_low":    sig_bb_low,
+        "sig_bb_high":   sig_bb_high,
+        "sig_reversal":  sig_reversal,
+        "sig_macd_bull": sig_macd_bull,
+        "sig_macd_bear": sig_macd_bear,
+        "sig_vol_ok":    sig_vol_ok,
+        "has_buy_call":  has_buy_call,
+        "has_buy_put":   has_buy_put,
+        "has_sell_put":  has_sell_put,
+    }
+
+
 def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
-                        idx_start=60, idx_end=None):
+                        idx_start=60, idx_end=None, precomp=None):
     """
     Walk history for `ticker`.
     hold_days : days to hold the option
     params    : optional parameter overrides for _bt_signals (WFO use)
     hist      : pre-downloaded DataFrame (skip yfinance fetch if provided)
     idx_start / idx_end : window slice for walk-forward splits
+    precomp   : pre-computed indicator dict from _precompute_indicators (WFO fast path)
     """
     if hist is None:
         try:
@@ -1627,28 +2361,27 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
         except Exception:
             return []
 
-    closes  = hist["Close"]
-    highs   = hist["High"]
-    lows    = hist["Low"]
-    volumes = hist["Volume"]
-    trades  = []
-    end     = (idx_end or len(hist)) - hold_days
+    # Build precomp if not supplied
+    if precomp is None:
+        precomp = _precompute_indicators(hist)
 
-    for idx in range(max(60, idx_start), end):
-        sigs = _bt_signals(closes, highs, lows, volumes, idx, params)
+    closes  = hist["Close"]
+    trades  = []
+    start   = max(60, idx_start)
+    end     = (idx_end or len(hist)) - hold_days
+    T_entry = hold_days / 365.0
+    T_exit  = 0.001
+
+    for idx in range(start, end):
+        sigs = _bt_signals_fast(precomp, idx, params)
         if not sigs:
             continue
 
         price      = sigs["price"]
-        ret_win    = np.log(closes.iloc[max(0,idx-30):idx+1] /
-                            closes.iloc[max(0,idx-30):idx+1].shift(1)).dropna()
-        iv_est     = float(ret_win.std() * np.sqrt(252)) if len(ret_win) > 5 else 0.20
-        iv_est     = max(0.05, min(iv_est, 2.0))
-        T_entry    = hold_days / 365.0
-        T_exit     = 0.001
-        exit_price = float(closes.iloc[idx + hold_days])
-        entry_date = hist.index[idx].strftime("%Y-%m-%d")
-        exit_date  = hist.index[idx + hold_days].strftime("%Y-%m-%d")
+        iv_est     = float(precomp["iv_est"][idx])
+        exit_price = float(precomp["closes"][idx + hold_days])
+        entry_date = precomp["dates"][idx]
+        exit_date  = precomp["dates"][idx + hold_days]
 
         for strategy, flag in [("buy_call", sigs["has_buy_call"]),
                                 ("buy_put",  sigs["has_buy_put"]),
@@ -1857,6 +2590,57 @@ _wfo_state = {"running": False, "progress": 0, "total": 0, "results": None, "sta
 _wfo_lock  = threading.Lock()
 
 
+def _save_wfo_results(results: dict):
+    """Persist WFO results + timestamp to disk so they survive restarts."""
+    try:
+        payload = {
+            "saved_at": datetime.now().isoformat(),
+            "results":  results,
+        }
+        with open(WFO_FILE, "w") as f:
+            json.dump(payload, f, indent=2)
+        print(f"  [WFO] Results saved to {WFO_FILE}")
+    except Exception as e:
+        print(f"  [WFO] Could not save results: {e}")
+
+
+def _load_wfo_results():
+    """
+    Load persisted WFO results on startup.
+    If valid, restores _wfo_state and auto-applies the best params to the scanner
+    so you don't have to click Apply after every restart.
+    """
+    global RSI_OVERSOLD, RSI_OVERBOUGHT
+    if not os.path.exists(WFO_FILE):
+        return
+    try:
+        with open(WFO_FILE) as f:
+            payload = json.load(f)
+        saved_at = payload.get("saved_at", "")
+        results  = payload.get("results", {})
+        if not results:
+            return
+
+        with _wfo_lock:
+            _wfo_state["results"] = results
+            _wfo_state["stage"]   = f"Loaded from disk (saved {saved_at[:10]})"
+
+        # Auto-apply the best suggestion
+        suggestion = results.get("suggestion", {})
+        if suggestion:
+            if "rsi_oversold"   in suggestion:
+                RSI_OVERSOLD   = suggestion["rsi_oversold"]
+            if "rsi_overbought" in suggestion:
+                RSI_OVERBOUGHT = suggestion["rsi_overbought"]
+            scan_state["wfo_params"] = {
+                k: v for k, v in suggestion.items()
+                if k not in ("rsi_oversold", "rsi_overbought", "hold_days")
+            }
+        print(f"  [WFO] Restored results from {WFO_FILE} (saved {saved_at[:10]}) — params auto-applied")
+    except Exception as e:
+        print(f"  [WFO] Could not load saved results: {e}")
+
+
 def _wfo_sharpe(trades):
     """Sharpe-like ratio: mean P&L / std P&L.  Returns -99 on empty."""
     if len(trades) < 3:
@@ -1881,19 +2665,23 @@ def _run_wfo_job(tickers):
 
     Algorithm:
       1. Download 2y history for each ticker once.
-      2. Split each history: train = first 75%, validation = last 25%.
-      3. For each param combo, run backtest on ALL tickers × training window.
+      2. Pre-compute all indicators once per ticker (huge speedup for combo sweep).
+      3. Split each history: train = first 75%, validation = last 25%.
+      4. For each param combo (parallelized), run backtest on ALL tickers × training window.
          Aggregate Sharpe across all resulting trades.
-      4. Take top-10 combos by training Sharpe.
-      5. Validate each on ALL tickers × validation window.
-      6. Rank by validation Sharpe (guards against overfitting).
-      7. Return best combo + full leaderboard.
+      5. Take top-10 combos by training Sharpe.
+      6. Validate each on ALL tickers × validation window.
+      7. Rank by validation Sharpe (guards against overfitting).
+      8. Return best combo + full leaderboard.
+
+    Progress: total = len(combos) + 10  (486 training + 10 validation = 496)
     """
     global _wfo_state
 
     combos = _expand_grid(WFO_PARAM_GRID)
+    total_steps = len(combos) + 10   # 486 training + 10 validation
     with _wfo_lock:
-        _wfo_state.update(running=True, progress=0, total=len(combos),
+        _wfo_state.update(running=True, progress=0, total=total_steps,
                           results=None, stage="Downloading history…")
 
     # ── Step 1: bulk-download all histories once ────────────────
@@ -1917,48 +2705,66 @@ def _run_wfo_job(tickers):
             _wfo_state.update(running=False, stage="No data available")
         return
 
-    # ── Step 2: compute split index per ticker ──────────────────
+    # ── Step 2: pre-compute indicators once per ticker ──────────
+    with _wfo_lock:
+        _wfo_state["stage"] = "Pre-computing indicators…"
+    print(f"  [WFO] Pre-computing indicators for {len(hist_map)} tickers…")
+    precomp_map = {sym: _precompute_indicators(h) for sym, h in hist_map.items()}
+
+    # ── Step 3: compute split index per ticker ──────────────────
     split_map = {sym: int(len(h) * 0.75) for sym, h in hist_map.items()}
 
-    # ── Step 3: sweep param grid on training window ─────────────
+    # ── Step 4: sweep param grid on training window (parallelized) ──
     with _wfo_lock:
         _wfo_state["stage"] = f"Training {len(combos)} param combos…"
 
+    progress_counter = [0]
+    progress_lock    = threading.Lock()
+
     def _eval_combo_train(combo):
-        hold = combo.get("hold_days", 21)
+        hold   = combo.get("hold_days", 21)
         params = {k: v for k, v in combo.items() if k != "hold_days"}
-        all_t = []
+        all_t  = []
         for sym, hist in hist_map.items():
-            split = split_map[sym]
+            split  = split_map[sym]
+            pc     = precomp_map[sym]
             trades = run_backtest_ticker(sym, hold_days=hold, params=params,
-                                         hist=hist, idx_end=split)
+                                         hist=hist, idx_end=split, precomp=pc)
             all_t.extend(trades)
-        return _wfo_sharpe(all_t), len(all_t), all_t
+        with progress_lock:
+            progress_counter[0] += 1
+            with _wfo_lock:
+                _wfo_state["progress"] = progress_counter[0]
+        return _wfo_sharpe(all_t), len(all_t), combo
 
     train_scores = []
-    for i, combo in enumerate(combos):
-        sharpe, n_trades, _ = _eval_combo_train(combo)
-        train_scores.append((sharpe, n_trades, combo))
-        with _wfo_lock:
-            _wfo_state["progress"] = i + 1
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        futures = {pool.submit(_eval_combo_train, combo): combo for combo in combos}
+        for fut in as_completed(futures):
+            try:
+                sharpe, n_trades, combo = fut.result()
+                train_scores.append((sharpe, n_trades, combo))
+            except Exception:
+                pass
 
     # Sort by training Sharpe, keep top 10
     train_scores.sort(key=lambda x: x[0], reverse=True)
     top10 = train_scores[:10]
 
-    # ── Step 4: validate top-10 on held-out window ──────────────
+    # ── Step 5: validate top-10 on held-out window ──────────────
     with _wfo_lock:
         _wfo_state["stage"] = "Validating top 10 combos…"
 
     leaderboard = []
-    for train_sharpe, train_n, combo in top10:
+    for val_i, (train_sharpe, train_n, combo) in enumerate(top10):
         hold   = combo.get("hold_days", 21)
         params = {k: v for k, v in combo.items() if k != "hold_days"}
         val_trades = []
         for sym, hist in hist_map.items():
-            split = split_map[sym]
+            split  = split_map[sym]
+            pc     = precomp_map[sym]
             trades = run_backtest_ticker(sym, hold_days=hold, params=params,
-                                          hist=hist, idx_start=split)
+                                          hist=hist, idx_start=split, precomp=pc)
             val_trades.extend(trades)
         val_sharpe = _wfo_sharpe(val_trades)
         val_wr     = round(len([t for t in val_trades if t["win"]]) /
@@ -1974,6 +2780,8 @@ def _run_wfo_job(tickers):
             "val_win_rate": val_wr,
             "val_avg_pnl":  val_avg,
         })
+        with _wfo_lock:
+            _wfo_state["progress"] = len(combos) + val_i + 1
 
     leaderboard.sort(key=lambda x: x["val_sharpe"], reverse=True)
     best = leaderboard[0] if leaderboard else None
@@ -1983,17 +2791,21 @@ def _run_wfo_job(tickers):
     if best:
         suggestion = {k: v for k, v in best["params"].items()}
 
+    wfo_results = {
+        "leaderboard":   leaderboard,
+        "best":          best,
+        "suggestion":    suggestion,
+        "tickers_used":  list(hist_map.keys()),
+        "completed_at":  datetime.now().isoformat(),
+    }
     with _wfo_lock:
         _wfo_state.update(
             running=False,
             stage="Complete",
-            results={
-                "leaderboard": leaderboard,
-                "best":        best,
-                "suggestion":  suggestion,
-                "tickers_used": list(hist_map.keys()),
-            }
+            progress=total_steps,
+            results=wfo_results,
         )
+    _save_wfo_results(wfo_results)
     print(f"  [WFO] Done — best val Sharpe {best['val_sharpe'] if best else 'N/A'}")
 
 
@@ -2099,6 +2911,9 @@ def _run_scan(mode=None):
     # Stop any running live refresh before starting a full scan
     _live_refresh_stop.set()
 
+    # Refresh 6-month T-bill rate (cached 6h — near-instant if recent)
+    fetch_risk_free_rate()
+
     if mode in ("focus", "full"):
         SCAN_MODE = mode
     tickers = get_universe()
@@ -2138,9 +2953,25 @@ def _run_scan(mode=None):
     except Exception as e:
         print(f"  [Bulk download] Failed ({e}) — will fall back to per-ticker fetches")
 
+    # ── Parallel prefetch phase: all network calls fire simultaneously ───────
+    # This fires ~3 Yahoo API calls per ticker (info, calendar, option chain)
+    # in parallel across all tickers, so scan_ticker does zero network calls.
+    print(f"  [Prefetch] Firing network calls for {len(tickers)} tickers in parallel…")
+    prefetch_map = {}
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        pf_futures = {pool.submit(_prefetch_ticker, sym): sym for sym in tickers}
+        for fut in as_completed(pf_futures):
+            sym = pf_futures[fut]
+            try:
+                prefetch_map[sym] = fut.result()
+            except Exception:
+                prefetch_map[sym] = {}
+    print(f"  [Prefetch] Done — {len(prefetch_map)} tickers prefetched")
+
     done = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(scan_ticker, sym, bulk_hist.get(sym), False): sym for sym in tickers}
+        futures = {pool.submit(scan_ticker, sym, bulk_hist.get(sym), False,
+                               prefetch_map.get(sym)): sym for sym in tickers}
         for fut in as_completed(futures):
             done += 1
             raw = fut.result()
@@ -2316,6 +3147,36 @@ def api_scan_status():
         })
 
 
+@app.route("/api/scan/green-candle", methods=["POST"])
+def api_green_candle_toggle():
+    """Toggle green candle confirmation on/off. Pass {enabled: true/false}."""
+    global REQUIRE_GREEN_CANDLE
+    data = request.get_json(silent=True) or {}
+    REQUIRE_GREEN_CANDLE = bool(data.get("enabled", not REQUIRE_GREEN_CANDLE))
+    print(f"  [Config] REQUIRE_GREEN_CANDLE = {REQUIRE_GREEN_CANDLE}")
+    return jsonify({"ok": True, "green_candle": REQUIRE_GREEN_CANDLE})
+
+
+@app.route("/api/scan/green-candle", methods=["GET"])
+def api_green_candle_status():
+    return jsonify({"green_candle": REQUIRE_GREEN_CANDLE})
+
+
+@app.route("/api/scan/red-candle", methods=["POST"])
+def api_red_candle_toggle():
+    """Toggle red candle confirmation on/off. Pass {enabled: true/false}."""
+    global REQUIRE_RED_CANDLE
+    data = request.get_json(silent=True) or {}
+    REQUIRE_RED_CANDLE = bool(data.get("enabled", not REQUIRE_RED_CANDLE))
+    print(f"  [Config] REQUIRE_RED_CANDLE = {REQUIRE_RED_CANDLE}")
+    return jsonify({"ok": True, "red_candle": REQUIRE_RED_CANDLE})
+
+
+@app.route("/api/scan/red-candle", methods=["GET"])
+def api_red_candle_status():
+    return jsonify({"red_candle": REQUIRE_RED_CANDLE})
+
+
 @app.route("/api/refresh/set", methods=["POST"])
 def api_refresh_set():
     """Set or change live refresh interval (minutes). Pass {mins: N} or {stop: true}."""
@@ -2454,6 +3315,142 @@ def api_vix():
     return jsonify({"vix": get_vix(), "regime": vix_regime(get_vix())})
 
 
+@app.route("/api/bs-analyze", methods=["POST"])
+def api_bs_analyze():
+    """
+    Full Black-Scholes breakdown for the B-S Model tab.
+    Expects: { ticker, stock_price, strike, dte, iv_pct, market_price, option_type }
+    Returns: fair_value, greeks, intrinsic, extrinsic, vol comparison, interpretation
+    """
+    from scipy.stats import norm
+    data        = request.get_json(silent=True) or {}
+    ticker      = data.get("ticker", "").upper().strip()
+    S           = float(data.get("stock_price", 0))
+    K           = float(data.get("strike", 0))
+    dte         = float(data.get("dte", 0))
+    iv_pct      = float(data.get("iv_pct", 0))
+    mkt_price   = float(data.get("market_price", 0))
+    opt_type    = data.get("option_type", "call")
+
+    if S <= 0 or K <= 0 or dte <= 0 or iv_pct <= 0:
+        return jsonify({"ok": False, "error": "Please fill in all fields with valid values."})
+
+    T     = dte / 365.0
+    sigma = iv_pct / 100.0
+    r     = RISK_FREE_RATE
+
+    try:
+        d1 = (log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt(T))
+        d2 = d1 - sigma * sqrt(T)
+
+        if opt_type == "call":
+            fair_value = S * norm.cdf(d1) - K * exp(-r * T) * norm.cdf(d2)
+            delta      = norm.cdf(d1)
+            intrinsic  = max(0.0, S - K)
+        else:
+            fair_value = K * exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+            delta      = -norm.cdf(-d1)
+            intrinsic  = max(0.0, K - S)
+
+        extrinsic = max(0.0, fair_value - intrinsic)
+
+        # Greeks
+        gamma = norm.pdf(d1) / (S * sigma * sqrt(T))
+        vega  = S * norm.pdf(d1) * sqrt(T) / 100          # per 1% IV move
+        theta = (-(S * norm.pdf(d1) * sigma) / (2 * sqrt(T))
+                 - r * K * exp(-r * T) * (norm.cdf(d2) if opt_type=="call" else norm.cdf(-d2))) / 365
+        rho   = (K * T * exp(-r * T) * (norm.cdf(d2) if opt_type=="call" else -norm.cdf(-d2))) / 100
+
+        # GARCH vol comparison
+        garch_vol_pct = None
+        vol_verdict   = "unavailable"
+        vol_diff_pct  = None
+        if ticker:
+            try:
+                tkr_obj  = yf.Ticker(ticker)
+                hist_data = _yf_call(tkr_obj.history, period="6mo")
+                if hist_data is not None and not hist_data.empty and len(hist_data) >= 60:
+                    gv = calc_garch_vol(hist_data["Close"])
+                    garch_vol_pct = round(gv * 100, 1)
+                    vol_diff_pct  = round(iv_pct - garch_vol_pct, 1)
+                    if vol_diff_pct > 10:
+                        vol_verdict = "overpriced"
+                    elif vol_diff_pct < -10:
+                        vol_verdict = "underpriced"
+                    else:
+                        vol_verdict = "fair"
+            except Exception:
+                pass
+
+        # Overall mispricing vs market price
+        mispricing_pct = None
+        mispricing_label = None
+        if mkt_price > 0:
+            mispricing_pct = round((mkt_price - fair_value) / fair_value * 100, 1)
+            if mispricing_pct > 5:
+                mispricing_label = "overpriced"
+            elif mispricing_pct < -5:
+                mispricing_label = "underpriced"
+            else:
+                mispricing_label = "fairly priced"
+
+        # Plain-English interpretation
+        lines = []
+        if opt_type == "call":
+            lines.append(f"This is a <b>{'in-the-money' if S > K else 'out-of-the-money'} call</b>. "
+                         f"Intrinsic value is <b>${intrinsic:.2f}</b> — {'the stock is already above the strike, so you are paying for real value plus time.' if intrinsic > 0 else 'the stock has not reached the strike yet, so you are paying entirely for the possibility of a move up.'}")
+        else:
+            lines.append(f"This is a <b>{'in-the-money' if K > S else 'out-of-the-money'} put</b>. "
+                         f"Intrinsic value is <b>${intrinsic:.2f}</b> — {'the strike is above the stock price, so part of your premium is real downside protection.' if intrinsic > 0 else 'the stock is above the strike, so you are paying entirely for the possibility of a move down.'}")
+
+        lines.append(f"Time value (extrinsic) is <b>${extrinsic:.2f}</b> — this decays to zero by expiry regardless of direction. "
+                     f"At {dte:.0f} DTE, theta is <b>${theta:.3f}/day</b>, accelerating as expiry approaches.")
+
+        if vol_verdict == "overpriced":
+            lines.append(f"⚠️ <b>Vol is overpriced:</b> Market IV is {iv_pct:.1f}% vs GJR-GARCH estimate of {garch_vol_pct:.1f}% (+{vol_diff_pct:.1f}%). "
+                         f"The market is pricing in more future movement than our model expects. "
+                         f"{'Good for selling this option — you collect inflated premium.' if opt_type in ['put'] else 'Be cautious buying — you may be overpaying for vol that does not materialise.'}")
+        elif vol_verdict == "underpriced":
+            lines.append(f"✅ <b>Vol is underpriced:</b> Market IV is {iv_pct:.1f}% vs GJR-GARCH estimate of {garch_vol_pct:.1f}% ({vol_diff_pct:.1f}%). "
+                         f"The market is underestimating how much this stock moves. "
+                         f"{'Good for buying — you are getting cheap vol.' if opt_type in ['call','put'] else ''}")
+        elif vol_verdict == "fair":
+            lines.append(f"✅ <b>Vol is fairly priced:</b> Market IV ({iv_pct:.1f}%) is close to GARCH estimate ({garch_vol_pct:.1f}%). "
+                         f"No edge from a volatility mispricing standpoint — the trade lives or dies on direction.")
+
+        if mispricing_label == "overpriced":
+            lines.append(f"📌 The market price (${mkt_price:.2f}) is <b>{mispricing_pct:.1f}% above</b> BS fair value (${fair_value:.2f}). "
+                         f"You are paying above theoretical fair value — make sure the directional case is strong.")
+        elif mispricing_label == "underpriced":
+            lines.append(f"📌 The market price (${mkt_price:.2f}) is <b>{abs(mispricing_pct):.1f}% below</b> BS fair value (${fair_value:.2f}). "
+                         f"You are buying below theoretical fair value — positive edge on entry.")
+
+        lines.append(f"Delta of <b>{delta:.3f}</b> means for every $1 the stock moves, this option moves ~${abs(delta):.2f}. "
+                     f"Vega of <b>{vega:.3f}</b> means a 1% rise in IV adds ~${vega:.3f} to the option price.")
+
+        return jsonify({
+            "ok":             True,
+            "fair_value":     round(fair_value, 3),
+            "intrinsic":      round(intrinsic, 3),
+            "extrinsic":      round(extrinsic, 3),
+            "mispricing_pct": mispricing_pct,
+            "mispricing_label": mispricing_label,
+            "garch_vol_pct":  garch_vol_pct,
+            "vol_diff_pct":   vol_diff_pct,
+            "vol_verdict":    vol_verdict,
+            "greeks": {
+                "delta": round(delta, 4),
+                "gamma": round(gamma, 5),
+                "theta": round(theta, 4),
+                "vega":  round(vega,  4),
+                "rho":   round(rho,   4),
+            },
+            "interpretation": " ".join(f"<p>{l}</p>" for l in lines),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
 # ── Walk-forward optimizer routes ─────────────────────────────
 @app.route("/api/optimizer/run", methods=["POST"])
 def api_optimizer_run():
@@ -2488,6 +3485,7 @@ def api_optimizer_status():
     if s.get("results"):
         s["best"]         = s["results"].get("best")
         s["leaderboard"]  = s["results"].get("leaderboard", [])[:5]
+        s["completed_at"] = s["results"].get("completed_at")
         del s["results"]
     return jsonify(s)
 
@@ -2520,6 +3518,152 @@ def api_optimizer_apply():
     applied.update(scan_state["wfo_params"])
     print(f"  [WFO] Applied best params: {applied}")
     return jsonify({"ok": True, "applied": applied})
+
+
+@app.route("/api/debug/scan/<sym>")
+def api_debug_scan(sym):
+    """
+    Diagnostic endpoint — runs scan_ticker on one symbol and returns a full
+    breakdown of every signal condition so you can see exactly what blocked it.
+    Usage: GET /api/debug/scan/AAPL
+    """
+    sym = sym.upper()
+    try:
+        tkr  = yf.Ticker(sym)
+        hist = _yf_call(tkr.history, period="1y")
+        if hist is None or hist.empty or len(hist) < 60:
+            return jsonify({"error": "Not enough history data"}), 400
+
+        closes  = hist["Close"]
+        price   = float(closes.iloc[-1])
+        rsi_ser = calc_rsi(closes, RSI_PERIOD)
+        cur_rsi = float(rsi_ser.iloc[-1])
+        bb_u, bb_m, bb_l = calc_bb(closes, BB_PERIOD, BB_STD_DEV)
+        cur_bb_u = float(bb_u.iloc[-1])
+        cur_bb_l = float(bb_l.iloc[-1])
+
+        ma200_ser  = closes.rolling(200).mean()
+        ma200      = float(ma200_ser.iloc[-1])
+        trend_bull = price > ma200
+        trend_bear = price < ma200
+
+        adx_ser, pdi_ser, ndi_ser = calc_adx(hist)
+        cur_adx = float(adx_ser.iloc[-1]) if adx_ser is not None else None
+        cur_pdi = float(pdi_ser.iloc[-1]) if pdi_ser is not None else None
+        cur_ndi = float(ndi_ser.iloc[-1]) if ndi_ser is not None else None
+        strong_trend = cur_adx is not None and cur_adx > 30
+
+        reversal_up     = rsi_turning_up(rsi_ser)
+        oversold        = cur_rsi < RSI_OVERSOLD or price < cur_bb_l
+        overbought      = cur_rsi > RSI_OVERBOUGHT or price > cur_bb_u
+        exhaustion      = cur_rsi < 30 and reversal_up
+        _raw_knife      = trend_bear and strong_trend and (cur_ndi or 0) > (cur_pdi or 0)
+        falling_knife   = _raw_knife and not exhaustion
+        melt_up         = trend_bull and strong_trend and (cur_pdi or 0) > (cur_ndi or 0)
+
+        macd_line, macd_sig, _ = calc_macd(closes)
+        macd_cross  = macd_crossover(macd_line, macd_sig)
+        macd_bull   = macd_cross == "bull"
+        macd_bear   = macd_cross == "bear"
+
+        vol_confirmed, cur_vol, avg_vol = volume_confirmation(hist)
+        cur_vix   = get_vix()
+        regime    = vix_regime(cur_vix)
+
+        bull_signals = sum([
+            cur_rsi < 30, price < cur_bb_l, reversal_up,
+            macd_bull, vol_confirmed, regime == "low"
+        ])
+        bear_signals = sum([
+            cur_rsi > RSI_OVERBOUGHT, price > cur_bb_u, macd_bear, vol_confirmed
+        ])
+
+        _wfo_p    = scan_state.get("wfo_params", {})
+        _bull_min = min(_wfo_p.get("bull_min", 1), 2)
+        _bear_min = min(_wfo_p.get("bear_min", 2), 2)
+        market_trend = get_market_trend()
+        if market_trend == "bull_strong": _bear_min = min(_bear_min + 1, 3)
+        elif market_trend == "bear_strong": _bear_min = max(1, _bear_min - 1)
+
+        green_candle = float(closes.iloc[-1]) > float(closes.iloc[-2])
+        red_candle   = float(closes.iloc[-1]) < float(closes.iloc[-2])
+        green_ok     = (not REQUIRE_GREEN_CANDLE) or green_candle
+        red_ok       = (not REQUIRE_RED_CANDLE)   or red_candle
+
+        has_sell_put  = (oversold or macd_bear) and price <= MAX_PRICE_SELL and not falling_knife
+        has_buy_call  = oversold and bull_signals >= _bull_min and not falling_knife and green_ok
+        has_buy_put   = (overbought or macd_bear) and bear_signals >= _bear_min and not melt_up and red_ok
+
+        # Check if option chain is available
+        opt_available = False
+        try:
+            exp, dte = _best_exp(tkr)
+            opt_available = exp is not None
+        except Exception:
+            pass
+
+        return jsonify({
+            "ticker":        sym,
+            "price":         round(price, 2),
+            "rsi":           round(cur_rsi, 1),
+            "ma200":         round(ma200, 2),
+            "adx":           round(cur_adx, 1) if cur_adx else None,
+            "pdi":           round(cur_pdi, 1) if cur_pdi else None,
+            "ndi":           round(cur_ndi, 1) if cur_ndi else None,
+            "conditions": {
+                "oversold":        oversold,
+                "overbought":      overbought,
+                "trend_bull":      trend_bull,
+                "trend_bear":      trend_bear,
+                "strong_trend":    strong_trend,
+                "reversal_up":     reversal_up,
+                "exhaustion_bounce": exhaustion,
+                "falling_knife":   falling_knife,
+                "melt_up":         melt_up,
+                "macd_bull":       macd_bull,
+                "macd_bear":       macd_bear,
+                "vol_confirmed":   vol_confirmed,
+                "green_candle":    green_candle,
+                "red_candle":      red_candle,
+                "green_ok":        green_ok,
+                "red_ok":          red_ok,
+            },
+            "signals": {
+                "bull_signals":  bull_signals,
+                "bear_signals":  bear_signals,
+                "bull_min":      _bull_min,
+                "bear_min":      _bear_min,
+                "market_trend":  market_trend,
+                "vix":           cur_vix,
+                "vix_regime":    regime,
+            },
+            "strategy_gates": {
+                "has_sell_put":  has_sell_put,
+                "has_buy_call":  has_buy_call,
+                "has_buy_put":   has_buy_put,
+                "price_ok_for_sell": price <= MAX_PRICE_SELL,
+            },
+            "blockers": {
+                "sell_put":  "price > $10 limit" if price > MAX_PRICE_SELL
+                             else "falling_knife" if falling_knife
+                             else "not oversold or no macd_bear" if not (oversold or macd_bear)
+                             else None,
+                "buy_call":  "falling_knife (not exhaustion_bounce)" if falling_knife and not exhaustion
+                             else "not oversold" if not oversold
+                             else f"bull_signals {bull_signals} < min {_bull_min}" if bull_signals < _bull_min
+                             else "green_candle filter (bypassed by exhaustion_bounce)" if (not green_ok and exhaustion)
+                             else "green_candle filter ON — needs green day or exhaustion bounce" if not green_ok
+                             else None,
+                "buy_put":   "melt_up" if melt_up
+                             else "not overbought or no macd_bear" if not (overbought or macd_bear)
+                             else f"bear_signals {bear_signals} < min {_bear_min}" if bear_signals < _bear_min
+                             else "red_candle filter" if not red_ok
+                             else None,
+            },
+            "option_chain_available": opt_available,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/results/<strategy>")
@@ -2671,9 +3815,7 @@ def api_history_perf():
             row   = opts[abs(opts["strike"] - float(strike)) < 0.01]
             if row.empty:
                 return
-            bid = float(row.iloc[0].get("bid") or 0)
-            ask = float(row.iloc[0].get("ask") or 0)
-            current_mid = (bid + ask) / 2
+            current_mid = _option_mid(row.iloc[0])
             if current_mid <= 0:
                 return
             pct    = (current_mid - entry_price) / entry_price * 100
@@ -2792,6 +3934,137 @@ def api_track_remove(position_id):
     with track_lock:
         positions = [p for p in load_tracked() if p["id"] != position_id]
         save_tracked(positions)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/track/<position_id>/entry", methods=["PATCH"])
+def api_track_update_entry(position_id):
+    """Update the actual entry price paid for a tracked position."""
+    data = request.json or {}
+    try:
+        new_price = float(data.get("entry_price", 0))
+        if new_price <= 0:
+            return jsonify({"ok": False, "message": "Price must be greater than 0"})
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "message": "Invalid price"})
+
+    with track_lock:
+        positions = load_tracked()
+        for p in positions:
+            if p["id"] == position_id:
+                p["entry_price"]        = new_price
+                p["entry_price_manual"] = True   # flag that user set this manually
+                break
+        else:
+            return jsonify({"ok": False, "message": "Position not found"})
+        save_tracked(positions)
+    return jsonify({"ok": True, "entry_price": new_price})
+
+
+# ── Performance tracker API ───────────────────────────────────
+
+@app.route("/api/performance", methods=["GET"])
+def api_performance_get():
+    with _perf_lock:
+        trades = load_performance()
+    summary = calc_performance_summary(trades)
+    return jsonify({"trades": trades, "summary": summary})
+
+
+@app.route("/api/performance", methods=["POST"])
+def api_performance_add():
+    """Add a manually-entered closed trade."""
+    import uuid as _uuid
+    data = request.get_json(silent=True) or {}
+    try:
+        entry  = float(data["entry_price"])
+        exit_  = float(data["exit_price"])
+        contr  = int(data.get("contracts", 1))
+        pnl_per   = (exit_ - entry) * 100
+        pnl_total = pnl_per * contr
+        pnl_pct   = (exit_ - entry) / entry * 100
+        trade = {
+            "id":          str(_uuid.uuid4())[:8],
+            "ticker":      data.get("ticker", "").upper(),
+            "strategy":    data.get("strategy", ""),
+            "option_desc": data.get("option_desc", ""),
+            "entry_price": round(entry, 3),
+            "exit_price":  round(exit_,  3),
+            "contracts":   contr,
+            "pnl_per":     round(pnl_per,   2),
+            "pnl_total":   round(pnl_total, 2),
+            "pnl_pct":     round(pnl_pct,   1),
+            "entry_date":  data.get("entry_date", ""),
+            "exit_date":   data.get("exit_date",  ""),
+            "notes":       data.get("notes", ""),
+            "source":      "manual",
+        }
+    except (KeyError, ValueError, ZeroDivisionError) as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    with _perf_lock:
+        trades = load_performance()
+        trades.append(trade)
+        save_performance(trades)
+    return jsonify({"ok": True, "trade": trade})
+
+
+@app.route("/api/performance/from-tracker", methods=["POST"])
+def api_performance_from_tracker():
+    """Log a tracked position as closed and move it to performance history."""
+    import uuid as _uuid
+    data       = request.get_json(silent=True) or {}
+    pos_id     = data.get("position_id")
+    exit_price = data.get("exit_price")
+    exit_date  = data.get("exit_date", "")
+
+    with track_lock:
+        positions = load_tracked()
+        pos = next((p for p in positions if p["id"] == pos_id), None)
+        if not pos:
+            return jsonify({"ok": False, "error": "Position not found"}), 404
+        opt         = pos.get("option", {})
+        entry_price = float(pos.get("entry_price") or opt.get("mid") or opt.get("ask") or 0)
+        if exit_price is None:
+            sig = pos.get("last_signal", {})
+            exit_price = float(sig.get("current_option_mid") or 0)
+        exit_price = float(exit_price)
+        if entry_price <= 0 or exit_price <= 0:
+            return jsonify({"ok": False, "error": "Need valid entry and exit prices. Use ✏️ Edit entry first if entry is missing."}), 400
+        contr     = int(pos.get("contracts", 1))
+        pnl_per   = (exit_price - entry_price) * 100
+        pnl_total = pnl_per * contr
+        pnl_pct   = (exit_price - entry_price) / entry_price * 100
+        trade = {
+            "id":          str(_uuid.uuid4())[:8],
+            "ticker":      pos.get("ticker", ""),
+            "strategy":    pos.get("strategy", ""),
+            "option_desc": f"{opt.get('type','').capitalize()} ${opt.get('strike','')} {opt.get('expiration','')}",
+            "entry_price": round(entry_price, 3),
+            "exit_price":  round(exit_price,  3),
+            "contracts":   contr,
+            "pnl_per":     round(pnl_per,   2),
+            "pnl_total":   round(pnl_total, 2),
+            "pnl_pct":     round(pnl_pct,   1),
+            "entry_date":  str(pos.get("added_at", ""))[:10],
+            "exit_date":   exit_date or datetime.now().strftime("%Y-%m-%d"),
+            "notes":       data.get("notes", ""),
+            "source":      "tracker",
+        }
+        positions = [p for p in positions if p["id"] != pos_id]
+        save_tracked(positions)
+    with _perf_lock:
+        perf = load_performance()
+        perf.append(trade)
+        save_performance(perf)
+    return jsonify({"ok": True, "trade": trade})
+
+
+@app.route("/api/performance/<trade_id>", methods=["DELETE"])
+def api_performance_delete(trade_id):
+    with _perf_lock:
+        trades = load_performance()
+        trades = [t for t in trades if t["id"] != trade_id]
+        save_performance(trades)
     return jsonify({"ok": True})
 
 
@@ -2994,6 +4267,14 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
         📊 Full S&amp;P 500
       </button>
     </div>
+    <button id="btn-green-candle" onclick="toggleGreenCandle()"
+      style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--surface2);color:var(--muted);font-weight:600;font-size:12px;transition:all .2s">
+      🕯️ Green Candle
+    </button>
+    <button id="btn-red-candle" onclick="toggleRedCandle()"
+      style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--surface2);color:var(--muted);font-weight:600;font-size:12px;transition:all .2s">
+      🕯️ Red Candle
+    </button>
     <button class="btn btn-primary" id="btn-scan" onclick="startScan()">▶ Run Scan</button>
   </div>
 </header>
@@ -3032,6 +4313,8 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
     History <span class="badge-count" id="cnt-history">0</span>
   </div>
   <div class="tab" onclick="switchTab('backtest')">📈 Backtest</div>
+  <div class="tab" onclick="switchTab('bsmodel')">⚖️ B-S Model</div>
+  <div class="tab" onclick="switchTab('performance')">📊 Performance</div>
 </div>
 
 <!-- PANELS -->
@@ -3216,6 +4499,206 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
   </div>
 </div>
 
+<!-- PERFORMANCE TRACKER PANEL -->
+<div class="panel" id="panel-performance">
+  <div style="padding:24px;max-width:1100px;margin:0 auto">
+    <h2 style="color:var(--accent);font-size:18px;margin-bottom:6px">📊 Performance Tracker</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:24px">
+      Log closed trades from the Tracker tab or enter them manually. Tracks your realized P&amp;L over time.
+    </p>
+
+    <!-- Summary stat cards -->
+    <div id="perf-summary-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:28px">
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">TOTAL P&L</div>
+        <div id="perf-total-pnl" style="font-size:22px;font-weight:700;color:var(--text)">—</div>
+        <div id="perf-avg-pnl-pct" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
+      </div>
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">TOTAL P&L %</div>
+        <div id="perf-total-pnl-pct" style="font-size:22px;font-weight:700;color:var(--text)">—</div>
+        <div id="perf-total-invested" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
+      </div>
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">WIN RATE</div>
+        <div id="perf-win-rate" style="font-size:22px;font-weight:700;color:var(--text)">—</div>
+        <div id="perf-wl-counts" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
+      </div>
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">AVG WIN</div>
+        <div id="perf-avg-win" style="font-size:22px;font-weight:700;color:var(--green)">—</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">AVG LOSS</div>
+        <div id="perf-avg-loss" style="font-size:22px;font-weight:700;color:var(--red)">—</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">BEST TRADE</div>
+        <div id="perf-best" style="font-size:18px;font-weight:700;color:var(--green)">—</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--border)">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">WORST TRADE</div>
+        <div id="perf-worst" style="font-size:18px;font-weight:700;color:var(--red)">—</div>
+      </div>
+    </div>
+
+    <!-- Cumulative P&L chart -->
+    <div style="background:var(--surface2);border-radius:12px;padding:20px;border:1px solid var(--border);margin-bottom:28px">
+      <div style="font-size:13px;color:var(--muted);font-weight:600;margin-bottom:14px">Cumulative P&L ($)</div>
+      <canvas id="perf-chart" height="90"></canvas>
+    </div>
+
+    <!-- Manual trade entry form -->
+    <div style="background:var(--surface2);border-radius:12px;padding:20px;border:1px solid var(--border);margin-bottom:28px">
+      <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:14px">➕ Log a Trade Manually</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-bottom:14px">
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">TICKER</label>
+          <input id="mt-ticker" placeholder="AAPL" style="width:100%;padding:7px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">STRATEGY</label>
+          <select id="mt-strategy" style="width:100%;padding:7px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px">
+            <option value="buy_calls">Buy Calls</option>
+            <option value="buy_puts">Buy Puts</option>
+            <option value="sell_puts">Sell Puts</option>
+            <option value="covered_calls">Covered Calls</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">STRIKE ($)</label>
+          <input id="mt-strike" type="number" step="0.50" placeholder="195.00" style="width:100%;padding:7px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">EXPIRATION</label>
+          <input id="mt-expiration" type="text" placeholder="2025-02-21" style="width:100%;padding:7px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">ENTRY ($)</label>
+          <input id="mt-entry" type="number" step="0.01" placeholder="1.25" style="width:100%;padding:7px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">EXIT ($)</label>
+          <input id="mt-exit" type="number" step="0.01" placeholder="2.50" style="width:100%;padding:7px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">CONTRACTS</label>
+          <input id="mt-contracts" type="number" step="1" min="1" placeholder="1" value="1" style="width:100%;padding:7px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">CLOSE DATE</label>
+          <input id="mt-date" type="date" style="width:100%;padding:7px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+        </div>
+        <div style="grid-column:1/-1">
+          <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">NOTES (optional)</label>
+          <input id="mt-notes" placeholder="e.g. Exited on earnings gap up" style="width:100%;padding:7px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+        </div>
+      </div>
+      <button onclick="addManualTrade()" class="btn btn-primary" style="font-size:13px;padding:8px 20px">➕ Add Trade</button>
+      <span id="mt-status" style="margin-left:12px;font-size:12px;color:var(--muted)"></span>
+    </div>
+
+    <!-- Trade history table -->
+    <div style="background:var(--surface2);border-radius:12px;padding:20px;border:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="font-size:13px;font-weight:600;color:var(--text)">Trade History</div>
+        <button onclick="refreshPerformance()" class="btn btn-ghost" style="font-size:12px;padding:5px 12px">🔄 Refresh</button>
+      </div>
+      <div id="perf-table-wrap" style="overflow-x:auto">
+        <div style="color:var(--muted);font-size:13px;text-align:center;padding:20px">No trades logged yet.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- BLACK-SCHOLES MODEL PANEL -->
+<div class="panel" id="panel-bsmodel">
+  <div style="padding:24px;max-width:860px;margin:0 auto">
+    <h2 style="color:var(--accent);font-size:18px;margin-bottom:6px">⚖️ Black-Scholes Analyser</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:24px">
+      Enter any option's details to see its fair value, Greeks, intrinsic vs extrinsic breakdown,
+      and whether the market is pricing vol fairly vs our GARCH estimate.
+    </p>
+
+    <!-- Input form -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;margin-bottom:20px">
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">TICKER (for GARCH)</label>
+        <input id="bs-ticker" placeholder="e.g. AAPL" style="width:100%;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">STOCK PRICE ($)</label>
+        <input id="bs-stock" type="number" step="0.01" placeholder="195.00" style="width:100%;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">STRIKE PRICE ($)</label>
+        <input id="bs-strike" type="number" step="0.50" placeholder="195.00" style="width:100%;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">DAYS TO EXPIRY</label>
+        <input id="bs-dte" type="number" step="1" placeholder="30" style="width:100%;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">MARKET IV (%)</label>
+        <input id="bs-iv" type="number" step="0.1" placeholder="35.0" style="width:100%;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">MARKET PRICE ($)</label>
+        <input id="bs-mktprice" type="number" step="0.01" placeholder="3.50" style="width:100%;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px"/>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">OPTION TYPE</label>
+        <select id="bs-type" style="width:100%;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px">
+          <option value="call">Call</option>
+          <option value="put">Put</option>
+        </select>
+      </div>
+    </div>
+
+    <button onclick="runBSAnalysis()" class="btn btn-primary" style="margin-bottom:28px">⚖️ Analyse</button>
+
+    <!-- Results -->
+    <div id="bs-results" style="display:none">
+
+      <!-- Mispricing banner -->
+      <div id="bs-banner" style="border-radius:12px;padding:16px 20px;margin-bottom:24px;font-size:15px;font-weight:600"></div>
+
+      <!-- Three-column summary cards -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:24px">
+        <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--border)">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px">BS FAIR VALUE</div>
+          <div id="bs-fair" style="font-size:22px;font-weight:700;color:var(--text)">—</div>
+          <div id="bs-vs-market" style="font-size:12px;color:var(--muted);margin-top:4px"></div>
+        </div>
+        <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--border)">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px">VOL COMPARISON</div>
+          <div id="bs-vol-compare" style="font-size:15px;font-weight:600;color:var(--text)">—</div>
+          <div id="bs-vol-verdict" style="font-size:12px;margin-top:4px"></div>
+        </div>
+        <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--border)">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px">PREMIUM BREAKDOWN</div>
+          <div id="bs-intrinsic" style="font-size:13px;color:var(--text)">—</div>
+          <div id="bs-extrinsic" style="font-size:13px;color:var(--muted);margin-top:4px"></div>
+        </div>
+      </div>
+
+      <!-- Greeks -->
+      <div style="background:var(--surface2);border-radius:12px;padding:18px;border:1px solid var(--border);margin-bottom:24px">
+        <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:14px;letter-spacing:.05em">GREEKS</div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px" id="bs-greeks"></div>
+      </div>
+
+      <!-- Interpretation -->
+      <div style="background:var(--surface2);border-radius:12px;padding:18px;border:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:12px;letter-spacing:.05em">WHAT THIS MEANS FOR YOUR TRADE</div>
+        <div id="bs-interpretation" style="font-size:13px;color:var(--text);line-height:1.7"></div>
+      </div>
+
+    </div>
+    <div id="bs-error" style="display:none;color:var(--red);font-size:13px;margin-top:12px"></div>
+  </div>
+</div>
+
 <!-- CONFIRM MODAL -->
 <div class="modal-overlay" id="modal">
   <div class="modal">
@@ -3247,13 +4730,14 @@ function switchTab(tab) {
   activeTab = tab;
   document.querySelectorAll('.tab').forEach((el,i)=>{
     el.classList.toggle('active',
-      ['sell_puts','buy_calls','buy_puts','covered_calls','iron_condors','tracked','queue','history','backtest'][i]===tab);
+      ['sell_puts','buy_calls','buy_puts','covered_calls','iron_condors','tracked','queue','history','backtest','bsmodel','performance'][i]===tab);
   });
   document.querySelectorAll('.panel').forEach(el=> el.classList.remove('active'));
   document.getElementById('panel-'+tab).classList.add('active');
-  if (tab==='queue')   refreshQueue();
-  if (tab==='history') refreshHistory();
-  if (tab==='tracked') refreshTracked();
+  if (tab==='queue')       refreshQueue();
+  if (tab==='history')     refreshHistory();
+  if (tab==='tracked')     refreshTracked();
+  if (tab==='performance') refreshPerformance();
 }
 
 // ── Scan mode toggle ─────────────────────────────────────────
@@ -3264,6 +4748,62 @@ function setScanMode(mode) {
   document.getElementById('mode-focus').style.color      = mode==='focus' ? '#fff' : 'var(--muted)';
   document.getElementById('mode-full').style.background  = mode==='full'  ? 'var(--accent)' : 'var(--surface2)';
   document.getElementById('mode-full').style.color       = mode==='full'  ? '#fff' : 'var(--muted)';
+}
+
+// ── Green candle toggle ───────────────────────────────────────
+let greenCandleOn = false;
+function _applyGreenCandleStyle(on) {
+  const btn = document.getElementById('btn-green-candle');
+  if (!btn) return;
+  btn.style.background = on ? '#16a34a' : 'var(--surface2)';
+  btn.style.color      = on ? '#fff'    : 'var(--muted)';
+  btn.style.borderColor= on ? '#16a34a' : 'var(--border)';
+  btn.title = on ? 'Green Candle filter ON — buy calls require current close > previous close'
+                 : 'Green Candle filter OFF — click to require confirming green candle on buy calls';
+}
+async function toggleGreenCandle() {
+  greenCandleOn = !greenCandleOn;
+  _applyGreenCandleStyle(greenCandleOn);
+  await fetch('/api/scan/green-candle', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled: greenCandleOn})
+  });
+}
+async function initGreenCandle() {
+  try {
+    const d = await fetch('/api/scan/green-candle').then(r=>r.json());
+    greenCandleOn = d.green_candle;
+    _applyGreenCandleStyle(greenCandleOn);
+  } catch(e) {}
+}
+
+// ── Red candle toggle (buy puts) ──────────────────────────────
+let redCandleOn = false;
+function _applyRedCandleStyle(on) {
+  const btn = document.getElementById('btn-red-candle');
+  if (!btn) return;
+  btn.style.background  = on ? '#dc2626' : 'var(--surface2)';
+  btn.style.color       = on ? '#fff'    : 'var(--muted)';
+  btn.style.borderColor = on ? '#dc2626' : 'var(--border)';
+  btn.title = on ? 'Red Candle filter ON — buy puts require current close < previous close'
+                 : 'Red Candle filter OFF — click to require confirming red candle on buy puts';
+}
+async function toggleRedCandle() {
+  redCandleOn = !redCandleOn;
+  _applyRedCandleStyle(redCandleOn);
+  await fetch('/api/scan/red-candle', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled: redCandleOn})
+  });
+}
+async function initRedCandle() {
+  try {
+    const d = await fetch('/api/scan/red-candle').then(r=>r.json());
+    redCandleOn = d.red_candle;
+    _applyRedCandleStyle(redCandleOn);
+  } catch(e) {}
 }
 
 // ── Scan ──────────────────────────────────────────────────────
@@ -3431,18 +4971,30 @@ async function loadStrategy(strategy) {
     data = await resp.json();
   } catch(e) { console.error('Fetch failed', strategy, e); return; }
 
-  document.getElementById('cnt-'+strategy).textContent = data.length;
   const panel = document.getElementById('panel-'+strategy);
   if (!data.length) {
+    document.getElementById('cnt-'+strategy).textContent = 0;
     panel.innerHTML = `<div class="empty-state"><h3>No signals yet</h3><p>Run a scan to populate results.</p></div>`;
     return;
   }
 
+  // Build cards — count only successfully rendered ones so badge matches display
   let cards = '';
+  let rendered = 0;
+  const renderedData = [];
   for (const d of data) {
-    try { cards += buildCard(d, strategy); }
-    catch(e) { console.error('buildCard error', d.ticker, e); }
+    try {
+      const html = buildCard(d, strategy);
+      cards += html;
+      rendered++;
+      renderedData.push(d);
+    } catch(e) {
+      console.error('buildCard error for', d.ticker, '—', e.message, e);
+    }
   }
+
+  // Update badge to reflect what's actually displayed
+  document.getElementById('cnt-'+strategy).textContent = rendered;
 
   panel.innerHTML = `<div class="disclaimer">
     <b>⚠ Not financial advice.</b> These are technical signals only.
@@ -3450,10 +5002,10 @@ async function loadStrategy(strategy) {
     You must manually add trades to queue and approve each execution.
   </div>
   <div class="cards">${cards}</div>`;
-  try { renderCharts(data); } catch(e) { console.error('renderCharts error', e); }
+  try { renderCharts(renderedData); } catch(e) { console.error('renderCharts error', e); }
 
-  // Async: fetch news for each card and inject into its placeholder
-  for (const d of data) {
+  // Async: fetch news for each successfully rendered card
+  for (const d of renderedData) {
     const sid = d.strategy || strategy;
     const id  = d.ticker + '_' + sid;
     renderNewsIntoCard(d.ticker, d.strategy || sid, 'news-' + id);
@@ -3481,6 +5033,10 @@ function buildCard(d, strategy) {
   if(d.rsi_neutral)   sigs += `<span class="sig sig-blue">RSI ${d.rsi} Neutral</span>`;
   if(d.bb_oversold)   sigs += `<span class="sig sig-yellow">Below BB</span>`;
   if(d.bb_overbought) sigs += `<span class="sig sig-orange">Above BB</span>`;
+  // Donchian Channel signals
+  if(d.dc_at_lower)   sigs += `<span class="sig sig-red" title="Price at ${DC_PERIOD||20}-day Donchian lower band — N-period price low">📉 DC Lower $${d.dc_lower?.toFixed(2)}</span>`;
+  if(d.dc_at_upper)   sigs += `<span class="sig sig-orange" title="Price at ${DC_PERIOD||20}-day Donchian upper band — N-period price high">📈 DC Upper $${d.dc_upper?.toFixed(2)}</span>`;
+  if(d.dc_squeeze)    sigs += `<span class="sig sig-blue" title="Donchian range ${d.dc_range_pct?.toFixed(1)}% — tight consolidation, breakout likely">🗜 DC Squeeze ${d.dc_range_pct?.toFixed(1)}%</span>`;
   if(d.reversal)      sigs += `<span class="sig sig-green">RSI Turning ↑</span>`;
   if(d.iv_high)       sigs += `<span class="sig sig-purple">IV Rank ${d.iv_rank?.toFixed(0)}</span>`;
   if(d.prem_high)     sigs += `<span class="sig sig-blue">Premium ${opt.premium_pct?.toFixed(1)}%</span>`;
@@ -3504,6 +5060,22 @@ function buildCard(d, strategy) {
     const vixColor = d.vix_regime==='high'?'sig-red':d.vix_regime==='low'?'sig-green':'sig-blue';
     const vixLabel = d.vix_regime==='high'?'⚡ High Vol':'🧊 Low Vol'
     if(d.vix_regime!=='normal') sigs += `<span class="sig ${vixColor}">${vixLabel} VIX ${d.vix?.toFixed(1)}</span>`;
+  }
+  // Broad market (SPY) regime
+  if(d.market_trend) {
+    const mktMap = {
+      'bull_strong': ['sig-green',  '📈 Market Bull'],
+      'bull_weak':   ['sig-blue',   '↗ Market Mild Bull'],
+      'bear_strong': ['sig-red',    '📉 Market Bear'],
+      'bear_weak':   ['sig-orange', '↘ Market Mild Bear'],
+    };
+    const [mktColor, mktLabel] = mktMap[d.market_trend] || [];
+    if(mktColor) sigs += `<span class="sig ${mktColor}">${mktLabel}</span>`;
+  }
+  // GARCH volatility estimate
+  if(d.garch_vol != null) {
+    const garchColor = d.garch_vol > 60 ? 'sig-red' : d.garch_vol > 35 ? 'sig-orange' : 'sig-blue';
+    sigs += `<span class="sig ${garchColor}">σ GJR-GARCH ${d.garch_vol?.toFixed(1)}%</span>`;
   }
   // Volume confirmation
   if(d.vol_confirmed) sigs += `<span class="sig sig-green">📊 Vol Confirmed</span>`;
@@ -3714,6 +5286,9 @@ function buildCard(d, strategy) {
     <button class="btn btn-ghost" style="margin-left:6px" onclick="trackPosition('${d.ticker}','${d.name}',${d.price},'${sid}','${d.strategy_label||action}','${id}')">
       📍 Track
     </button>
+    <button class="btn btn-ghost" style="margin-left:6px" onclick="openBSFromCard('${d.ticker}',${d.price},${opt.strike||0},${opt.dte||30},${opt.iv||0},${opt.mid||0},'${opt.type||sid}')">
+      ⚖️ B-S
+    </button>
   </div>
 </div>`;
 }
@@ -3797,7 +5372,7 @@ function buildNewsSection(d, newsContainerId) {
 function buildBSSection(d) {
   const bs = d.bs;
   const bm = d.bs_misprice;
-  if (!bs) return '';
+  if (!bs || bs.fair_value == null || bs.delta == null) return '';
 
   const fv      = bs.fair_value;
   const delta   = bs.delta;
@@ -3847,12 +5422,12 @@ function buildBSSection(d) {
 
 function buildMCSection(d, id) {
   const mc = d.mc;
-  if (!mc) return '';
+  if (!mc || mc.pop == null || mc.ev == null || mc.breakeven == null || mc.max_loss == null) return '';
 
   const pop     = mc.pop;
   const ev      = mc.ev;
   const be      = mc.breakeven;
-  const maxP    = mc.max_profit;
+  const maxP    = mc.max_profit;   // may be null (unlimited upside)
   const maxL    = mc.max_loss;
   const nsims   = (mc.n_sims||10000).toLocaleString();
 
@@ -4088,16 +5663,51 @@ async function refreshTracked() {
     const opt    = p.option || {};
 
     // ── Entry / current option price ───────────────────────
-    const entryMid   = p.entry_price ? +p.entry_price : null;
-    const currentMid = sig.current_option_mid != null ? +sig.current_option_mid : null;
-    const entryStr   = entryMid   != null ? '$'+entryMid.toFixed(3)   : '—';
-    const currentStr = currentMid != null ? '$'+currentMid.toFixed(3) : '—';
+    const entryMid    = p.entry_price ? +p.entry_price : null;
+    const currentMid  = sig.current_option_mid != null ? +sig.current_option_mid : null;
+    const currentBid  = sig.current_bid  != null ? +sig.current_bid  : null;
+    const currentAsk  = sig.current_ask  != null ? +sig.current_ask  : null;
+    const priceQuality = sig.price_quality || 'unavailable';
+    const isManual    = p.entry_price_manual ? true : false;
+    const entryLabel  = isManual ? '✏️ ' : '';
+    const entryStr    = entryMid != null ? entryLabel+'$'+entryMid.toFixed(3) : '—';
+
+    // ── Price quality badge ─────────────────────────────────
+    const qBadge = {
+      live:        { icon: '🟢', label: 'Live',      color: 'var(--green)' },
+      stale_bid:   { icon: '🟡', label: 'Stale bid', color: '#f59e0b' },
+      ask_only:    { icon: '🟡', label: 'Ask only',  color: '#f59e0b' },
+      last_only:   { icon: '🔴', label: 'Stale',     color: 'var(--red)' },
+      unavailable: { icon: '⚫', label: 'No quote',  color: 'var(--muted)' },
+    };
+    const qInfo = qBadge[priceQuality] || qBadge['unavailable'];
+    // Build mid/bid/ask detail line
+    let bidAskLine = '';
+    if (currentBid != null && currentAsk != null) {
+      bidAskLine = `<span style="font-size:10px;color:var(--muted)">b $${currentBid.toFixed(2)} / a $${currentAsk.toFixed(2)}</span>`;
+    } else if (currentAsk != null) {
+      bidAskLine = `<span style="font-size:10px;color:var(--muted)">ask $${currentAsk.toFixed(2)}</span>`;
+    }
+    const qualityBadge = currentMid != null ? `
+      <span style="font-size:10px;color:${qInfo.color};white-space:nowrap"
+            title="Price quality: ${priceQuality}">${qInfo.icon} ${qInfo.label}</span>
+      ${bidAskLine}` : '';
+    const currentStr  = currentMid != null
+      ? `<span style="font-weight:600">$${currentMid.toFixed(3)}</span>`
+      : '—';
+
+    // ── Edit entry price button ─────────────────────────────
+    const editBtn = `<button onclick="editEntryPrice('${p.id}', ${entryMid||0})"
+      title="Set your actual purchase price"
+      style="font-size:10px;padding:2px 6px;margin-top:3px;cursor:pointer;
+             background:var(--surface2);border:1px solid var(--border);
+             border-radius:4px;color:var(--muted)">✏️ Edit entry</button>`;
 
     // ── Performance calculation ─────────────────────────────
-    let perfHtml = '<span style="color:var(--muted);font-size:12px">Waiting…</span>';
+    let perfHtml = `<div>${editBtn}</div>`;
     if (entryMid != null && currentMid != null) {
-      const pct    = sig.pct_change    != null ? sig.pct_change    : (currentMid - entryMid) / entryMid * 100;
-      const dollar = sig.dollar_change != null ? sig.dollar_change : (currentMid - entryMid) * 100;
+      const pct    = (currentMid - entryMid) / entryMid * 100;
+      const dollar = (currentMid - entryMid) * 100;
       const color  = pct >= 0 ? 'var(--green)' : 'var(--red)';
       const arrow  = pct >= 0 ? '▲' : '▼';
       const sign   = pct >= 0 ? '+' : '';
@@ -4106,9 +5716,74 @@ async function refreshTracked() {
           <span style="font-size:13px;font-weight:700;color:${color}">${arrow} ${sign}${pct.toFixed(1)}%</span>
           <span style="font-size:11px;color:${color}">${sign}$${dollar.toFixed(2)} / contract</span>
           <span style="font-size:10px;color:var(--muted)">${entryStr} → ${currentStr}</span>
+          ${qualityBadge}
+          ${editBtn}
         </div>`;
     } else if (entryMid != null) {
-      perfHtml = `<span style="font-size:11px;color:var(--muted)">Entry: ${entryStr}<br>Awaiting price…</span>`;
+      perfHtml = `<div style="display:flex;flex-direction:column;gap:3px">
+        <span style="font-size:11px;color:var(--muted)">Entry: ${entryStr}<br>Awaiting price…</span>
+        ${qualityBadge}
+        ${editBtn}
+      </div>`;
+    } else {
+      perfHtml = `<div style="display:flex;flex-direction:column;gap:3px">
+        <span style="font-size:11px;color:var(--muted)">No entry price set</span>
+        ${editBtn}
+      </div>`;
+    }
+
+    // ── RSI Momentum badge ──────────────────────────────────
+    let momentumHtml = '<span style="color:var(--muted);font-size:12px">—</span>';
+    if (p.last_signal && p.last_signal.momentum_label) {
+      const ml      = p.last_signal.momentum_label;
+      const slope   = p.last_signal.rsi_slope   || 0;
+      const eta     = p.last_signal.eta_days;
+      const dist    = p.last_signal.rsi_distance || 0;
+      const slopeSign = slope >= 0 ? '+' : '';
+
+      const mColors = {
+        accelerating: '#22c55e',
+        on_track:     '#60a5fa',
+        turning_up:   '#34d399',
+        turning_down: '#f87171',
+        basing:       '#94a3b8',
+        stalling:     '#f59e0b',
+        reversing:    '#ef4444',
+      };
+      const mIcons = {
+        accelerating: '🚀',
+        on_track:     '📈',
+        turning_up:   '↗️',
+        turning_down: '↘️',
+        basing:       '⏳',
+        stalling:     '⚠️',
+        reversing:    '🔴',
+      };
+      const mLabels = {
+        accelerating: 'Accelerating',
+        on_track:     'On Track',
+        turning_up:   'Turning Up',
+        turning_down: 'Turning Down',
+        basing:       'Still Oversold',
+        stalling:     'Stalling',
+        reversing:    'Reversing',
+      };
+      const col   = mColors[ml] || 'var(--muted)';
+      const icon  = mIcons[ml]  || '';
+      // "basing" label depends on strategy — oversold for buy calls, overbought for buy puts
+      const strat = p.strategy || '';
+      const basingLabel = strat === 'buy_put' ? 'Still Overbought' : 'Still Oversold';
+      const label = ml === 'basing' ? basingLabel : (mLabels[ml] || ml);
+
+      const etaLine  = eta != null ? `<br><span style="font-size:10px;color:var(--muted)">~${eta}d to target</span>` : '';
+      const distLine = dist > 0   ? `<br><span style="font-size:10px;color:var(--muted)">${dist.toFixed(1)} RSI pts left</span>` : '';
+
+      momentumHtml = `
+        <div>
+          <span style="font-size:12px;font-weight:700;color:${col}">${icon} ${label}</span>
+          <br><span style="font-size:11px;color:var(--muted)">RSI ${slopeSign}${slope.toFixed(1)}/day</span>
+          ${etaLine}${distLine}
+        </div>`;
     }
 
     // ── Signal badge ────────────────────────────────────────
@@ -4142,13 +5817,16 @@ async function refreshTracked() {
         ${cprice}<br>
         <span style="font-size:11px;color:var(--muted)">RSI: ${rsi}</span>
       </td>
+      <td>${momentumHtml}</td>
       <td>
         ${signalBadge}
         ${fired&&reasons?`<br><span style="font-size:11px;color:var(--muted)">${reasons}</span>`:''}
       </td>
       <td style="font-size:11px;color:var(--muted)">${chk}</td>
-      <td>
-        <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px"
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;display:block;margin-bottom:5px"
+          onclick="logFromTracker('${p.id}')">✅ Close &amp; Log</button>
+        <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;display:block"
           onclick="untrackPosition('${p.id}')">✕ Remove</button>
       </td>
     </tr>`;
@@ -4158,10 +5836,33 @@ async function refreshTracked() {
     <thead><tr>
       <th>Ticker</th><th>Strategy</th><th>Option</th>
       <th>Performance</th><th>Stock Price</th>
-      <th>Signal</th><th>Last Check</th><th>Actions</th>
+      <th>Momentum</th><th>Signal</th><th>Last Check</th><th>Actions</th>
     </tr></thead>
     <tbody>${rows.join('')}</tbody>
   </table>`;
+}
+
+async function editEntryPrice(posId, currentEntry) {
+  const input = prompt(
+    'Enter your actual purchase price for this option (per share, e.g. 0.85):',
+    currentEntry > 0 ? currentEntry.toFixed(3) : ''
+  );
+  if (input === null) return;  // user cancelled
+  const price = parseFloat(input);
+  if (isNaN(price) || price <= 0) {
+    alert('Please enter a valid price greater than 0.');
+    return;
+  }
+  const resp = await fetch(`/api/track/${posId}/entry`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({entry_price: price})
+  }).then(r => r.json());
+  if (resp.ok) {
+    refreshTracked();
+  } else {
+    alert(resp.message || 'Could not update entry price.');
+  }
 }
 
 async function untrackPosition(posId) {
@@ -4510,7 +6211,8 @@ async function runOptimizer() {
       } else {
         clearInterval(wfoPoll);
         btn.disabled=false; btn.textContent='🧬 Run Optimizer';
-        document.getElementById('wfo-status').textContent = d.stage || 'Complete';
+        const ts = d.completed_at ? ` — last run ${new Date(d.completed_at).toLocaleString()}` : '';
+        document.getElementById('wfo-status').textContent = (d.stage || 'Complete') + ts;
         renderOptimizerResults();
       }
     } catch(e) {}
@@ -4650,14 +6352,317 @@ async function refreshHistory() {
   }
 }
 
+// ── Performance Tracker ───────────────────────────────────────
+let _perfChart = null;
+
+async function refreshPerformance() {
+  try {
+    const d = await fetch('/api/performance').then(r => r.json());
+    const s = d.summary;
+    const trades = d.trades || [];
+
+    // Summary cards
+    const pnlColor    = s.total_pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const pnlSign     = s.total_pnl >= 0 ? '+' : '';
+    const avgPctSign  = (s.avg_pnl_pct||0) >= 0 ? '+' : '';
+    const totalPctSign = (s.total_pnl_pct||0) >= 0 ? '+' : '';
+    document.getElementById('perf-total-pnl').textContent      = s.total_trades > 0 ? `${pnlSign}$${s.total_pnl.toFixed(2)}` : '—';
+    document.getElementById('perf-total-pnl').style.color      = pnlColor;
+    document.getElementById('perf-avg-pnl-pct').textContent    = s.total_trades > 0 ? `Avg ${avgPctSign}${(s.avg_pnl_pct||0).toFixed(1)}% per trade` : '';
+    document.getElementById('perf-avg-pnl-pct').style.color    = pnlColor;
+    document.getElementById('perf-total-pnl-pct').textContent  = s.total_trades > 0 ? `${totalPctSign}${(s.total_pnl_pct||0).toFixed(1)}%` : '—';
+    document.getElementById('perf-total-pnl-pct').style.color  = pnlColor;
+    document.getElementById('perf-total-invested').textContent = s.total_trades > 0 ? `on $${(s.total_invested||0).toFixed(0)} deployed` : '';
+    document.getElementById('perf-win-rate').textContent       = s.total_trades > 0 ? `${s.win_rate.toFixed(0)}%` : '—';
+    document.getElementById('perf-wl-counts').textContent      = s.total_trades > 0 ? `${s.winners}W / ${s.losers}L (${s.total_trades} trades)` : '';
+    document.getElementById('perf-avg-win').textContent        = s.winners > 0 ? `+${s.avg_win_pct.toFixed(1)}%` : '—';
+    document.getElementById('perf-avg-loss').textContent       = s.losers  > 0 ? `${s.avg_loss_pct.toFixed(1)}%` : '—';
+    document.getElementById('perf-best').textContent           = s.best_trade  != null ? `+${s.best_trade.toFixed(1)}%`  : '—';
+    document.getElementById('perf-worst').textContent          = s.worst_trade != null ? `${s.worst_trade.toFixed(1)}%` : '—';
+
+    // Cumulative P&L chart
+    const sorted = [...trades].sort((a,b) => new Date(a.exit_date||0) - new Date(b.exit_date||0));
+    let cumulative = 0;
+    const labels = [], dataPoints = [];
+    sorted.forEach(t => {
+      cumulative += (t.pnl_total || 0);
+      labels.push(t.ticker + ' ' + (t.exit_date ? t.exit_date.slice(0,10) : ''));
+      dataPoints.push(+cumulative.toFixed(2));
+    });
+
+    const ctx = document.getElementById('perf-chart').getContext('2d');
+    if (_perfChart) { _perfChart.destroy(); _perfChart = null; }
+    _perfChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: 'Cumulative P&L ($)',
+          data: dataPoints,
+          borderColor: dataPoints.length && dataPoints[dataPoints.length-1] >= 0 ? '#22c55e' : '#ef4444',
+          backgroundColor: 'transparent',
+          borderWidth: 2,
+          pointRadius: 4,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: '#94a3b8', maxRotation: 45, font: { size: 11 } }, grid: { color: '#1e293b' } },
+          y: { ticks: { color: '#94a3b8', font: { size: 11 } }, grid: { color: '#1e293b' } }
+        }
+      }
+    });
+
+    // Trade history table
+    const wrap = document.getElementById('perf-table-wrap');
+    if (!trades.length) {
+      wrap.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:20px">No trades logged yet.</div>';
+      return;
+    }
+    const byDate = [...trades].sort((a,b) => new Date(b.exit_date||0) - new Date(a.exit_date||0));
+    const tRows = byDate.map(t => {
+      const pct    = t.pnl_pct   != null ? t.pnl_pct   : 0;
+      const dollar = t.pnl_total != null ? t.pnl_total : 0;
+      const color  = pct >= 0 ? 'var(--green)' : 'var(--red)';
+      const sign   = pct >= 0 ? '+' : '';
+      const contracts = t.contracts || 1;
+      const stratLabel = {buy_calls:'Buy Calls', buy_puts:'Buy Puts', sell_puts:'Sell Puts', covered_calls:'Covered Calls'}[t.strategy] || t.strategy || '—';
+      return `<tr>
+        <td>${t.exit_date ? t.exit_date.slice(0,10) : '—'}</td>
+        <td><b>${t.ticker||'—'}</b></td>
+        <td>${stratLabel}</td>
+        <td style="font-size:12px">${t.option_desc||'—'}</td>
+        <td>$${(t.entry_price||0).toFixed(3)}</td>
+        <td>$${(t.exit_price||0).toFixed(3)}</td>
+        <td style="font-weight:700;color:${color}">${sign}${pct.toFixed(1)}%</td>
+        <td style="color:${color}">${sign}$${dollar.toFixed(2)}<br><span style="font-size:10px;color:var(--muted)">${contracts} contract${contracts>1?'s':''}</span></td>
+        <td style="font-size:12px;color:var(--muted)">${t.notes||''}</td>
+        <td>
+          <button class="btn btn-ghost" style="font-size:11px;padding:3px 8px"
+            onclick="deletePerformanceTrade('${t.id}')">✕</button>
+        </td>
+      </tr>`;
+    }).join('');
+    wrap.innerHTML = `<table class="queue-table">
+      <thead><tr>
+        <th>Date</th><th>Ticker</th><th>Strategy</th><th>Option</th>
+        <th>Entry</th><th>Exit</th><th>P&L %</th><th>P&L $</th><th>Notes</th><th></th>
+      </tr></thead>
+      <tbody>${tRows}</tbody>
+    </table>`;
+  } catch(e) {
+    console.error('refreshPerformance error', e);
+  }
+}
+
+async function logFromTracker(posId) {
+  const exitStr = prompt('Enter your exit price for this option (per share, e.g. 2.50):');
+  if (exitStr === null) return;
+  const exitPrice = parseFloat(exitStr);
+  if (isNaN(exitPrice) || exitPrice < 0) {
+    alert('Please enter a valid exit price (0 or more).');
+    return;
+  }
+  const notesStr = prompt('Add a note (optional, press Enter to skip):') || '';
+  const resp = await fetch('/api/performance/from-tracker', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ position_id: posId, exit_price: exitPrice, notes: notesStr })
+  }).then(r => r.json());
+  if (resp.ok) {
+    refreshTracked();
+    refreshPerformance();
+    // Update tracked count badge
+    const tracked = await fetch('/api/tracked').then(r=>r.json());
+    document.getElementById('cnt-tracked').textContent = tracked.length;
+  } else {
+    alert(resp.message || 'Could not log trade.');
+  }
+}
+
+async function addManualTrade() {
+  const ticker     = document.getElementById('mt-ticker').value.trim().toUpperCase();
+  const strategy   = document.getElementById('mt-strategy').value;
+  const strike     = parseFloat(document.getElementById('mt-strike').value) || 0;
+  const expiration = document.getElementById('mt-expiration').value.trim();
+  const entry      = parseFloat(document.getElementById('mt-entry').value);
+  const exit       = parseFloat(document.getElementById('mt-exit').value);
+  const contracts  = parseInt(document.getElementById('mt-contracts').value) || 1;
+  const closeDate  = document.getElementById('mt-date').value;
+  const notes      = document.getElementById('mt-notes').value.trim();
+  const status     = document.getElementById('mt-status');
+
+  if (!ticker || isNaN(entry) || isNaN(exit)) {
+    status.textContent = '⚠ Ticker, entry and exit price are required.';
+    status.style.color = 'var(--red)';
+    return;
+  }
+  const resp = await fetch('/api/performance', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      ticker, strategy,
+      option_desc: `${['buy_calls','covered_calls'].includes(strategy)?'Call':'Put'} $${strike} ${expiration}`.trim(),
+      entry_price: entry, exit_price: exit,
+      contracts, exit_date: closeDate, notes
+    })
+  }).then(r => r.json());
+
+  if (resp.ok) {
+    status.textContent = '✅ Trade logged!';
+    status.style.color = 'var(--green)';
+    // Clear form
+    ['mt-ticker','mt-strike','mt-expiration','mt-entry','mt-exit','mt-notes'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('mt-contracts').value = '1';
+    document.getElementById('mt-date').value = '';
+    refreshPerformance();
+    setTimeout(() => { status.textContent = ''; }, 3000);
+  } else {
+    status.textContent = resp.message || 'Error logging trade.';
+    status.style.color = 'var(--red)';
+  }
+}
+
+async function deletePerformanceTrade(tradeId) {
+  if (!confirm('Delete this trade from history? This cannot be undone.')) return;
+  const resp = await fetch(`/api/performance/${tradeId}`, { method: 'DELETE' }).then(r => r.json());
+  if (resp.ok) {
+    refreshPerformance();
+  } else {
+    alert(resp.message || 'Could not delete trade.');
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────
+// ── Black-Scholes Analyser ────────────────────────────────────
+function openBSFromCard(ticker, stockPrice, strike, dte, iv, marketPrice, optType) {
+  // Switch to the BS tab
+  switchTab('bsmodel');
+  // Populate fields from scan data
+  document.getElementById('bs-ticker').value    = ticker;
+  document.getElementById('bs-stock').value     = stockPrice;
+  document.getElementById('bs-strike').value    = strike;
+  document.getElementById('bs-dte').value       = dte;
+  document.getElementById('bs-iv').value        = iv;
+  document.getElementById('bs-mktprice').value  = marketPrice;
+  // Map strategy name to call/put
+  const t = (optType || '').toLowerCase();
+  document.getElementById('bs-type').value = t.includes('put') ? 'put' : 'call';
+  // Auto-run the analysis
+  runBSAnalysis();
+}
+
+async function runBSAnalysis() {
+  const ticker    = document.getElementById('bs-ticker').value.trim();
+  const stock     = parseFloat(document.getElementById('bs-stock').value);
+  const strike    = parseFloat(document.getElementById('bs-strike').value);
+  const dte       = parseFloat(document.getElementById('bs-dte').value);
+  const iv        = parseFloat(document.getElementById('bs-iv').value);
+  const mktPrice  = parseFloat(document.getElementById('bs-mktprice').value) || 0;
+  const optType   = document.getElementById('bs-type').value;
+
+  document.getElementById('bs-results').style.display = 'none';
+  document.getElementById('bs-error').style.display   = 'none';
+
+  const res = await fetch('/api/bs-analyze', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ticker, stock_price: stock, strike, dte, iv_pct: iv,
+                          market_price: mktPrice, option_type: optType})
+  });
+  const d = await res.json();
+
+  if (!d.ok) {
+    document.getElementById('bs-error').textContent = d.error;
+    document.getElementById('bs-error').style.display = 'block';
+    return;
+  }
+
+  // Banner
+  const bannerColors = {overpriced:'#7f1d1d', underpriced:'#14532d', 'fairly priced':'#1e3a5f', unavailable:'#1e293b'};
+  const bannerLabels = {
+    overpriced:     `⚠️ Option is OVERPRICED — market price is ${d.mispricing_pct}% above BS fair value`,
+    underpriced:    `✅ Option is UNDERPRICED — market price is ${Math.abs(d.mispricing_pct)}% below BS fair value`,
+    'fairly priced':`✔️ Option is FAIRLY PRICED — market price is within 5% of BS fair value`,
+    unavailable:    `ℹ️ Enter a market price to see overall mispricing`
+  };
+  const bannerKey = d.mispricing_label || 'unavailable';
+  const banner = document.getElementById('bs-banner');
+  banner.style.background = bannerColors[bannerKey] || '#1e293b';
+  banner.style.color = '#fff';
+  banner.textContent = bannerLabels[bannerKey] || '';
+
+  // Summary cards
+  document.getElementById('bs-fair').textContent = `$${d.fair_value.toFixed(3)}`;
+  document.getElementById('bs-vs-market').textContent =
+    mktPrice > 0 ? `Market: $${mktPrice.toFixed(2)} (${d.mispricing_pct > 0 ? '+' : ''}${d.mispricing_pct}%)` : 'Enter market price for comparison';
+
+  const volColors = {overpriced:'#ef4444', underpriced:'#22c55e', fair:'#60a5fa', unavailable:'#94a3b8'};
+  const volLabels = {
+    overpriced:  `IV ${iv}% vs GJR-GARCH ${d.garch_vol_pct}% → +${d.vol_diff_pct}% overpriced`,
+    underpriced: `IV ${iv}% vs GJR-GARCH ${d.garch_vol_pct}% → ${d.vol_diff_pct}% underpriced`,
+    fair:        `IV ${iv}% ≈ GJR-GARCH ${d.garch_vol_pct}% → fairly priced vol`,
+    unavailable: `Enter ticker to compare IV vs GARCH vol`
+  };
+  document.getElementById('bs-vol-compare').style.color = volColors[d.vol_verdict] || '#94a3b8';
+  document.getElementById('bs-vol-compare').textContent = volLabels[d.vol_verdict] || '';
+  document.getElementById('bs-vol-verdict').textContent =
+    d.vol_verdict === 'overpriced' ? 'Better for sellers. Buyers overpaying for vol.' :
+    d.vol_verdict === 'underpriced'? 'Better for buyers. Cheap vol.' :
+    d.vol_verdict === 'fair'       ? 'No vol edge. Trade on direction.' : '';
+  document.getElementById('bs-vol-verdict').style.color =
+    d.vol_verdict === 'overpriced' ? '#ef4444' : d.vol_verdict === 'underpriced' ? '#22c55e' : '#94a3b8';
+
+  document.getElementById('bs-intrinsic').innerHTML =
+    `<span style="color:var(--green)">Intrinsic: $${d.intrinsic.toFixed(3)}</span>`;
+  document.getElementById('bs-extrinsic').innerHTML =
+    `<span>Extrinsic (time+vol): $${d.extrinsic.toFixed(3)}</span>`;
+
+  // Greeks
+  const gk = d.greeks;
+  const greekDefs = [
+    {name:'Delta', val: gk.delta.toFixed(4), desc:'$ move per $1 stock move'},
+    {name:'Gamma', val: gk.gamma.toFixed(5), desc:'Delta change per $1 stock move'},
+    {name:'Theta', val: gk.theta.toFixed(4), desc:'$ lost per day (time decay)'},
+    {name:'Vega',  val: gk.vega.toFixed(4),  desc:'$ gained per 1% IV rise'},
+    {name:'Rho',   val: gk.rho.toFixed(4),   desc:'$ change per 1% rate move'},
+  ];
+  document.getElementById('bs-greeks').innerHTML = greekDefs.map(g => `
+    <div style="text-align:center">
+      <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${g.name}</div>
+      <div style="font-size:18px;font-weight:700;color:var(--accent)">${g.val}</div>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px">${g.desc}</div>
+    </div>`).join('');
+
+  // Interpretation
+  document.getElementById('bs-interpretation').innerHTML = d.interpretation;
+
+  document.getElementById('bs-results').style.display = 'block';
+}
+
 window.onload = async () => {
   const s = await fetch('/api/scan/status').then(r=>r.json());
   if(s.last_scan) {
     document.getElementById('scan-info').textContent = `Last scan: ${new Date(s.last_scan).toLocaleTimeString()}`;
     ['sell_puts','buy_calls','buy_puts','covered_calls'].forEach(loadStrategy);
   }
+  // Restore WFO results if saved from a previous session
+  try {
+    const wfo = await fetch('/api/optimizer/status').then(r=>r.json());
+    if (wfo.best && wfo.completed_at) {
+      const ts = new Date(wfo.completed_at).toLocaleString();
+      document.getElementById('wfo-status').textContent = `Restored from last run — ${ts} (params auto-applied)`;
+      renderOptimizerResults();
+    }
+  } catch(e) {}
   refreshQueue();
+  initGreenCandle();
+  initRedCandle();
   // Load tracked count on startup
   const tracked = await fetch('/api/tracked').then(r=>r.json());
   document.getElementById('cnt-tracked').textContent = tracked.length;
@@ -4683,6 +6688,12 @@ def main():
     print(f"  Dashboard   : http://localhost:{SERVER_PORT}")
     print("═" * 56 + "\n")
     print("  Starting web server…")
+
+    # Restore last WFO run from disk (auto-applies best params if found)
+    _load_wfo_results()
+
+    # Fetch live 6-month T-bill rate from FRED before first scan
+    threading.Thread(target=fetch_risk_free_rate, daemon=True).start()
 
     # Start sell-signal tracker in the background
     threading.Thread(target=_schedule_track_checker, daemon=True).start()
