@@ -136,6 +136,12 @@ REQUIRE_GREEN_CANDLE = False
 # Toggle live via the UI button without restarting.
 REQUIRE_RED_CANDLE = False
 
+# ── Position sizing — risk budget per trade ──────────────────────
+# Max dollar loss you're willing to accept per trade at the stop-loss %.
+# 0 = disabled (no recommendation shown).
+# Set live via the UI without restarting.
+RISK_BUDGET_PER_TRADE = 100   # max dollar loss per trade at the stop-loss %
+
 FOCUS_LIST = [
     # Mega-cap tech
     "AAPL","MSFT","NVDA","GOOGL","AMZN","META","TSLA","AVGO","ORCL","AMD",
@@ -187,11 +193,11 @@ WFO_FILE             = "wfo_results.json"     # persists last WFO run across res
 
 # ── Tracked position sell-signal thresholds ───────────────────
 # A sell signal fires when ANY of these conditions are met:
-SELL_PROFIT_TARGET   = 50    # % gain on the option premium  → take profit
-SELL_STOP_LOSS       = 25    # % loss on the option premium  → cut loss (2:1 reward:risk)
+SELL_PROFIT_TARGET   = 30    # % gain on the option premium  → take profit (was 50)
+SELL_STOP_LOSS       = 15    # % loss on the option premium  → cut loss (2:1 reward:risk, was 25)
 # RSI reversal thresholds — exit when mean reversion is complete:
-SELL_RSI_BULL_TARGET = 55    # Buy Call: RSI back above this → bounce done, take profit
-SELL_RSI_BEAR_TARGET = 45    # Buy Put:  RSI back below this → pullback done, take profit
+SELL_RSI_BULL_TARGET = 52    # Buy Call: RSI back above this → bounce done, take profit (was 55)
+SELL_RSI_BEAR_TARGET = 48    # Buy Put:  RSI back below this → pullback done, take profit (was 45)
 TRACK_CHECK_MINS     = 10    # How often (minutes) to re-scan tracked tickers
 
 # ──────────────────────────────────────────────────────────────
@@ -1825,7 +1831,11 @@ def get_sell_signal(position: dict) -> dict:
     sym      = position.get("ticker", "")
     strategy = position.get("strategy", "")
     entry    = position.get("option", {})
-    entry_price = float(entry.get("mid") or entry.get("ask") or 0)
+    entry_price = float(position.get("entry_price") or entry.get("mid") or entry.get("ask") or 0)
+
+    # Live price override — user-supplied price when yfinance data is stale
+    _live_override   = position.get("live_price_override")
+    _override_active = _live_override is not None and float(_live_override) > 0
 
     result = {
         "triggered":          False,
@@ -1963,6 +1973,20 @@ def get_sell_signal(position: dict) -> dict:
         except Exception:
             pass
 
+        # ── Apply live price override when yfinance is stale ───
+        # If the user manually entered a price AND yfinance didn't return a
+        # fresh two-sided quote, use the override. Clear it once yfinance
+        # comes back with a live (bid+ask) quote.
+        if _override_active:
+            if price_quality == "live":
+                # yfinance now has a real quote — discard the manual override
+                # (write-back happens at the caller level via track_lock)
+                result["_clear_live_override"] = True
+            else:
+                # Use manual price in place of stale yfinance data
+                current_mid   = float(_live_override)
+                price_quality = "manual"
+
         # ── Profit / loss check (if we have entry & current price) ──
         result["current_option_mid"] = round(current_mid, 3) if current_mid > 0 else None
         result["current_bid"]        = round(current_bid_val, 3) if current_bid_val > 0 else None
@@ -2073,8 +2097,13 @@ def _run_tracked_check():
         try:
             sig = get_sell_signal(pos)
             with track_lock:
-                pos["last_checked"]  = datetime.now().isoformat()
-                pos["last_signal"]   = sig
+                pos["last_checked"] = datetime.now().isoformat()
+                # If yfinance returned a live quote, clear the manual override
+                if sig.pop("_clear_live_override", False):
+                    pos.pop("live_price_override",    None)
+                    pos.pop("live_price_override_at", None)
+                    print(f"[Track] {pos.get('ticker')} — live quote restored, clearing manual price override")
+                pos["last_signal"]  = sig
         except Exception:
             pass
         _time.sleep(2)   # space out option chain fetches to avoid rate limits
@@ -3177,6 +3206,28 @@ def api_red_candle_status():
     return jsonify({"red_candle": REQUIRE_RED_CANDLE})
 
 
+@app.route("/api/config/risk-budget", methods=["GET"])
+def api_risk_budget_get():
+    return jsonify({"risk_budget": RISK_BUDGET_PER_TRADE,
+                    "stop_loss_pct": SELL_STOP_LOSS,
+                    "profit_target_pct": SELL_PROFIT_TARGET})
+
+
+@app.route("/api/config/risk-budget", methods=["POST"])
+def api_risk_budget_set():
+    global RISK_BUDGET_PER_TRADE
+    data = request.get_json(silent=True) or {}
+    try:
+        val = float(data.get("risk_budget", 0))
+        if val < 0:
+            return jsonify({"ok": False, "message": "Budget must be 0 or greater"})
+        RISK_BUDGET_PER_TRADE = round(val, 2)
+        print(f"  [Config] RISK_BUDGET_PER_TRADE = ${RISK_BUDGET_PER_TRADE}")
+        return jsonify({"ok": True, "risk_budget": RISK_BUDGET_PER_TRADE})
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "message": "Invalid value"})
+
+
 @app.route("/api/refresh/set", methods=["POST"])
 def api_refresh_set():
     """Set or change live refresh interval (minutes). Pass {mins: N} or {stop: true}."""
@@ -3937,6 +3988,80 @@ def api_track_remove(position_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/track/<position_id>/option", methods=["PATCH"])
+def api_track_update_option(position_id):
+    """
+    Update the option details (strike / expiration / type) for a tracked position.
+    Tries to fetch a fresh price for the new option from yfinance.
+    """
+    data = request.json or {}
+    try:
+        new_strike = float(data.get("strike", 0))
+        new_exp    = str(data.get("expiration", "")).strip()
+        new_type   = str(data.get("type", "call")).strip().lower()
+        if new_strike <= 0 or not new_exp or new_type not in ("call", "put"):
+            return jsonify({"ok": False, "message": "Strike, expiration, and type are required"})
+    except (TypeError, ValueError) as e:
+        return jsonify({"ok": False, "message": f"Invalid input: {e}"})
+
+    with track_lock:
+        positions = load_tracked()
+        pos = next((p for p in positions if p["id"] == position_id), None)
+        if not pos:
+            return jsonify({"ok": False, "message": "Position not found"})
+
+        ticker = pos.get("ticker", "")
+
+        # ── Try to fetch fresh option data for the new strike/exp ──
+        new_opt = dict(pos.get("option") or {})
+        new_opt["strike"]     = new_strike
+        new_opt["expiration"] = new_exp
+        new_opt["type"]       = new_type
+        entry_price_auto      = None
+        try:
+            tkr   = yf.Ticker(ticker)
+            chain = _yf_call(tkr.option_chain, new_exp)
+            opts  = chain.calls if new_type == "call" else chain.puts
+            row   = opts[abs(opts["strike"] - new_strike) < 0.01]
+            if not row.empty:
+                r = row.iloc[0]
+                mid, bid, ask, last, quality = _option_price_detail(r)
+                new_opt["bid"]            = round(float(r.get("bid") or 0), 3)
+                new_opt["ask"]            = round(float(r.get("ask") or 0), 3)
+                new_opt["mid"]            = round(mid, 3)
+                new_opt["iv"]             = round(float(r.get("impliedVolatility") or 0) * 100, 1)
+                new_opt["volume"]         = int(r.get("volume") or 0)
+                new_opt["open_interest"]  = int(r.get("openInterest") or 0)
+                # Re-compute DTE from today to expiration
+                from datetime import date as _date
+                try:
+                    exp_date = _date.fromisoformat(new_exp)
+                    new_opt["dte"] = max((exp_date - _date.today()).days, 0)
+                except Exception:
+                    pass
+                # Auto-set entry price to current mid if not already manually set
+                if mid > 0:
+                    entry_price_auto = round(mid, 3)
+        except Exception as e:
+            print(f"[option edit] Could not fetch live data for {ticker} {new_exp} {new_type} ${new_strike}: {e}")
+
+        pos["option"]      = new_opt
+        pos["last_signal"] = None   # force re-check on next background pass
+        pos["last_checked"]= None
+
+        # Update entry price to live mid (unless user already set it manually)
+        if entry_price_auto and not pos.get("entry_price_manual"):
+            pos["entry_price"] = entry_price_auto
+
+        save_tracked(positions)
+
+    return jsonify({
+        "ok":    True,
+        "option": new_opt,
+        "entry_price": pos.get("entry_price"),
+    })
+
+
 @app.route("/api/track/<position_id>/entry", methods=["PATCH"])
 def api_track_update_entry(position_id):
     """Update the actual entry price paid for a tracked position."""
@@ -3959,6 +4084,83 @@ def api_track_update_entry(position_id):
             return jsonify({"ok": False, "message": "Position not found"})
         save_tracked(positions)
     return jsonify({"ok": True, "entry_price": new_price})
+
+
+@app.route("/api/track/<position_id>/live-price", methods=["PATCH"])
+def api_track_live_price(position_id):
+    """
+    Store a manually-entered current option price.
+    Used when yfinance data is stale/unavailable.
+    The override stays active until yfinance returns a fresh two-sided
+    quote (bid+ask both present), at which point it is automatically cleared.
+    Pass {live_price: 0} or {clear: true} to remove the override.
+    """
+    data = request.json or {}
+
+    # Allow explicit clear
+    if data.get("clear"):
+        with track_lock:
+            positions = load_tracked()
+            for p in positions:
+                if p["id"] == position_id:
+                    p.pop("live_price_override",    None)
+                    p.pop("live_price_override_at", None)
+                    p["last_signal"] = None
+                    p["last_checked"] = None
+                    break
+            save_tracked(positions)
+        return jsonify({"ok": True})
+
+    try:
+        new_price = float(data.get("live_price", 0))
+        if new_price <= 0:
+            return jsonify({"ok": False, "message": "Price must be greater than 0"})
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "message": "Invalid price"})
+
+    with track_lock:
+        positions = load_tracked()
+        for p in positions:
+            if p["id"] == position_id:
+                p["live_price_override"]    = round(new_price, 3)
+                p["live_price_override_at"] = datetime.now().isoformat()
+                # Inject into last_signal so tracker instantly shows updated P&L
+                if p.get("last_signal") is None:
+                    p["last_signal"] = {}
+                p["last_signal"]["current_option_mid"] = round(new_price, 3)
+                p["last_signal"]["price_quality"]      = "manual"
+                p["last_signal"]["current_bid"]        = None
+                p["last_signal"]["current_ask"]        = None
+                # Re-evaluate profit/stop thresholds
+                entry = float(p.get("entry_price") or 0)
+                if entry > 0:
+                    pct = (new_price - entry) / entry * 100
+                    dollar = (new_price - entry) * 100
+                    p["last_signal"]["pct_change"]    = round(pct, 1)
+                    p["last_signal"]["dollar_change"] = round(dollar, 2)
+                    # Check if sell thresholds are breached
+                    reasons = list(p["last_signal"].get("reasons") or [])
+                    # Remove old price-based reasons
+                    reasons = [r for r in reasons if "Profit target" not in r and "Stop loss" not in r]
+                    if pct >= SELL_PROFIT_TARGET:
+                        p["last_signal"]["triggered"] = True
+                        reasons.insert(0, f"🎯 Profit target hit: +{pct:.1f}% (target +{SELL_PROFIT_TARGET}%)")
+                    elif pct <= -SELL_STOP_LOSS:
+                        p["last_signal"]["triggered"] = True
+                        reasons.insert(0, f"🛑 Stop loss hit: {pct:.1f}% (limit -{SELL_STOP_LOSS}%)")
+                    else:
+                        # Remove triggered flag if price moved back inside bounds
+                        price_triggered = any("Profit target" in r or "Stop loss" in r
+                                              for r in p["last_signal"].get("reasons", []))
+                        if price_triggered:
+                            p["last_signal"]["triggered"] = False
+                    p["last_signal"]["reasons"] = reasons
+                break
+        else:
+            return jsonify({"ok": False, "message": "Position not found"})
+        save_tracked(positions)
+
+    return jsonify({"ok": True, "live_price": new_price})
 
 
 # ── Performance tracker API ───────────────────────────────────
@@ -4275,6 +4477,15 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
       style="padding:6px 14px;border-radius:8px;border:1px solid var(--border);cursor:pointer;background:var(--surface2);color:var(--muted);font-weight:600;font-size:12px;transition:all .2s">
       🕯️ Red Candle
     </button>
+    <div style="display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:8px;
+                border:1px solid var(--border);background:var(--surface2)" title="Max dollar loss you're willing to risk per trade. Sets recommended contract count on every scan card.">
+      <span style="font-size:12px;color:var(--muted);white-space:nowrap">💰 Max loss $</span>
+      <input id="risk-budget-input" type="number" min="0" step="5" placeholder="e.g. 75"
+        style="width:70px;background:transparent;border:none;color:var(--text);font-size:13px;
+               font-weight:600;outline:none;padding:0"
+        onchange="setRiskBudget(this.value)"
+        onkeydown="if(event.key==='Enter') setRiskBudget(this.value)"/>
+    </div>
     <button class="btn btn-primary" id="btn-scan" onclick="startScan()">▶ Run Scan</button>
   </div>
 </header>
@@ -4344,6 +4555,44 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
     A signal fires when: profit target hit, stop loss hit, RSI reverses through the threshold, or Bollinger Band signal fires.
   </div>
   <div id="tracked-content"><div class="queue-empty">No tracked positions yet. Click "Track" on any signal card to start monitoring it.</div></div>
+</div>
+
+<!-- ── Edit Option Modal ──────────────────────────────────── -->
+<div id="edit-option-modal" style="display:none;position:fixed;inset:0;z-index:9999;
+     background:rgba(0,0,0,0.6);align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;
+              padding:28px 32px;width:360px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.5)">
+    <div style="font-size:16px;font-weight:700;margin-bottom:18px">✏️ Edit Option</div>
+
+    <label style="font-size:12px;color:var(--muted)">Option Type</label>
+    <select id="eom-type" style="width:100%;padding:8px 10px;border-radius:8px;
+      border:1px solid var(--border);background:var(--surface2);color:var(--text);
+      font-size:14px;margin-bottom:12px;margin-top:4px">
+      <option value="call">Call</option>
+      <option value="put">Put</option>
+    </select>
+
+    <label style="font-size:12px;color:var(--muted)">Strike Price ($)</label>
+    <input id="eom-strike" type="number" step="0.5" min="0.5"
+      style="width:100%;padding:8px 10px;border-radius:8px;
+             border:1px solid var(--border);background:var(--surface2);color:var(--text);
+             font-size:14px;margin-bottom:12px;margin-top:4px;box-sizing:border-box"/>
+
+    <label style="font-size:12px;color:var(--muted)">Expiration Date (YYYY-MM-DD)</label>
+    <input id="eom-exp" type="date"
+      style="width:100%;padding:8px 10px;border-radius:8px;
+             border:1px solid var(--border);background:var(--surface2);color:var(--text);
+             font-size:14px;margin-bottom:18px;margin-top:4px;box-sizing:border-box"/>
+
+    <div id="eom-status" style="font-size:12px;color:var(--muted);margin-bottom:14px;min-height:18px"></div>
+
+    <div style="display:flex;gap:10px">
+      <button id="eom-save" class="btn btn-primary" style="flex:1"
+        onclick="saveEditOption()">💾 Save &amp; Refresh Price</button>
+      <button class="btn btn-ghost" style="flex:0 0 auto"
+        onclick="closeEditOptionModal()">Cancel</button>
+    </div>
+  </div>
 </div>
 
 <div class="panel" id="panel-queue">
@@ -5273,6 +5522,8 @@ function buildCard(d, strategy) {
 
   ${buildMCSection(d, id)}
 
+  ${buildSizingBlock(d, id, opt, sid, isCondor)}
+
   <div class="card-footer">
     <div class="qty-wrap">
       Contracts:
@@ -5465,6 +5716,104 @@ function buildMCSection(d, id) {
     <div class="mc-chart-label">P&amp;L Distribution per contract (${nsims} paths)</div>
     <canvas id="mc-${id}" height="70"></canvas>
   </div>`;
+}
+
+// ── Position sizing ────────────────────────────────────────────
+let _riskBudget = 0;   // loaded from backend on startup
+
+function buildSizingBlock(d, id, opt, sid, isCondor) {
+  if (!_riskBudget || _riskBudget <= 0) return '';
+
+  const ask         = isCondor ? (d.net_credit || 0) : (opt.ask || 0);
+  const costPerContract = isCondor
+    ? Math.max((Math.max(d.put_width||0, d.call_width||0) - ask), 0) * 100
+    : ask * 100;
+
+  if (costPerContract <= 0) return '';
+
+  const stopPct     = ${SELL_STOP_LOSS} / 100;   // e.g. 0.15
+  const profitPct   = ${SELL_PROFIT_TARGET} / 100; // e.g. 0.30
+  const maxLossPerContract = costPerContract * stopPct;
+  const maxProfitPerContract = costPerContract * profitPct;
+
+  // Recommended contracts = how many fit within the budget at the stop %
+  const recommended = Math.max(1, Math.floor(_riskBudget / maxLossPerContract));
+  const actualSpend    = recommended * costPerContract;
+  const actualMaxLoss  = recommended * maxLossPerContract;
+  const actualMaxProfit = recommended * maxProfitPerContract;
+
+  // Badge: does 1 contract fit, fit tightly, or bust the budget?
+  let badge, badgeColor;
+  const ratio = actualMaxLoss / _riskBudget;
+  if (ratio <= 1.0) {
+    badge = '✅ On budget';  badgeColor = 'var(--green)';
+  } else if (ratio <= 1.5) {
+    badge = '⚠️ Slightly over';  badgeColor = '#f59e0b';
+  } else {
+    badge = '🔴 Over budget — consider skipping';  badgeColor = 'var(--red)';
+  }
+
+  // Auto-set the contracts input
+  setTimeout(() => {
+    const el = document.getElementById('qty-' + id);
+    if (el) {
+      el.value = recommended;
+      updateCost(id, isCondor ? d.net_credit||0 : opt.ask||0,
+                 opt.strike||0, sid, d.put_width||0, d.call_width||0);
+    }
+  }, 0);
+
+  return \`
+  <div style="border-top:1px solid var(--border);padding:12px 16px;
+              background:rgba(167,139,250,0.05)">
+    <div style="font-size:10px;color:var(--muted);text-transform:uppercase;
+                letter-spacing:.6px;margin-bottom:10px">💰 Position Sizing (budget $\${_riskBudget})</div>
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span style="font-size:10px;color:var(--muted)">Recommended</span>
+        <span style="font-size:18px;font-weight:800;color:var(--text)">\${recommended} contract\${recommended!==1?'s':''}</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span style="font-size:10px;color:var(--muted)">Total spend</span>
+        <span style="font-size:14px;font-weight:700;color:var(--text)">$\${actualSpend.toFixed(2)}</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span style="font-size:10px;color:var(--muted)">Max loss (${SELL_STOP_LOSS}% stop)</span>
+        <span style="font-size:14px;font-weight:700;color:var(--red)">-$\${actualMaxLoss.toFixed(2)}</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:2px">
+        <span style="font-size:10px;color:var(--muted)">Max profit (${SELL_PROFIT_TARGET}% target)</span>
+        <span style="font-size:14px;font-weight:700;color:var(--green)">+$\${actualMaxProfit.toFixed(2)}</span>
+      </div>
+      <div style="margin-left:auto">
+        <span style="font-size:12px;font-weight:600;color:\${badgeColor}">\${badge}</span>
+      </div>
+    </div>
+  </div>\`;
+}
+
+async function setRiskBudget(val) {
+  const budget = parseFloat(val) || 0;
+  _riskBudget = budget;
+  const resp = await fetch('/api/config/risk-budget', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ risk_budget: budget })
+  }).then(r => r.json()).catch(() => ({}));
+  if (resp.ok) {
+    // Reload all strategy cards to show updated sizing blocks
+    ['sell_puts','buy_calls','buy_puts','covered_calls'].forEach(loadStrategy);
+  }
+}
+
+async function initRiskBudget() {
+  try {
+    const d = await fetch('/api/config/risk-budget').then(r => r.json());
+    _riskBudget = d.risk_budget || 0;
+    if (_riskBudget > 0) {
+      document.getElementById('risk-budget-input').value = _riskBudget;
+    }
+  } catch(e) {}
 }
 
 function calcCostDisplay(qty, ask, strike, strategy, putW=0, callW=0) {
@@ -5674,11 +6023,12 @@ async function refreshTracked() {
 
     // ── Price quality badge ─────────────────────────────────
     const qBadge = {
-      live:        { icon: '🟢', label: 'Live',      color: 'var(--green)' },
-      stale_bid:   { icon: '🟡', label: 'Stale bid', color: '#f59e0b' },
-      ask_only:    { icon: '🟡', label: 'Ask only',  color: '#f59e0b' },
-      last_only:   { icon: '🔴', label: 'Stale',     color: 'var(--red)' },
-      unavailable: { icon: '⚫', label: 'No quote',  color: 'var(--muted)' },
+      live:        { icon: '🟢', label: 'Live',         color: 'var(--green)' },
+      stale_bid:   { icon: '🟡', label: 'Stale bid',    color: '#f59e0b' },
+      ask_only:    { icon: '🟡', label: 'Ask only',     color: '#f59e0b' },
+      last_only:   { icon: '🔴', label: 'Stale',        color: 'var(--red)' },
+      manual:      { icon: '✏️', label: 'Manual price', color: '#a78bfa' },
+      unavailable: { icon: '⚫', label: 'No quote',     color: 'var(--muted)' },
     };
     const qInfo = qBadge[priceQuality] || qBadge['unavailable'];
     // Build mid/bid/ask detail line
@@ -5688,10 +6038,17 @@ async function refreshTracked() {
     } else if (currentAsk != null) {
       bidAskLine = `<span style="font-size:10px;color:var(--muted)">ask $${currentAsk.toFixed(2)}</span>`;
     }
+    // Show timestamp for manual prices so user knows when they entered it
+    const manualAt = p.live_price_override_at
+      ? new Date(p.live_price_override_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})
+      : null;
+    const manualNote = (priceQuality === 'manual' && manualAt)
+      ? `<span style="font-size:10px;color:var(--muted)">entered ${manualAt} · auto-updates</span>`
+      : '';
     const qualityBadge = currentMid != null ? `
       <span style="font-size:10px;color:${qInfo.color};white-space:nowrap"
             title="Price quality: ${priceQuality}">${qInfo.icon} ${qInfo.label}</span>
-      ${bidAskLine}` : '';
+      ${bidAskLine}${manualNote}` : '';
     const currentStr  = currentMid != null
       ? `<span style="font-weight:600">$${currentMid.toFixed(3)}</span>`
       : '—';
@@ -5826,6 +6183,10 @@ async function refreshTracked() {
       <td style="white-space:nowrap">
         <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;display:block;margin-bottom:5px"
           onclick="logFromTracker('${p.id}')">✅ Close &amp; Log</button>
+        <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;display:block;margin-bottom:5px"
+          onclick="enterLivePrice('${p.id}', ${currentMid||0}, ${p.live_price_override||0})">📝 Live Price</button>
+        <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;display:block;margin-bottom:5px"
+          onclick="openEditOptionModal('${p.id}','${opt.type||'call'}',${opt.strike||0},'${opt.expiration||''}')">✏️ Edit Option</button>
         <button class="btn btn-ghost" style="font-size:12px;padding:5px 10px;display:block"
           onclick="untrackPosition('${p.id}')">✕ Remove</button>
       </td>
@@ -5870,6 +6231,106 @@ async function untrackPosition(posId) {
   await fetch('/api/track/'+posId,{method:'DELETE'});
   refreshTracked();
 }
+
+// ── Enter live price ──────────────────────────────────────────
+async function enterLivePrice(posId, currentMid, currentOverride) {
+  const existing = currentOverride > 0 ? currentOverride : (currentMid > 0 ? currentMid : '');
+  const input = prompt(
+    'Enter the current option price from your broker (per share, e.g. 0.52).\n' +
+    'Leave blank and press OK to clear a previous manual price.',
+    existing > 0 ? existing.toFixed ? existing.toFixed(3) : existing : ''
+  );
+  if (input === null) return;  // cancelled
+
+  // Empty input = clear override
+  if (input.trim() === '') {
+    await fetch(`/api/track/${posId}/live-price`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ clear: true })
+    });
+    refreshTracked();
+    return;
+  }
+
+  const price = parseFloat(input);
+  if (isNaN(price) || price <= 0) {
+    alert('Please enter a valid price greater than 0.');
+    return;
+  }
+
+  const resp = await fetch(`/api/track/${posId}/live-price`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ live_price: price })
+  }).then(r => r.json()).catch(() => ({ ok: false }));
+
+  if (resp.ok) {
+    refreshTracked();
+  } else {
+    alert(resp.message || 'Could not update price.');
+  }
+}
+
+// ── Edit Option modal ──────────────────────────────────────────
+let _eomPosId = null;
+
+function openEditOptionModal(posId, type, strike, expiration) {
+  _eomPosId = posId;
+  document.getElementById('eom-type').value   = type || 'call';
+  document.getElementById('eom-strike').value = strike > 0 ? strike : '';
+  document.getElementById('eom-exp').value    = expiration || '';
+  document.getElementById('eom-status').textContent = '';
+  document.getElementById('eom-save').disabled = false;
+  const modal = document.getElementById('edit-option-modal');
+  modal.style.display = 'flex';
+}
+
+function closeEditOptionModal() {
+  document.getElementById('edit-option-modal').style.display = 'none';
+  _eomPosId = null;
+}
+
+async function saveEditOption() {
+  if (!_eomPosId) return;
+  const type   = document.getElementById('eom-type').value;
+  const strike = parseFloat(document.getElementById('eom-strike').value);
+  const exp    = document.getElementById('eom-exp').value.trim();
+  const status = document.getElementById('eom-status');
+
+  if (!strike || strike <= 0) { status.textContent = '⚠ Enter a valid strike price.'; return; }
+  if (!exp)                   { status.textContent = '⚠ Enter an expiration date.'; return; }
+
+  document.getElementById('eom-save').disabled = true;
+  status.style.color = 'var(--muted)';
+  status.textContent = '⏳ Fetching live price for new option…';
+
+  const resp = await fetch(`/api/track/${_eomPosId}/option`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ type, strike, expiration: exp })
+  }).then(r => r.json()).catch(() => ({ ok: false, message: 'Network error' }));
+
+  if (resp.ok) {
+    const opt = resp.option || {};
+    const midStr = opt.mid > 0 ? ` — mid $${opt.mid.toFixed(3)}` : '';
+    status.style.color = 'var(--green)';
+    status.textContent = `✅ Saved${midStr}. Refreshing…`;
+    setTimeout(() => {
+      closeEditOptionModal();
+      refreshTracked();
+    }, 900);
+  } else {
+    status.style.color = 'var(--red)';
+    status.textContent = `❌ ${resp.message || 'Could not update option.'}`;
+    document.getElementById('eom-save').disabled = false;
+  }
+}
+
+// Close modal when clicking backdrop
+document.getElementById('edit-option-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeEditOptionModal();
+});
 
 // ── Ticker search ─────────────────────────────────────────────
 async function searchTicker() {
@@ -6663,6 +7124,7 @@ window.onload = async () => {
   refreshQueue();
   initGreenCandle();
   initRedCandle();
+  initRiskBudget();
   // Load tracked count on startup
   const tracked = await fetch('/api/tracked').then(r=>r.json());
   document.getElementById('cnt-tracked').textContent = tracked.length;
