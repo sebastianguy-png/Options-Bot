@@ -1,0 +1,199 @@
+{
+  "saved_at": "2026-04-27T12:01:58.256938",
+  "results": {
+    "leaderboard": [
+      {
+        "params": {
+          "rsi_oversold": 25,
+          "rsi_overbought": 65,
+          "bull_min": 3,
+          "bear_min": 2,
+          "adx_threshold": 25,
+          "hold_days": 21
+        },
+        "train_sharpe": 0.063,
+        "train_trades": 146,
+        "val_sharpe": 0.076,
+        "val_trades": 64,
+        "val_win_rate": 40.6,
+        "val_avg_pnl": 11.8
+      },
+      {
+        "params": {
+          "rsi_oversold": 25,
+          "rsi_overbought": 65,
+          "bull_min": 3,
+          "bear_min": 2,
+          "adx_threshold": 30,
+          "hold_days": 21
+        },
+        "train_sharpe": 0.063,
+        "train_trades": 146,
+        "val_sharpe": 0.076,
+        "val_trades": 64,
+        "val_win_rate": 40.6,
+        "val_avg_pnl": 11.8
+      },
+      {
+        "params": {
+          "rsi_oversold": 25,
+          "rsi_overbought": 65,
+          "bull_min": 3,
+          "bear_min": 2,
+          "adx_threshold": 35,
+          "hold_days": 21
+        },
+        "train_sharpe": 0.063,
+        "train_trades": 146,
+        "val_sharpe": 0.076,
+        "val_trades": 64,
+        "val_win_rate": 40.6,
+        "val_avg_pnl": 11.8
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 3,
+          "bear_min": 2,
+          "adx_threshold": 25,
+          "hold_days": 21
+        },
+        "train_sharpe": 0.068,
+        "train_trades": 196,
+        "val_sharpe": 0.065,
+        "val_trades": 73,
+        "val_win_rate": 39.7,
+        "val_avg_pnl": 9.9
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 3,
+          "bear_min": 2,
+          "adx_threshold": 30,
+          "hold_days": 21
+        },
+        "train_sharpe": 0.068,
+        "train_trades": 196,
+        "val_sharpe": 0.065,
+        "val_trades": 73,
+        "val_win_rate": 39.7,
+        "val_avg_pnl": 9.9
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 3,
+          "bear_min": 2,
+          "adx_threshold": 35,
+          "hold_days": 21
+        },
+        "train_sharpe": 0.068,
+        "train_trades": 196,
+        "val_sharpe": 0.065,
+        "val_trades": 73,
+        "val_win_rate": 39.7,
+        "val_avg_pnl": 9.9
+      },
+      {
+        "params": {
+          "rsi_oversold": 30,
+          "rsi_overbought": 65,
+          "bull_min": 3,
+          "bear_min": 2,
+          "adx_threshold": 25,
+          "hold_days": 21
+        },
+        "train_sharpe": 0.061,
+        "train_trades": 167,
+        "val_sharpe": 0.043,
+        "val_trades": 70,
+        "val_win_rate": 38.6,
+        "val_avg_pnl": 6.6
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 3,
+          "bear_min": 2,
+          "adx_threshold": 25,
+          "hold_days": 14
+        },
+        "train_sharpe": 0.076,
+        "train_trades": 201,
+        "val_sharpe": -0.073,
+        "val_trades": 75,
+        "val_win_rate": 32.0,
+        "val_avg_pnl": -9.3
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 3,
+          "bear_min": 2,
+          "adx_threshold": 30,
+          "hold_days": 14
+        },
+        "train_sharpe": 0.076,
+        "train_trades": 201,
+        "val_sharpe": -0.073,
+        "val_trades": 75,
+        "val_win_rate": 32.0,
+        "val_avg_pnl": -9.3
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 3,
+          "bear_min": 2,
+          "adx_threshold": 35,
+          "hold_days": 14
+        },
+        "train_sharpe": 0.076,
+        "train_trades": 201,
+        "val_sharpe": -0.073,
+        "val_trades": 75,
+        "val_win_rate": 32.0,
+        "val_avg_pnl": -9.3
+      }
+    ],
+    "best": {
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 65,
+        "bull_min": 3,
+        "bear_min": 2,
+        "adx_threshold": 25,
+        "hold_days": 21
+      },
+      "train_sharpe": 0.063,
+      "train_trades": 146,
+      "val_sharpe": 0.076,
+      "val_trades": 64,
+      "val_win_rate": 40.6,
+      "val_avg_pnl": 11.8
+    },
+    "suggestion": {
+      "rsi_oversold": 25,
+      "rsi_overbought": 65,
+      "bull_min": 3,
+      "bear_min": 2,
+      "adx_threshold": 25,
+      "hold_days": 21
+    },
+    "tickers_used": [
+      "SNPS",
+      "LMT",
+      "DPZ",
+      "HII",
+      "KDP"
+    ],
+    "completed_at": "2026-04-27T12:01:58.256922"
+  }
+}

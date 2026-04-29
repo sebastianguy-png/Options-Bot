@@ -114,6 +114,7 @@ MAX_DTE              = 45      # Max days to expiry
 MIN_OPEN_INTEREST    = 10      # Min OI on selected option
 MAX_WORKERS          = 8       # Parallel scan threads (I/O-bound; Yahoo latency is the bottleneck)
 SCAN_DELAY_S         = 0.15    # Seconds to sleep between ticker fetches (throttle)
+HOLD_SWEEP_INTERVALS = [1, 2, 3, 5, 7, 10, 14, 21]  # Trading days for hold-horizon analysis
 SERVER_PORT          = 5000    # Web dashboard port
 LIVE_REFRESH_MINS    = 5       # How often to re-check current signal tickers (minutes)
 
@@ -190,6 +191,8 @@ HISTORY_FILE         = "trade_history.json"
 TRACK_FILE           = "tracked_positions.json"
 PERFORMANCE_FILE     = "performance.json"
 WFO_FILE             = "wfo_results.json"     # persists last WFO run across restarts
+BT_FILE              = "backtest_results.json"  # persists last backtest run across restarts
+SIGNAL_LOG_FILE      = "signal_log.json"      # unbiased log of every bot recommendation
 
 # ── Tracked position sell-signal thresholds ───────────────────
 # A sell signal fires when ANY of these conditions are met:
@@ -522,6 +525,47 @@ def vix_regime(vix):
     return "normal"
 
 
+# ── VIX3M term structure (refreshed every 30 min) ────────────
+_vix3m_cache = {"value": None, "ts": None}
+
+def get_vix3m():
+    """
+    Return current VIX3M (90-day implied vol index), cached 30 min.
+    VIX term structure:
+      VIX > VIX3M × 1.05 (backwardation) → acute panic, reversals more likely → favour buying
+      VIX < VIX3M × 0.95 (contango)      → calm market → favour selling premium
+    """
+    import time as _time
+    now = _time.time()
+    if _vix3m_cache["value"] is not None and (now - _vix3m_cache["ts"]) < 1800:
+        return _vix3m_cache["value"]
+    try:
+        v = yf.Ticker("^VIX3M").history(period="5d")
+        if not v.empty:
+            val = round(float(v["Close"].iloc[-1]), 2)
+            _vix3m_cache.update(value=val, ts=now)
+            return val
+    except Exception:
+        pass
+    return _vix3m_cache["value"]
+
+
+def vix_term_structure(vix, vix3m):
+    """
+    Returns 'backwardation', 'contango', or 'flat'.
+    Backwardation (VIX > VIX3M by >5%): panic / acute fear → reversals more probable.
+    Contango      (VIX < VIX3M by >5%): calm, normal vol  → sell premium setups better.
+    """
+    if vix is None or vix3m is None or vix3m == 0:
+        return "flat"
+    ratio = vix / vix3m
+    if ratio > 1.05:
+        return "backwardation"
+    if ratio < 0.95:
+        return "contango"
+    return "flat"
+
+
 # ── SPY market regime cache (refreshed every 30 min) ─────────
 _spy_cache = {"trend": None, "ts": None}
 
@@ -562,12 +606,75 @@ def get_market_trend():
             trend = "bear_strong"
         else:
             trend = "bear_weak"
-        _spy_cache.update(trend=trend, ts=now)
+        _spy_cache.update(trend=trend, ts=now, closes=closes)
         print(f"  [Market] SPY trend = {trend}  (price={price:.2f} ma200={ma200:.2f} adx={adx:.1f})")
         return trend
     except Exception as e:
         print(f"  [Market] SPY trend fetch failed: {e}")
         return _spy_cache["trend"] or "neutral"
+
+
+def calc_rs_vs_spy(stock_closes, window=20):
+    """
+    Compare stock's rolling return vs SPY over `window` trading days.
+    Returns (rs_ratio, rs_strong, rs_weak):
+      rs_ratio  : stock_return / spy_return (NaN → 1.0)
+      rs_strong : stock outperforming SPY by > 10%  → bullish filter
+      rs_weak   : stock underperforming SPY by > 10% → bearish filter
+    Uses cached SPY closes from get_market_trend().
+    """
+    try:
+        spy_cls = _spy_cache.get("closes")
+        if spy_cls is None or len(spy_cls) < window + 1:
+            return 1.0, False, False
+        common = stock_closes.index.intersection(spy_cls.index)
+        if len(common) < window + 1:
+            return 1.0, False, False
+        stk  = stock_closes.loc[common]
+        spy  = spy_cls.loc[common]
+        stk_ret = float(stk.iloc[-1] / stk.iloc[-window] - 1)
+        spy_ret = float(spy.iloc[-1] / spy.iloc[-window] - 1)
+        if spy_ret == 0:
+            return 1.0, False, False
+        ratio    = stk_ret / spy_ret
+        rs_strong = ratio > 1.1    # outperforming by > 10%
+        rs_weak   = ratio < 0.9    # underperforming by > 10%
+        return round(ratio, 2), rs_strong, rs_weak
+    except Exception:
+        return 1.0, False, False
+
+
+def calc_mfi(hist, period=14):
+    """
+    Money Flow Index — RSI weighted by volume.
+    Combines price direction AND volume participation into one 0-100 oscillator.
+    MFI < 20 = oversold on volume (strong buy confirmation)
+    MFI > 80 = overbought on volume (strong sell confirmation)
+    Returns a pandas Series aligned to hist.index.
+    """
+    try:
+        high   = hist["High"].astype(float)
+        low    = hist["Low"].astype(float)
+        close  = hist["Close"].astype(float)
+        volume = hist["Volume"].astype(float)
+
+        typical_price = (high + low + close) / 3.0
+        raw_money_flow = typical_price * volume
+
+        # Positive money flow: typical price rose vs prior bar
+        tp_diff = typical_price.diff()
+        pos_mf  = raw_money_flow.where(tp_diff > 0, 0.0)
+        neg_mf  = raw_money_flow.where(tp_diff < 0, 0.0)
+
+        pos_sum = pos_mf.rolling(period).sum()
+        neg_sum = neg_mf.rolling(period).sum()
+
+        # Avoid division by zero
+        mfr = pos_sum / neg_sum.replace(0, np.nan)
+        mfi = 100 - (100 / (1 + mfr))
+        return mfi.fillna(50.0)
+    except Exception:
+        return pd.Series(np.full(len(hist), 50.0), index=hist.index)
 
 
 def volume_confirmation(hist, lookback=20, multiplier=1.2):
@@ -1143,6 +1250,12 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         cur_bb_u = float(bb_u.iloc[-1])
         cur_bb_m = float(bb_m.iloc[-1])
         cur_bb_l = float(bb_l.iloc[-1])
+
+        # ── MFI (Money Flow Index) ────────────────────────────
+        mfi_ser  = calc_mfi(hist, period=14)
+        cur_mfi  = float(mfi_ser.iloc[-1]) if not pd.isna(mfi_ser.iloc[-1]) else 50.0
+        sig_mfi_os = cur_mfi < 20    # oversold on volume — strong buy confirmation
+        sig_mfi_ob = cur_mfi > 80    # overbought on volume — strong sell confirmation
         cur_dc_u = float(dc_u.iloc[-1])
         cur_dc_m = float(dc_m.iloc[-1])
         cur_dc_l = float(dc_l.iloc[-1])
@@ -1158,11 +1271,25 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         overbought  = cur_rsi > RSI_OVERBOUGHT or price > cur_bb_u or dc_at_upper
         reversal_up = rsi_turning_up(rsi)
 
-        # ── 200-day MA trend direction ────────────────────────
+        # ── MA50 and MA200 trend direction ────────────────────
+        ma50_ser  = closes.rolling(50).mean()
         ma200_ser = closes.rolling(200).mean()
-        ma200     = float(ma200_ser.iloc[-1]) if not ma200_ser.iloc[-1] != ma200_ser.iloc[-1] else None
+        ma50      = float(ma50_ser.iloc[-1])  if not pd.isna(ma50_ser.iloc[-1])  else None
+        ma200     = float(ma200_ser.iloc[-1]) if not pd.isna(ma200_ser.iloc[-1]) else None
+        above_ma50 = ma50  is not None and price > ma50
         trend_bull = ma200 is not None and price > ma200   # stock above 200 MA
         trend_bear = ma200 is not None and price < ma200   # stock below 200 MA
+
+        # ── Relative strength vs SPY (20-day return ratio) ───
+        rs_ratio, rs_strong, rs_weak = calc_rs_vs_spy(closes)
+
+        # ── HV Rank (options cheapness / expensiveness) ──────
+        _rets    = closes.pct_change()
+        _hv30    = _rets.rolling(30).std() * np.sqrt(252) * 100
+        _hv_rank = _hv30.rolling(252).rank(pct=True).iloc[-1] * 100
+        hv_rank  = float(_hv_rank) if not pd.isna(_hv_rank) else 50.0
+        hv_high  = hv_rank >= 60   # options expensive → favour selling
+        hv_low   = hv_rank <= 40   # options cheap → favour buying
 
         # ── ADX — trend strength ──────────────────────────────
         adx_ser, pdi_ser, ndi_ser = calc_adx(hist)
@@ -1170,6 +1297,19 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         cur_pdi = round(float(pdi_ser.iloc[-1]), 1) if pdi_ser is not None else None
         cur_ndi = round(float(ndi_ser.iloc[-1]), 1) if ndi_ser is not None else None
         strong_trend = cur_adx is not None and cur_adx > 30   # raised from 25 → 30
+
+        # ── ADX mode: ranging vs trending ────────────────────────
+        # Ranging (ADX < 20): mean-reversion signals (RSI, BB) are more reliable
+        # Trending (ADX > 30): momentum signals (MACD, MA crossovers) are more reliable
+        adx_mode = ("ranging"  if (cur_adx or 0) < 20
+                    else "trending" if (cur_adx or 0) > 30
+                    else "normal")
+
+        # ── 52-week low / high proximity ─────────────────────────
+        low_52w  = float(closes.rolling(252).min().iloc[-1]) if len(closes) >= 252 else float(closes.min())
+        high_52w = float(closes.rolling(252).max().iloc[-1]) if len(closes) >= 252 else float(closes.max())
+        near_52w_low  = price <= low_52w  * 1.05   # within 5% of 52-week low
+        near_52w_high = price >= high_52w * 0.95   # within 5% of 52-week high
 
         # Knife / roar guards:
         #   falling_knife = confirmed strong downtrend → protect Buy Call and Sell Put
@@ -1199,27 +1339,73 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         regime_favors_selling = regime == "high"
         regime_favors_buying  = regime == "low"
 
+        # ── VIX term structure (VIX vs VIX3M) ────────────────────
+        cur_vix3m    = get_vix3m()
+        vix_ts       = vix_term_structure(cur_vix, cur_vix3m)
+        vix_backw    = vix_ts == "backwardation"   # panic → reversals more likely
+        vix_contango = vix_ts == "contango"        # calm  → sell premium more reliable
+
+        # ── VIX-adjusted RSI thresholds ───────────────────────
+        # High fear (VIX > 25): stocks stay oversold longer → require more extreme RSI
+        # Low VIX  (< 15):      options are cheap → slightly relaxed thresholds
+        if regime == "high":
+            _rsi_os_thr = max(RSI_OVERSOLD - 5, 20)
+            _rsi_ob_thr = min(RSI_OVERBOUGHT + 5, 80)
+        elif regime == "low":
+            _rsi_os_thr = RSI_OVERSOLD + 2
+            _rsi_ob_thr = RSI_OVERBOUGHT - 2
+        else:
+            _rsi_os_thr = RSI_OVERSOLD
+            _rsi_ob_thr = RSI_OVERBOUGHT
+        # Re-evaluate with regime-adjusted thresholds (overrides the initial values above)
+        oversold   = cur_rsi < _rsi_os_thr or price < cur_bb_l or dc_at_lower
+        overbought = cur_rsi > _rsi_ob_thr or price > cur_bb_u or dc_at_upper
+
         # ── Volume confirmation ───────────────────────────────
         vol_confirmed, cur_vol, avg_vol = volume_confirmation(hist)
 
         # ── Confluence counters ────────────────────────────────
+        # P/C ratio is fetched after the early-exit gate (options chain call is expensive).
+        # Pre-initialise to False so Python doesn't treat them as unbound locals here.
+        pc_bullish = False
+        pc_bearish = False
+
+        # ADX mode: in ranging markets RSI/BB count double; in trending MACD/MA count double
+        _rng = adx_mode == "ranging"
+        _trd = adx_mode == "trending"
         # Buy Call needs 2+ bullish signals to avoid catching a falling knife
         bull_signals = sum([
             cur_rsi < 30,
+            cur_rsi < 30 and _rng,          # double-weight RSI in ranging market
             price < cur_bb_l,
-            dc_at_lower,            # Donchian lower band = N-period price low
+            price < cur_bb_l and _rng,      # double-weight BB in ranging market
+            dc_at_lower,
             reversal_up,
             macd_bull,
-            vol_confirmed,          # volume backing the move adds a signal
-            regime_favors_buying,   # low VIX = cheap options, good time to buy
+            macd_bull and _trd,             # double-weight MACD in trending market
+            vol_confirmed,
+            regime_favors_buying,
+            pc_bullish,
+            rs_strong,
+            hv_low,
+            near_52w_low,                   # near annual floor = strong support
+            vix_backw,                      # panic spike → reversal signal
+            sig_mfi_os,                     # MFI oversold = volume confirms selling exhaustion
         ])
         # Buy Put needs 2+ bearish signals to avoid shorting a roaring bull
         bear_signals = sum([
             cur_rsi > RSI_OVERBOUGHT,
+            cur_rsi > RSI_OVERBOUGHT and _rng,  # double-weight in ranging
             price > cur_bb_u,
-            dc_at_upper,            # Donchian upper band = N-period price high
+            price > cur_bb_u and _rng,
+            dc_at_upper,
             macd_bear,
+            macd_bear and _trd,
             vol_confirmed,
+            pc_bearish,
+            rs_weak,
+            near_52w_high,                  # near annual ceiling = strong resistance
+            sig_mfi_ob,                     # MFI overbought = volume confirms buying exhaustion
         ])
 
         # ── WFO param overrides (applied via /api/optimizer/apply) ──
@@ -1257,8 +1443,10 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         red_ok     = (not REQUIRE_RED_CANDLE) or red_candle
 
         # Early exit — skip meta + options fetch if no strategy can trigger
+        # MA50 trend gate: only buy calls if above 50-day MA OR deeply oversold (RSI < 25)
+        trend_ok_buy     = above_ma50 or cur_rsi < 25
         has_sell_put     = (oversold or macd_bear) and price <= MAX_PRICE_SELL and not falling_knife
-        has_buy_call     = oversold and bull_signals >= _bull_min and not falling_knife and green_ok
+        has_buy_call     = oversold and bull_signals >= _bull_min and not falling_knife and green_ok and trend_ok_buy
         has_buy_put      = (overbought or macd_bear) and bear_signals >= _bear_min and not melt_up and red_ok
         has_covered_call = price <= MAX_PRICE_SELL
         # Iron condors are skipped during main scan (slow); run separately on demand
@@ -1346,13 +1534,43 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
             "melt_up":          melt_up,
             "bull_signals":  bull_signals,
             "bear_signals":  bear_signals,
-            # VIX regime
+            # VIX regime + dynamic thresholds
             "vix":           cur_vix,
             "vix_regime":    regime,
+            "rsi_os_thr":    _rsi_os_thr,
+            "rsi_ob_thr":    _rsi_ob_thr,
+            "cal_active":    bool(_cal_weights),
             # Broad market trend (SPY)
             "market_trend":  market_trend,
+            # MA50 trend filter
+            "ma50":          round(ma50, 3) if ma50 else None,
+            "above_ma50":    above_ma50,
+            # Relative strength vs SPY
+            "rs_ratio":      rs_ratio,
+            "rs_strong":     rs_strong,
+            "rs_weak":       rs_weak,
+            # HV Rank (options cheapness indicator)
+            "hv_rank":       round(hv_rank, 1),
+            "hv_high":       hv_high,
+            "hv_low":        hv_low,
+            # ADX mode
+            "adx_mode":      adx_mode,
+            # 52-week proximity
+            "low_52w":       round(low_52w, 3),
+            "high_52w":      round(high_52w, 3),
+            "near_52w_low":  near_52w_low,
+            "near_52w_high": near_52w_high,
+            # VIX term structure
+            "vix3m":         cur_vix3m,
+            "vix_ts":        vix_ts,
+            "vix_backw":     vix_backw,
+            "vix_contango":  vix_contango,
             # GARCH(1,1) volatility estimate
             "garch_vol":     round(calc_garch_vol(closes) * 100, 1),  # as % e.g. 32.4
+            # MFI
+            "mfi":           round(cur_mfi, 1),
+            "sig_mfi_os":    sig_mfi_os,
+            "sig_mfi_ob":    sig_mfi_ob,
             # Volume confirmation
             "vol_confirmed": vol_confirmed,
             "green_candle":  green_candle,
@@ -1377,7 +1595,9 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
                 iv_high  = iv_rank is not None and iv_rank >= IV_RANK_THRESHOLD
                 prem_high = opt["premium_pct"] >= PREMIUM_PCT_MIN
                 if iv_high or prem_high:
-                    score = _score_sell_put(cur_rsi, price, cur_bb_l, iv_rank, opt["premium_pct"])
+                    score = _score_sell_put(cur_rsi, price, cur_bb_l, iv_rank, opt["premium_pct"],
+                                            hv_high=hv_high, vix_contango=vix_contango,
+                                            adx_mode=adx_mode)
                     mc = run_monte_carlo(price, opt["strike"], opt["iv"], opt["dte"], "sell_put", opt["mid"])
                     _bs = black_scholes(price, opt["strike"], opt["dte"]/365.0, RISK_FREE_RATE, opt["iv"]/100, "put")
                     _bs_mp = bs_mispricing(_bs["fair_value"] if _bs else None, opt["mid"])
@@ -1393,11 +1613,15 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
 
         # ── 2. BUY CALL ───────────────────────────────────────
         # green_ok must match the early-exit condition (has_buy_call) exactly
-        if oversold and bull_signals >= _bull_min and not falling_knife and green_ok:
+        if oversold and bull_signals >= _bull_min and not falling_knife and green_ok and trend_ok_buy:
             opt = pick_option(tkr, price, "call", otm_factor=1.0,
                               chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["ask"] >= 0.01:
-                score = _score_buy_call(cur_rsi, price, cur_bb_l, reversal_up)
+                score = _score_buy_call(cur_rsi, price, cur_bb_l, reversal_up,
+                                        above_ma50=above_ma50, hv_low=hv_low,
+                                        rs_strong=rs_strong, squeeze=squeeze_setup,
+                                        near_52w_low=near_52w_low, vix_backw=vix_backw,
+                                        adx_mode=adx_mode, confluence=bull_signals)
                 mc = run_monte_carlo(price, opt["strike"], opt["iv"], opt["dte"], "buy_call", opt["mid"])
                 _bs = black_scholes(price, opt["strike"], opt["dte"]/365.0, RISK_FREE_RATE, opt["iv"]/100, "call")
                 _bs_mp = bs_mispricing(_bs["fair_value"] if _bs else None, opt["mid"])
@@ -1416,7 +1640,10 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
             opt = pick_option(tkr, price, "put", otm_factor=1.0,
                               chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["ask"] >= 0.01:
-                score = _score_buy_put(cur_rsi, price, cur_bb_u)
+                score = _score_buy_put(cur_rsi, price, cur_bb_u,
+                                       rs_weak=rs_weak, earnings_soon=earnings_soon,
+                                       near_52w_high=near_52w_high, adx_mode=adx_mode,
+                                       confluence=bear_signals)
                 mc = run_monte_carlo(price, opt["strike"], opt["iv"], opt["dte"], "buy_put", opt["mid"])
                 _bs = black_scholes(price, opt["strike"], opt["dte"]/365.0, RISK_FREE_RATE, opt["iv"]/100, "put")
                 _bs_mp = bs_mispricing(_bs["fair_value"] if _bs else None, opt["mid"])
@@ -1531,27 +1758,85 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
 
 # ── Scoring helpers ───────────────────────────────────────────
 
-def _score_sell_put(rsi, price, bb_l, iv_rank, prem_pct):
+def _score_sell_put(rsi, price, bb_l, iv_rank, prem_pct,
+                    hv_high=False, vix_contango=False, adx_mode="normal"):
+    w     = _cal_weights.get("sell_put", {})
+    rsi_w = w.get("sig_rsi_os",    1.0)
+    bb_w  = w.get("sig_bb_low",    1.0)
+    hv_w  = w.get("sig_hv_high",   1.0)
     s = 0
-    if rsi < RSI_OVERSOLD: s += max(0, 35 + (RSI_OVERSOLD - rsi))
-    if price < bb_l:        s += 25
-    if iv_rank and iv_rank >= IV_RANK_THRESHOLD: s += min(int(iv_rank - IV_RANK_THRESHOLD), 25)
-    if prem_pct >= PREMIUM_PCT_MIN: s += min(int((prem_pct - PREMIUM_PCT_MIN) * 3), 15)
+    if rsi < RSI_OVERSOLD: s += int(max(0, 35 + (RSI_OVERSOLD - rsi)) * rsi_w)
+    if price < bb_l:        s += int(25 * bb_w)
+    if iv_rank and iv_rank >= IV_RANK_THRESHOLD:
+        s += min(int(iv_rank - IV_RANK_THRESHOLD), 25)
+    if prem_pct >= PREMIUM_PCT_MIN:
+        s += min(int((prem_pct - PREMIUM_PCT_MIN) * 3), 15)
+    # High HV Rank → options expensive, more premium to collect
+    if hv_high:      s += int(12 * hv_w)
+    # VIX contango → calm market, sell premium setups more reliable
+    if vix_contango: s += 10
+    # Ranging market → mean-reversion (stock stays near support) more reliable
+    if adx_mode == "ranging": s += 8
     return min(max(round(s), 0), 100)
 
-def _score_buy_call(rsi, price, bb_l, reversal):
+def _score_buy_call(rsi, price, bb_l, reversal,
+                    above_ma50=False, hv_low=False, rs_strong=False, squeeze=False,
+                    near_52w_low=False, vix_backw=False, adx_mode="normal",
+                    confluence=0):
+    w     = _cal_weights.get("buy_call", {})
+    rsi_w = w.get("sig_rsi_os",     1.0)
+    bb_w  = w.get("sig_bb_low",     1.0)
+    rev_w = w.get("sig_reversal",   1.0)
+    ma_w  = w.get("sig_above_ma50", 1.0)
+    hv_w  = w.get("sig_hv_low",     1.0)
+    rs_w  = w.get("sig_rs_strong",  1.0)
     s = 0
-    if rsi < 30:    s += 40
-    elif rsi < 35:  s += 25
-    if price < bb_l: s += 25
-    if reversal:     s += 20
+    if rsi < 30:     s += int(40 * rsi_w)
+    elif rsi < 35:   s += int(25 * rsi_w)
+    if price < bb_l: s += int(25 * bb_w)
+    if reversal:     s += int(20 * rev_w)
+    # Trend alignment: above 50-day MA → bounce more likely to stick
+    if above_ma50:     s += int(15 * ma_w)
+    # Cheap options: low HV rank → better risk/reward on long options
+    if hv_low:         s += int(10 * hv_w)
+    # Relative strength vs SPY: stock holding up in sell-off = leadership
+    if rs_strong:      s += int(10 * rs_w)
+    # Short squeeze potential
+    if squeeze:        s += 10
+    # Near 52-week low: hitting annual floor = strongest support level
+    if near_52w_low:   s += 15
+    # VIX backwardation: acute panic → reversal probability higher
+    if vix_backw:      s += 12
+    # ADX mode: ranging market → mean-reversion (RSI/BB) more reliable
+    if adx_mode == "ranging": s += 10
+    # ADX mode: strong trend → counter-trend buy calls are dangerous
+    if adx_mode == "trending" and not above_ma50: s -= 15
+    # Multi-signal confluence bonus: 4+ signals firing = high conviction
+    if confluence >= 4: s += 15
+    elif confluence >= 3: s += 8
     return min(max(round(s), 0), 100)
 
-def _score_buy_put(rsi, price, bb_u):
+def _score_buy_put(rsi, price, bb_u, rs_weak=False, earnings_soon=False,
+                   near_52w_high=False, adx_mode="normal", confluence=0):
+    w     = _cal_weights.get("buy_put", {})
+    rsi_w = w.get("sig_rsi_ob",    1.0)
+    bb_w  = w.get("sig_bb_high",   1.0)
+    rs_w  = w.get("sig_rs_strong", 1.0)
     s = 0
-    if rsi > 75:     s += 40
-    elif rsi > 65:   s += 25
-    if price > bb_u: s += 30
+    if rsi > 75:     s += int(40 * rsi_w)
+    elif rsi > 65:   s += int(25 * rsi_w)
+    if price > bb_u: s += int(30 * bb_w)
+    # Relative weakness vs SPY → downside more likely
+    if rs_weak:        s += int(10 * rs_w)
+    # Earnings approaching → directional uncertainty
+    if earnings_soon:  s += 8
+    # Near 52-week high: hitting annual ceiling = strongest resistance
+    if near_52w_high:  s += 15
+    # ADX mode: ranging market → overbought mean-reversion more reliable
+    if adx_mode == "ranging": s += 10
+    # Multi-signal confluence bonus
+    if confluence >= 4: s += 15
+    elif confluence >= 3: s += 8
     return min(max(round(s), 0), 100)
 
 def _score_iron_condor(rsi, iv_rank, net_credit, price):
@@ -2256,15 +2541,30 @@ def _precompute_indicators(hist):
     macd_s  = ema12 - ema26
     signal_s = macd_s.ewm(span=9, adjust=False).mean()
 
-    # ADX (simple approximation)
-    tr       = pd.concat([highs - lows,
-                           (highs - closes.shift()).abs(),
-                           (lows  - closes.shift()).abs()], axis=1).max(axis=1)
-    atr14    = tr.rolling(14).mean()
-    adx_s    = atr14.rolling(14).mean()  # simplified proxy
+    # Proper ADX (+DI / -DI / ADX) via shared calc_adx
+    _adx_full, _pdi_s, _ndi_s = calc_adx(hist)
+    adx_s = _adx_full if _adx_full is not None else pd.Series(np.zeros(n), index=closes.index)
 
-    # MA200
+    # MA50 and MA200
+    ma50_s   = closes.rolling(50).mean()
     ma200_s  = closes.rolling(200).mean()
+
+    # HV Rank per bar: 30-day annualized HV percentile over trailing 252 bars
+    # High HV Rank (≥60) → good time to sell premium (options expensive)
+    # Low  HV Rank (≤40) → good time to buy options (options cheap)
+    _rets    = closes.pct_change()
+    _hv30    = _rets.rolling(30).std() * np.sqrt(252) * 100  # annualised %
+    hv_rank_s = _hv30.rolling(252).rank(pct=True) * 100       # 0–100 percentile
+
+    # 52-week rolling low and high
+    low_52w_s  = closes.rolling(252).min()
+    high_52w_s = closes.rolling(252).max()
+
+    # ADX mode per bar: ranging (<20), normal (20-30), trending (>30)
+    # Encode as float: 0=ranging, 1=normal, 2=trending for numpy storage
+    _adx_vals = adx_s.values
+    _adx_mode = np.where(_adx_vals < 20, 0.0,
+                np.where(_adx_vals > 30, 2.0, 1.0))
 
     # Vectorized MACD crossover: macd crossed above signal in last 3 bars
     macd_cross_s = (macd_s > signal_s) & (macd_s.shift(1) <= signal_s.shift(1))
@@ -2278,6 +2578,9 @@ def _precompute_indicators(hist):
     # Volume confirmation: current volume >= 1.2x 20-day avg
     vol_avg20_s  = volumes.rolling(20).mean()
     vol_ok_s     = volumes >= (vol_avg20_s * 1.2)
+
+    # MFI (Money Flow Index) — RSI weighted by volume
+    mfi_s = calc_mfi(hist, period=14)
 
     # IV estimation per bar — GARCH(1,1) forward vol, falls back to 20-day HV
     # We compute one GARCH estimate for the full series (end of history) and
@@ -2302,8 +2605,14 @@ def _precompute_indicators(hist):
         "macd_bear":   macd_bear_s.values,
         "rsi_turn_up": rsi_turn_up_s.values,
         "vol_ok":      vol_ok_s.values,
+        "mfi":         mfi_s.values,
         "adx":         adx_s.values,
+        "ma50":        ma50_s.values,
         "ma200":       ma200_s.values,
+        "hv_rank":     hv_rank_s.values,
+        "low_52w":     low_52w_s.values,
+        "high_52w":    high_52w_s.values,
+        "adx_mode":    _adx_mode,
         "iv_est":      iv_est_s.values,
         "dates":       dates,
         "n":           n,
@@ -2329,27 +2638,56 @@ def _bt_signals_fast(pc, idx, params=None):
     bb_lower   = float(pc["bb_lower"][idx])  if not np.isnan(pc["bb_lower"][idx])  else 0.0
     price      = float(pc["closes"][idx])
     adx        = float(pc["adx"][idx])       if not np.isnan(pc["adx"][idx])       else 0.0
-    ma200      = float(pc["ma200"][idx])     if not np.isnan(pc["ma200"][idx])     else price
+    ma50       = float(pc["ma50"][idx])      if not np.isnan(pc["ma50"][idx])       else price
+    ma200      = float(pc["ma200"][idx])     if not np.isnan(pc["ma200"][idx])      else price
+    hv_rank    = float(pc["hv_rank"][idx])   if not np.isnan(pc["hv_rank"][idx])    else 50.0
+    low_52w    = float(pc["low_52w"][idx])   if not np.isnan(pc["low_52w"][idx])    else 0.0
+    high_52w   = float(pc["high_52w"][idx])  if not np.isnan(pc["high_52w"][idx])   else 1e9
+    adx_mode_n = float(pc["adx_mode"][idx])  if not np.isnan(pc["adx_mode"][idx])   else 1.0
+    adx_mode   = "ranging" if adx_mode_n < 0.5 else ("trending" if adx_mode_n > 1.5 else "normal")
+    mfi        = float(pc["mfi"][idx])       if not np.isnan(pc["mfi"][idx])        else 50.0
 
-    sig_rsi_os    = rsi < rsi_os
-    sig_rsi_ob    = rsi > rsi_ob
-    sig_bb_low    = price <= bb_lower
-    sig_bb_high   = price >= bb_upper
-    sig_reversal  = bool(pc["rsi_turn_up"][idx])
-    sig_macd_bull = bool(pc["macd_bull"][idx])
-    sig_macd_bear = bool(pc["macd_bear"][idx])
-    sig_vol_ok    = bool(pc["vol_ok"][idx])
+    sig_rsi_os        = rsi < rsi_os
+    sig_rsi_ob        = rsi > rsi_ob
+    sig_bb_low        = price <= bb_lower
+    sig_bb_high       = price >= bb_upper
+    sig_reversal      = bool(pc["rsi_turn_up"][idx])
+    sig_macd_bull     = bool(pc["macd_bull"][idx])
+    sig_macd_bear     = bool(pc["macd_bear"][idx])
+    sig_vol_ok        = bool(pc["vol_ok"][idx])
+    sig_above_ma50    = price > ma50
+    sig_above_ma200   = price > ma200
+    sig_hv_high       = hv_rank >= 60
+    sig_hv_low        = hv_rank <= 40
+    sig_near_52w_low  = low_52w > 0   and price <= low_52w  * 1.05
+    sig_near_52w_high = high_52w < 1e9 and price >= high_52w * 0.95
+    sig_mfi_os        = mfi < 20      # oversold on volume
+    sig_mfi_ob        = mfi > 80      # overbought on volume
 
-    oversold  = sig_rsi_os and sig_bb_low
+    _rng = adx_mode == "ranging"
+    _trd = adx_mode == "trending"
+
+    oversold   = sig_rsi_os and sig_bb_low
     overbought = sig_rsi_ob and sig_bb_high
 
-    bull_count = sum([sig_rsi_os, sig_bb_low, sig_reversal, sig_macd_bull, sig_vol_ok])
-    bear_count = sum([sig_rsi_ob, sig_bb_high, sig_macd_bear])
+    bull_count = sum([sig_rsi_os, sig_rsi_os and _rng,
+                      sig_bb_low, sig_bb_low and _rng,
+                      sig_reversal, sig_macd_bull, sig_macd_bull and _trd,
+                      sig_vol_ok, sig_hv_low, sig_near_52w_low,
+                      sig_mfi_os])          # MFI oversold = strong volume confirmation
+    bear_count = sum([sig_rsi_ob, sig_rsi_ob and _rng,
+                      sig_bb_high, sig_bb_high and _rng,
+                      sig_macd_bear, sig_macd_bear and _trd,
+                      sig_near_52w_high,
+                      sig_mfi_ob])          # MFI overbought = heavy selling volume
 
-    above_ma200     = price > ma200
-    falling_knife   = sig_rsi_os and not sig_reversal and adx > adx_thr and not above_ma200
+    above_ma200   = sig_above_ma200
+    falling_knife = sig_rsi_os and not sig_reversal and adx > adx_thr and not above_ma200
 
-    has_buy_call  = bull_count >= bull_min and not falling_knife
+    # Trend gate: buy calls only when above 50-day MA OR deeply oversold (RSI < 25)
+    trend_ok_buy  = sig_above_ma50 or rsi < 25
+
+    has_buy_call  = bull_count >= bull_min and not falling_knife and trend_ok_buy
     has_buy_put   = bear_count >= bear_min
     has_sell_put  = (oversold or sig_macd_bear) and price <= MAX_PRICE_SELL and not falling_knife
 
@@ -2357,30 +2695,44 @@ def _bt_signals_fast(pc, idx, params=None):
         return None
 
     return {
-        "price":         price,
-        "sig_rsi_os":    sig_rsi_os,
-        "sig_rsi_ob":    sig_rsi_ob,
-        "sig_bb_low":    sig_bb_low,
-        "sig_bb_high":   sig_bb_high,
-        "sig_reversal":  sig_reversal,
-        "sig_macd_bull": sig_macd_bull,
-        "sig_macd_bear": sig_macd_bear,
-        "sig_vol_ok":    sig_vol_ok,
-        "has_buy_call":  has_buy_call,
-        "has_buy_put":   has_buy_put,
-        "has_sell_put":  has_sell_put,
+        "price":          price,
+        "sig_rsi_os":     sig_rsi_os,
+        "sig_rsi_ob":     sig_rsi_ob,
+        "sig_bb_low":     sig_bb_low,
+        "sig_bb_high":    sig_bb_high,
+        "sig_reversal":   sig_reversal,
+        "sig_macd_bull":  sig_macd_bull,
+        "sig_macd_bear":  sig_macd_bear,
+        "sig_vol_ok":     sig_vol_ok,
+        "sig_above_ma50":   sig_above_ma50,
+        "sig_hv_high":      sig_hv_high,
+        "sig_hv_low":       sig_hv_low,
+        "sig_near_52w_low":  sig_near_52w_low,
+        "sig_near_52w_high": sig_near_52w_high,
+        "sig_mfi_os":        sig_mfi_os,
+        "sig_mfi_ob":        sig_mfi_ob,
+        "mfi":               round(mfi, 1),
+        "adx_mode":         adx_mode,
+        "bull_count":       bull_count,
+        "bear_count":       bear_count,
+        "has_buy_call":     has_buy_call,
+        "has_buy_put":      has_buy_put,
+        "has_sell_put":     has_sell_put,
     }
 
 
 def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
-                        idx_start=60, idx_end=None, precomp=None):
+                        idx_start=60, idx_end=None, precomp=None,
+                        record_path=False):
     """
     Walk history for `ticker`.
-    hold_days : days to hold the option
-    params    : optional parameter overrides for _bt_signals (WFO use)
-    hist      : pre-downloaded DataFrame (skip yfinance fetch if provided)
+    hold_days   : days to hold the option
+    params      : optional parameter overrides for _bt_signals (WFO use)
+    hist        : pre-downloaded DataFrame (skip yfinance fetch if provided)
     idx_start / idx_end : window slice for walk-forward splits
-    precomp   : pre-computed indicator dict from _precompute_indicators (WFO fast path)
+    precomp     : pre-computed indicator dict from _precompute_indicators (WFO fast path)
+    record_path : if True, also record option P&L at every HOLD_SWEEP_INTERVALS checkpoint
+                  (used by the Hold Horizon Analysis tool)
     """
     if hist is None:
         try:
@@ -2438,6 +2790,26 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                     continue
                 pnl_pct = round((exit_opt - entry_opt) / entry_opt * 100, 1)
 
+            # ── Hold-path recording (for Hold Horizon Analysis) ──────────
+            # For each checkpoint d, compute option P&L if closed at day d
+            # instead of holding the full hold_days.  The option still has
+            # (hold_days − d) days of time value left at exit.
+            pnl_path: dict = {}
+            if record_path:
+                opt_type = "put" if strategy == "sell_put" else \
+                           "call" if strategy == "buy_call" else "put"
+                for d in HOLD_SWEEP_INTERVALS:
+                    future_idx = idx + d
+                    if future_idx >= len(precomp["closes"]):
+                        break
+                    ep     = float(precomp["closes"][future_idx])
+                    T_rem  = max((hold_days - d) / 365.0, 0.001)
+                    ex_val = _bt_option_price(ep, K, T_rem, iv_est, opt_type)
+                    if strategy == "sell_put":
+                        pnl_path[d] = round((entry_opt - ex_val) / entry_opt * 100, 1)
+                    else:
+                        pnl_path[d] = round((ex_val - entry_opt) / entry_opt * 100, 1)
+
             trades.append({
                 "ticker":      ticker,
                 "strategy":    strategy,
@@ -2450,15 +2822,23 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                 "pnl_pct":     pnl_pct,
                 "win":         pnl_pct > 0,
                 "iv_est":      round(iv_est * 100, 1),
+                "pnl_path":    pnl_path,
                 # Individual signal flags for quality analysis
-                "sig_rsi_os":    sigs["sig_rsi_os"],
-                "sig_bb_low":    sigs["sig_bb_low"],
-                "sig_reversal":  sigs["sig_reversal"],
-                "sig_macd_bull": sigs["sig_macd_bull"],
-                "sig_vol_ok":    sigs["sig_vol_ok"],
-                "sig_rsi_ob":    sigs["sig_rsi_ob"],
-                "sig_bb_high":   sigs["sig_bb_high"],
-                "sig_macd_bear": sigs["sig_macd_bear"],
+                "sig_rsi_os":     sigs["sig_rsi_os"],
+                "sig_bb_low":     sigs["sig_bb_low"],
+                "sig_reversal":   sigs["sig_reversal"],
+                "sig_macd_bull":  sigs["sig_macd_bull"],
+                "sig_vol_ok":     sigs["sig_vol_ok"],
+                "sig_rsi_ob":     sigs["sig_rsi_ob"],
+                "sig_bb_high":    sigs["sig_bb_high"],
+                "sig_macd_bear":  sigs["sig_macd_bear"],
+                "sig_above_ma50":   sigs["sig_above_ma50"],
+                "sig_hv_high":      sigs["sig_hv_high"],
+                "sig_hv_low":       sigs["sig_hv_low"],
+                "sig_near_52w_low":  sigs["sig_near_52w_low"],
+                "sig_near_52w_high": sigs["sig_near_52w_high"],
+                "sig_mfi_os":        sigs["sig_mfi_os"],
+                "sig_mfi_ob":        sigs["sig_mfi_ob"],
             })
     return trades
 
@@ -2553,12 +2933,23 @@ def _run_backtest_job(tickers, hold_days):
     summary      = _bt_summary(all_trades)
     sig_quality  = signal_quality_analysis(all_trades)
     all_trades.sort(key=lambda x: x["entry_date"], reverse=True)
+    bt_results = {
+        "trades":       all_trades[:500],
+        "summary":      summary,
+        "sig_quality":  sig_quality,
+        "tickers_used": len(set(t["ticker"] for t in all_trades)),
+        "hold_days":    hold_days,
+        "completed_at": datetime.now().isoformat(),
+    }
     with _bt_lock:
-        _bt_state.update(running=False, stage="Complete", results={
-            "trades":      all_trades[:500],
-            "summary":     summary,
-            "sig_quality": sig_quality,
-        })
+        _bt_state.update(running=False, stage="Complete", results=bt_results)
+    # Persist to disk so results survive bot restarts
+    try:
+        with open(BT_FILE, "w") as f:
+            json.dump(bt_results, f, indent=2)
+        print(f"  [Backtest] Results saved to {BT_FILE}")
+    except Exception as e:
+        print(f"  [Backtest] Could not save results: {e}")
     print(f"  [Backtest] Done — {len(all_trades)} trades, "
           f"win rate {summary.get('win_rate', 'N/A')}%")
 
@@ -2573,14 +2964,22 @@ def signal_quality_analysis(trades):
     where that signal was active.  Returned as sorted list of dicts.
     """
     SIGNAL_LABELS = {
-        "sig_rsi_os":    "RSI Oversold",
-        "sig_bb_low":    "Below BB Lower",
-        "sig_reversal":  "RSI Turning Up",
-        "sig_macd_bull": "MACD Bull Cross",
-        "sig_vol_ok":    "Volume Confirmed",
-        "sig_rsi_ob":    "RSI Overbought",
-        "sig_bb_high":   "Above BB Upper",
-        "sig_macd_bear": "MACD Bear Cross",
+        "sig_rsi_os":     "RSI Oversold",
+        "sig_bb_low":     "Below BB Lower",
+        "sig_reversal":   "RSI Turning Up",
+        "sig_macd_bull":  "MACD Bull Cross",
+        "sig_vol_ok":     "Volume Confirmed",
+        "sig_rsi_ob":     "RSI Overbought",
+        "sig_bb_high":    "Above BB Upper",
+        "sig_macd_bear":  "MACD Bear Cross",
+        "sig_above_ma50":   "Above 50-day MA",
+        "sig_hv_high":      "HV Rank High (≥60)",
+        "sig_hv_low":       "HV Rank Low (≤40)",
+        "sig_rs_strong":    "RS Strong vs SPY",
+        "sig_near_52w_low":  "Near 52-Week Low",
+        "sig_near_52w_high": "Near 52-Week High",
+        "sig_mfi_os":        "MFI Oversold (<20)",
+        "sig_mfi_ob":        "MFI Overbought (>80)",
     }
     rows = []
     for flag, label in SIGNAL_LABELS.items():
@@ -2839,6 +3238,988 @@ def _run_wfo_job(tickers):
 
 
 # ══════════════════════════════════════════════════════════════
+#  SIGNAL CALIBRATION ENGINE
+#  Unlike WFO (which sweeps param combos), calibration measures
+#  how reliable each individual signal has been in recent data,
+#  then applies those weights to the live scorer so signals that
+#  aren't working in the current market regime get down-weighted.
+# ══════════════════════════════════════════════════════════════
+
+CALIBRATION_FILE = "calibration_data.json"
+
+_cal_state = {
+    "running":  False,
+    "progress": 0,
+    "total":    0,
+    "results":  None,
+    "stage":    "",
+}
+_cal_lock = threading.Lock()
+
+# In-memory calibration weights: strategy → signal_flag → multiplier (0.5–1.3)
+# Default empty = all weights 1.0 (no adjustment) until first calibration run.
+_cal_weights: dict = {}
+_lr_state:    dict = {"running": False, "stage": "Idle", "results": None}
+_lr_lock             = threading.Lock()
+_hs_state:    dict = {"running": False, "stage": "Idle", "results": None}
+_hs_lock             = threading.Lock()
+
+
+def _cal_wr_to_weight(win_rate_pct: float) -> float:
+    """Map a signal win-rate % to a score multiplier."""
+    if win_rate_pct >= 70: return 1.3
+    if win_rate_pct >= 60: return 1.1
+    if win_rate_pct >= 50: return 1.0
+    if win_rate_pct >= 40: return 0.75
+    return 0.5
+
+
+def _run_calibration_job(months: int = 12, universe: str = "focus"):
+    """
+    Signal calibration backtest.
+
+    Steps:
+      1. Bulk-download last N months of history for chosen universe.
+      2. Run run_backtest_ticker on that window (hold_days=14) — each
+         trade carries individual signal flags.
+      3. Run signal_quality_analysis() to get per-signal win-rates.
+      4. Read signal_log.json for unbiased live recommendation outcomes.
+      5. Read performance.json for actual user trades (real outcomes).
+      6. Build signal weight dict and save to calibration_data.json.
+      7. Apply weights immediately to _cal_weights so live scores update.
+    """
+    global _cal_weights
+
+    if universe == "snp500":
+        # Bypass SCAN_MODE check in get_universe() by temporarily forcing full mode
+        import requests as _req
+        _snp = []
+        try:
+            resp = _req.get(
+                "https://raw.githubusercontent.com/datasets/s-and-p-500-companies"
+                "/main/data/constituents.csv",
+                headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            if resp.status_code == 200:
+                lines = resp.text.strip().split("\n")[1:]
+                _snp = [l.split(",")[0].strip().replace(".", "-")
+                        for l in lines if l.strip()]
+                _snp = [x for x in _snp if 1 < len(x) <= 6]
+        except Exception as e:
+            print(f"  [CAL] S&P 500 fetch failed ({e}), falling back to focus list")
+        tickers = list(dict.fromkeys(_snp)) if _snp else list(dict.fromkeys(FOCUS_LIST))
+        print(f"  [CAL] Universe: S&P 500 — {len(tickers)} tickers")
+    else:
+        tickers = list(dict.fromkeys(FOCUS_LIST))
+        print(f"  [CAL] Universe: Focus list — {len(tickers)} tickers")
+
+    with _cal_lock:
+        _cal_state.update(running=True, progress=0, total=len(tickers),
+                          results=None, stage="Downloading history…")
+
+    # ── 1. Bulk-download ──────────────────────────────────────
+    # Always download 2y regardless of the signal window — the 200-day MA
+    # needs 200 bars of history to be valid.  We restrict which bars we
+    # *score* to the last `months` months via idx_start below.
+    print(f"  [CAL] Downloading 2y history for {len(tickers)} tickers "
+          f"(signal window: last {months}m)…")
+    hist_map: dict = {}
+    try:
+        raw = yf.download(tickers, period="2y", group_by="ticker",
+                          auto_adjust=False, threads=True, progress=False)
+        for sym in tickers:
+            try:
+                df = (raw[sym] if len(tickers) > 1 else raw).dropna(how="all")
+                if len(df) >= 120:
+                    hist_map[sym] = df
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"  [CAL] Bulk download failed: {e}")
+
+    if not hist_map:
+        with _cal_lock:
+            _cal_state.update(running=False, stage="Download failed — no data")
+        return
+
+    with _cal_lock:
+        _cal_state.update(stage=f"Running backtest on {len(hist_map)} tickers…",
+                          total=len(hist_map))
+
+    # ── 2. Backtest each ticker in the recent window ──────────
+    all_trades: list = []
+    sample_logged = False
+    for i, (sym, hist) in enumerate(hist_map.items()):
+        with _cal_lock:
+            _cal_state["progress"] = i + 1
+        try:
+            # Use the last bar's date as reference — avoids tz arithmetic errors
+            end_ts    = hist.index[-1]
+            cutoff    = end_ts - pd.DateOffset(months=months)
+            start_idx = max(60, int(hist.index.searchsorted(cutoff)))
+            end_idx   = len(hist) - 14
+            if not sample_logged:
+                print(f"  [CAL] Sample — {sym}: rows={len(hist)}, "
+                      f"start_idx={start_idx}, end_idx={end_idx}, "
+                      f"window={end_idx - start_idx} bars")
+                sample_logged = True
+            trades = run_backtest_ticker(sym, hold_days=14, hist=hist,
+                                         idx_start=start_idx)
+            all_trades.extend(trades)
+        except Exception as e:
+            print(f"  [CAL] {sym} error: {e}")
+
+    print(f"  [CAL] Backtest complete — {len(all_trades)} trades from {len(hist_map)} tickers")
+
+    if not all_trades:
+        # Diagnose: try one ticker with no window restriction to see if BT itself works
+        sample_sym = next(iter(hist_map))
+        sample_trades = run_backtest_ticker(sample_sym, hold_days=14,
+                                             hist=hist_map[sample_sym], idx_start=60)
+        print(f"  [CAL] Diagnostic (no window restriction) — {sample_sym}: "
+              f"{len(sample_trades)} trades")
+        with _cal_lock:
+            _cal_state.update(running=False,
+                              stage=f"No trades in last {months}m window "
+                                    f"(full-history test: {len(sample_trades)} trades on {sample_sym})")
+        return
+
+    with _cal_lock:
+        _cal_state["stage"] = "Analysing signal quality…"
+
+    # ── 3. Per-signal win-rates from simulated trades ─────────
+    sim_quality = signal_quality_analysis(all_trades)
+
+    # ── 3b. Blend in live signal log (unbiased live recommendations) ──
+    sig_log_summary = _signal_log_summary()
+    sig_log_quality = sig_log_summary.get("sig_quality", [])
+
+    # ── 4. Actual user trades from performance.json ───────────
+    real_trades: list = []
+    actual_by_strat: dict = {}
+    try:
+        if os.path.exists(PERFORMANCE_FILE):
+            with open(PERFORMANCE_FILE) as f:
+                perf = json.load(f)
+            for t in perf:
+                if t.get("pnl_pct") is not None:
+                    real_trades.append(t)
+            for strat in ("buy_call", "buy_put", "sell_put"):
+                st = [t for t in real_trades if t.get("strategy") == strat]
+                if st:
+                    wins = [t for t in st if t.get("pnl_pct", 0) > 0]
+                    pnls = [t["pnl_pct"] for t in st]
+                    actual_by_strat[strat] = {
+                        "count":    len(st),
+                        "win_rate": round(len(wins) / len(st) * 100, 1),
+                        "avg_pnl":  round(sum(pnls) / len(pnls), 1),
+                    }
+    except Exception as e:
+        print(f"  [CAL] Could not read performance.json: {e}")
+
+    # ── 5. Build signal weights ───────────────────────────────
+    LABEL_TO_FLAG = {
+        "RSI Oversold":     "sig_rsi_os",
+        "Below BB Lower":   "sig_bb_low",
+        "RSI Turning Up":   "sig_reversal",
+        "MACD Bull Cross":  "sig_macd_bull",
+        "Volume Confirmed": "sig_vol_ok",
+        "RSI Overbought":   "sig_rsi_ob",
+        "Above BB Upper":   "sig_bb_high",
+        "MACD Bear Cross":  "sig_macd_bear",
+    }
+    BULL_FLAGS = {"sig_rsi_os", "sig_bb_low", "sig_reversal", "sig_macd_bull", "sig_vol_ok"}
+    BEAR_FLAGS = {"sig_rsi_ob", "sig_bb_high", "sig_macd_bear"}
+
+    # Blend simulated + live signal log win rates.
+    # Signal log (real live recs) is weighted 2× vs simulated backtest.
+    log_by_label = {r["signal"]: r for r in sig_log_quality}
+    blended_quality = []
+    for row in sim_quality:
+        log_row = log_by_label.get(row["signal"])
+        if log_row and log_row["count"] >= 5:
+            sim_n  = row["count"]
+            log_n  = log_row["count"] * 2   # 2× weight for live recs
+            blended_wr = round(
+                (row["win_rate"] * sim_n + log_row["win_rate"] * log_n) / (sim_n + log_n), 1
+            )
+            blended_quality.append({**row, "win_rate": blended_wr,
+                                     "log_count": log_row["count"],
+                                     "log_win_rate": log_row["win_rate"]})
+        else:
+            blended_quality.append(row)
+    blended_quality.sort(key=lambda x: x["win_rate"], reverse=True)
+
+    new_weights: dict = {"buy_call": {}, "buy_put": {}, "sell_put": {}}
+    for row in blended_quality:
+        flag = LABEL_TO_FLAG.get(row["signal"])
+        if not flag:
+            continue
+        w = _cal_wr_to_weight(row["win_rate"])
+        if flag in BULL_FLAGS:
+            new_weights["buy_call"][flag] = w
+            new_weights["sell_put"][flag] = w
+        if flag in BEAR_FLAGS:
+            new_weights["buy_put"][flag] = w
+
+    _cal_weights = new_weights   # apply immediately to live scorer
+
+    # ── 6. Persist to disk ────────────────────────────────────
+    cur_vix    = get_vix()
+    cur_regime = vix_regime(cur_vix)
+    sim_summary = _bt_summary(all_trades)
+
+    results = {
+        "months":              months,
+        "universe":            universe,
+        "tickers_used":        len(hist_map),
+        "total_trades":        len(all_trades),
+        "sim_summary":         sim_summary,
+        "sim_quality":         blended_quality,   # blended sim + live log
+        "sig_log_resolved":    sig_log_summary.get("resolved", 0),
+        "sig_log_pending":     sig_log_summary.get("pending", 0),
+        "sig_log_quality":     sig_log_quality,   # raw live log quality (for display)
+        "actual_trades":       actual_by_strat,
+        "real_trade_count":    len(real_trades),
+        "weights":             new_weights,
+        "vix_at_run":          cur_vix,
+        "regime_at_run":       cur_regime,
+        "completed_at":        datetime.now().isoformat(),
+    }
+    try:
+        with open(CALIBRATION_FILE, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"  [CAL] Saved to {CALIBRATION_FILE}")
+    except Exception as e:
+        print(f"  [CAL] Save failed: {e}")
+
+    with _cal_lock:
+        _cal_state.update(running=False, stage="Complete",
+                          progress=len(hist_map), results=results)
+    print(f"  [CAL] Done — {len(all_trades)} trades, {len(sim_quality)} signals analysed")
+
+
+LR_CALIBRATION_FILE = "lr_calibration.json"
+
+# ── Signal flags and human labels used by LR calibration ──────────
+_LR_SIGNAL_FLAGS = [
+    "sig_rsi_os", "sig_bb_low", "sig_reversal", "sig_macd_bull", "sig_vol_ok",
+    "sig_rsi_ob", "sig_bb_high", "sig_macd_bear",
+    "sig_mfi_os", "sig_mfi_ob",
+]
+_LR_FLAG_LABELS = {
+    "sig_rsi_os":    "RSI Oversold",
+    "sig_bb_low":    "Below BB Lower",
+    "sig_reversal":  "RSI Turning Up",
+    "sig_macd_bull": "MACD Bull Cross",
+    "sig_vol_ok":    "Volume Confirmed",
+    "sig_rsi_ob":    "RSI Overbought",
+    "sig_bb_high":   "Above BB Upper",
+    "sig_macd_bear": "MACD Bear Cross",
+    "sig_mfi_os":    "MFI Oversold (<20)",
+    "sig_mfi_ob":    "MFI Overbought (>80)",
+}
+
+
+def _fit_lr_on_trade_list(trade_list, source_label=""):
+    """
+    Core logistic regression fitting logic.  Accepts any list of trade dicts
+    that each have signal flags (sig_*) and a 'win' boolean or 'outcome' field.
+
+    Returns (strategy_results, new_weights) or raises on fatal error.
+    """
+    try:
+        from sklearn.linear_model import LogisticRegression
+        import numpy as np
+    except ImportError:
+        raise RuntimeError("scikit-learn not installed — "
+                           "run: pip install scikit-learn --break-system-packages")
+
+    STRATEGIES  = ["buy_call", "sell_put", "buy_put", "covered_call"]
+    MIN_SAMPLES = 20
+
+    new_weights      = {}
+    strategy_results = {}
+
+    for strat in STRATEGIES:
+        strat_entries = [e for e in trade_list if e.get("strategy") == strat]
+
+        if len(strat_entries) < MIN_SAMPLES:
+            strategy_results[strat] = {
+                "status":  "insufficient_data",
+                "count":   len(strat_entries),
+                "message": f"Need {MIN_SAMPLES} samples (have {len(strat_entries)})",
+            }
+            continue
+
+        with _lr_lock:
+            _lr_state["stage"] = (
+                f"Fitting {strat} ({len(strat_entries)} samples)…"
+            )
+
+        # Build binary feature matrix — use all flags present in _LR_SIGNAL_FLAGS
+        X = np.array([
+            [1.0 if e.get(flag) else 0.0 for flag in _LR_SIGNAL_FLAGS]
+            for e in strat_entries
+        ])
+
+        # ── Win label strategy ─────────────────────────────────────────
+        # First try the natural win/loss split (pnl_pct > 0 or outcome == "win").
+        # If all outcomes end up identical (e.g. turbulent market where all
+        # oversold bounces won, or all falling-knife buys lost), fall back to a
+        # median split: "above-median P&L = win, below = loss".  This always
+        # gives a balanced dataset and teaches the model what separates a *better
+        # than average* trade from a worse one — which is what we actually want.
+        pnl_vals = [
+            e["pnl_pct"] if e.get("pnl_pct") is not None else e.get("stock_return_pct")
+            for e in strat_entries
+        ]
+        has_pnl  = all(v is not None for v in pnl_vals)
+
+        y_natural = np.array([
+            1 if (e.get("win") is True or e.get("outcome") == "win") else 0
+            for e in strat_entries
+        ])
+
+        if len(set(y_natural)) >= 2:
+            y           = y_natural
+            split_method = "natural (pnl > 0)"
+        elif has_pnl:
+            # Median split fallback
+            median_pnl  = float(np.median([v for v in pnl_vals if v is not None]))
+            y           = np.array([1 if (v or 0) >= median_pnl else 0 for v in pnl_vals])
+            split_method = f"median split (≥{round(median_pnl,1)}%)"
+            print(f"  [LR] {strat}: using median split (all natural outcomes identical)")
+        else:
+            strategy_results[strat] = {
+                "status":  "single_class",
+                "count":   len(y_natural),
+                "message": "All outcomes identical and no P&L data for median split",
+            }
+            continue
+
+        if len(set(y)) < 2:
+            strategy_results[strat] = {
+                "status":  "single_class",
+                "count":   len(y_natural),
+                "message": "All outcomes identical — need both wins and losses",
+            }
+            continue
+
+        try:
+            model = LogisticRegression(C=1.0, max_iter=1000, random_state=42)
+            model.fit(X, y)
+
+            accuracy = round(float(model.score(X, y)) * 100, 1)
+            win_rate = round(float(y.mean()) * 100, 1)
+            coefs    = model.coef_[0]
+
+            weights      = {}
+            coef_details = []
+            for i, flag in enumerate(_LR_SIGNAL_FLAGS):
+                coef       = float(coefs[i])
+                odds_ratio = float(np.exp(coef))
+                weight     = float(np.clip(odds_ratio, 0.3, 2.0))
+                weights[flag] = round(weight, 3)
+                coef_details.append({
+                    "flag":       flag,
+                    "label":      _LR_FLAG_LABELS.get(flag, flag),
+                    "coef":       round(coef, 3),
+                    "odds_ratio": round(odds_ratio, 3),
+                    "weight":     round(weight, 3),
+                })
+
+            new_weights[strat]      = weights
+            strategy_results[strat] = {
+                "status":       "ok",
+                "count":        len(strat_entries),
+                "accuracy":     accuracy,
+                "win_rate":     win_rate,
+                "split_method": split_method,
+                "coef_details": coef_details,
+            }
+            print(f"  [LR] {strat} ({source_label}): n={len(strat_entries)}, "
+                  f"acc={accuracy}%, wr={win_rate}%, split={split_method}")
+        except Exception as e:
+            strategy_results[strat] = {"status": "error", "error": str(e)}
+            print(f"  [LR] {strat} fit error: {e}")
+
+    return strategy_results, new_weights
+
+
+def _apply_lr_weights(new_weights):
+    """Merge LR weights into _cal_weights (LR takes precedence)."""
+    global _cal_weights
+    if not new_weights:
+        return
+    merged = {k: dict(v) for k, v in _cal_weights.items()}
+    for strat, weights in new_weights.items():
+        if strat not in merged:
+            merged[strat] = {}
+        merged[strat].update(weights)
+    _cal_weights = merged
+    print(f"  [LR] Applied weights for: {list(new_weights.keys())}")
+
+
+def _run_logistic_calibration(source="signal_log", months=12, universe="focus"):
+    """
+    Joint signal calibration via logistic regression.
+
+    source="signal_log"  — use the resolved live signal log (fast, ~seconds)
+    source="backtest"    — download historical data and run a full backtest
+                           (same data pipeline as regular calibration, slower)
+
+    Coefficients are converted to odds-ratios (exp(coef)) and clipped to
+    [0.3, 2.0] for use as score multipliers in _cal_weights.
+    """
+    global _cal_weights
+
+    with _lr_lock:
+        _lr_state.update(running=True, stage="Starting…")
+
+    try:
+        if source == "backtest":
+            # ── Download + backtest (same pipeline as _run_calibration_job) ──
+            if universe == "snp500":
+                import requests as _req
+                _snp = []
+                try:
+                    resp = _req.get(
+                        "https://raw.githubusercontent.com/datasets/s-and-p-500-companies"
+                        "/main/data/constituents.csv",
+                        headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                    if resp.status_code == 200:
+                        lines = resp.text.strip().split("\n")[1:]
+                        _snp = [l.split(",")[0].strip().replace(".", "-")
+                                for l in lines if l.strip()]
+                        _snp = [x for x in _snp if 1 < len(x) <= 6]
+                except Exception as e:
+                    print(f"  [LR] S&P fetch failed ({e}), falling back to focus list")
+                tickers = list(dict.fromkeys(_snp)) if _snp else list(dict.fromkeys(FOCUS_LIST))
+            else:
+                tickers = list(dict.fromkeys(FOCUS_LIST))
+
+            print(f"  [LR] Downloading 2y history for {len(tickers)} tickers…")
+            with _lr_lock:
+                _lr_state["stage"] = f"Downloading history for {len(tickers)} tickers…"
+
+            hist_map: dict = {}
+            try:
+                raw = yf.download(tickers, period="2y", group_by="ticker",
+                                  auto_adjust=False, threads=True, progress=False)
+                for sym in tickers:
+                    try:
+                        df = (raw[sym] if len(tickers) > 1 else raw).dropna(how="all")
+                        if len(df) >= 120:
+                            hist_map[sym] = df
+                    except Exception:
+                        pass
+            except Exception as e:
+                with _lr_lock:
+                    _lr_state.update(running=False, stage=f"Download failed: {e}")
+                return
+
+            with _lr_lock:
+                _lr_state["stage"] = f"Running backtest on {len(hist_map)} tickers…"
+
+            all_trades: list = []
+            for i, (sym, hist) in enumerate(hist_map.items()):
+                if i % 50 == 0:
+                    with _lr_lock:
+                        _lr_state["stage"] = (
+                            f"Backtesting {i}/{len(hist_map)} tickers…"
+                        )
+                try:
+                    end_ts    = hist.index[-1]
+                    cutoff    = end_ts - pd.DateOffset(months=months)
+                    start_idx = max(60, int(hist.index.searchsorted(cutoff)))
+                    trades    = run_backtest_ticker(sym, hold_days=14, hist=hist,
+                                                    idx_start=start_idx)
+                    all_trades.extend(trades)
+                except Exception as e:
+                    print(f"  [LR] {sym} backtest error: {e}")
+
+            print(f"  [LR] Backtest complete — {len(all_trades)} trades")
+            if not all_trades:
+                with _lr_lock:
+                    _lr_state.update(running=False, stage="No trades produced — try a longer window")
+                return
+
+            trade_list   = all_trades
+            source_label = f"backtest {months}m {universe}"
+            total_count  = len(all_trades)
+
+        else:
+            # ── Signal log (live resolved recommendations) ──
+            entries  = _load_signal_log()
+            resolved = [e for e in entries
+                        if e.get("resolved") and e.get("outcome") in ("win", "loss")]
+            if not resolved:
+                with _lr_lock:
+                    _lr_state.update(running=False,
+                                     stage="No resolved signal log entries yet — run "
+                                           "more scans and wait 7–21 days for outcomes to resolve")
+                return
+            trade_list   = resolved
+            source_label = "signal_log"
+            total_count  = len(resolved)
+
+        # ── Fit LR models ──────────────────────────────────────────────
+        strategy_results, new_weights = _fit_lr_on_trade_list(trade_list, source_label)
+        _apply_lr_weights(new_weights)
+
+        results = {
+            "source":        source,
+            "months":        months,
+            "universe":      universe,
+            "strategies":    strategy_results,
+            "weights":       new_weights,
+            "total_entries": total_count,
+            "completed_at":  datetime.now().isoformat(),
+        }
+
+        try:
+            with open(LR_CALIBRATION_FILE, "w") as f:
+                json.dump(results, f, indent=2)
+        except Exception as e:
+            print(f"  [LR] Save failed: {e}")
+
+        strats_ok = [s for s, r in strategy_results.items() if r.get("status") == "ok"]
+        with _lr_lock:
+            _lr_state.update(running=False, stage="Complete", results=results)
+        print(f"  [LR] Done — {total_count} samples, models fitted: {strats_ok}")
+
+    except Exception as e:
+        with _lr_lock:
+            _lr_state.update(running=False, stage=f"Error: {e}")
+        print(f"  [LR] Fatal error: {e}")
+
+
+def _aggregate_hold_sweep(all_trades):
+    """
+    Given a list of backtest trades that each have a 'pnl_path' dict
+    (day → P&L %), aggregate avg P&L, win rate, and trade count for
+    every strategy × interval combination.
+    """
+    results = {}
+    for strat in ("buy_call", "buy_put", "sell_put"):
+        strat_trades = [t for t in all_trades if t.get("strategy") == strat]
+        if not strat_trades:
+            continue
+        by_day = {}
+        for d in HOLD_SWEEP_INTERVALS:
+            vals = [t["pnl_path"][d] for t in strat_trades
+                    if d in t.get("pnl_path", {})]
+            if not vals:
+                continue
+            by_day[d] = {
+                "n":        len(vals),
+                "avg_pnl":  round(float(np.mean(vals)), 2),
+                "win_rate": round(float(np.mean([1 if v > 0 else 0 for v in vals])) * 100, 1),
+                "p25":      round(float(np.percentile(vals, 25)), 1),
+                "p75":      round(float(np.percentile(vals, 75)), 1),
+            }
+        if by_day:
+            # Optimal day = highest avg_pnl
+            optimal_day = max(by_day, key=lambda d: by_day[d]["avg_pnl"])
+            results[strat] = {
+                "n_trades":   len(strat_trades),
+                "by_day":     {str(k): v for k, v in by_day.items()},
+                "optimal_day": optimal_day,
+            }
+    return results
+
+
+def _run_hold_sweep_job(months=12, universe="focus"):
+    """
+    Background job for Hold Horizon Analysis.
+    Downloads history for the chosen universe, runs the backtest with
+    record_path=True to capture P&L at every HOLD_SWEEP_INTERVALS checkpoint,
+    then aggregates into per-strategy curves.
+    """
+    global _hs_state
+    from datetime import datetime as _dt
+
+    with _hs_lock:
+        _hs_state.update(running=True, stage="Downloading tickers…", results=None)
+
+    try:
+        # ── Get ticker list ──────────────────────────────────────────
+        if universe == "snp500":
+            tickers = _get_snp500_tickers()
+        else:
+            tickers = FOCUS_LIST[:]
+        if not tickers:
+            with _hs_lock:
+                _hs_state.update(running=False, stage="No tickers found")
+            return
+
+        cutoff = pd.Timestamp.today() - pd.DateOffset(months=months)
+
+        with _hs_lock:
+            _hs_state["stage"] = f"Analysing {len(tickers)} tickers…"
+
+        all_trades = []
+        done = 0
+
+        def _sweep_one(tkr):
+            try:
+                h = yf.Ticker(tkr).history(period="2y")
+                if h.empty or len(h) < 120:
+                    return []
+                h = h[h.index >= cutoff]
+                if len(h) < 60:
+                    return []
+                pc = _precompute_indicators(h)
+                return run_backtest_ticker(
+                    tkr, hold_days=21, hist=h, precomp=pc, record_path=True
+                )
+            except Exception:
+                return []
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            futs = {ex.submit(_sweep_one, t): t for t in tickers}
+            for fut in as_completed(futs):
+                done += 1
+                trades = fut.result()
+                all_trades.extend(trades)
+                if done % 20 == 0 or done == len(tickers):
+                    pct = int(done / len(tickers) * 100)
+                    with _hs_lock:
+                        _hs_state["stage"] = (
+                            f"Processed {done}/{len(tickers)} tickers "
+                            f"({pct}%)  — {len(all_trades):,} trades so far"
+                        )
+
+        if not all_trades:
+            with _hs_lock:
+                _hs_state.update(running=False, stage="No trades produced — try a longer window")
+            return
+
+        agg = _aggregate_hold_sweep(all_trades)
+        result = {
+            "completed_at": _dt.now().isoformat(),
+            "months":       months,
+            "universe":     universe,
+            "n_trades":     len(all_trades),
+            "intervals":    HOLD_SWEEP_INTERVALS,
+            "by_strategy":  agg,
+        }
+        with _hs_lock:
+            _hs_state.update(running=False,
+                             stage=f"Done — {len(all_trades):,} trades analysed",
+                             results=result)
+
+    except Exception as e:
+        with _hs_lock:
+            _hs_state.update(running=False, stage=f"Error: {e}", results=None)
+
+
+def _load_lr_calibration_on_startup():
+    """Restore saved LR calibration weights from disk on startup."""
+    global _cal_weights
+    if not os.path.exists(LR_CALIBRATION_FILE):
+        return
+    try:
+        with open(LR_CALIBRATION_FILE) as f:
+            data = json.load(f)
+        with _lr_lock:
+            _lr_state["results"] = data
+        weights = data.get("weights", {})
+        if weights:
+            merged = {k: dict(v) for k, v in _cal_weights.items()}
+            for strat, w in weights.items():
+                if strat not in merged:
+                    merged[strat] = {}
+                merged[strat].update(w)
+            _cal_weights = merged
+            print(f"  [LR] Loaded LR weights (run: {data.get('completed_at','?')[:10]})")
+    except Exception as e:
+        print(f"  [LR] Could not load {LR_CALIBRATION_FILE}: {e}")
+
+
+def _load_bt_results():
+    """Restore last backtest results from disk on startup."""
+    if not os.path.exists(BT_FILE):
+        return
+    try:
+        with open(BT_FILE) as f:
+            data = json.load(f)
+        with _bt_lock:
+            _bt_state["results"] = data
+            _bt_state["stage"]   = f"Loaded from disk ({data.get('completed_at','')[:10]})"
+        print(f"  [Backtest] Loaded results from {BT_FILE} "
+              f"({data.get('tickers_used','?')} tickers, "
+              f"{len(data.get('trades',[]))} trades)")
+    except Exception as e:
+        print(f"  [Backtest] Could not load {BT_FILE}: {e}")
+
+
+def _load_calibration_on_startup():
+    """Restore saved calibration weights from disk on startup."""
+    global _cal_weights
+    if not os.path.exists(CALIBRATION_FILE):
+        return
+    try:
+        with open(CALIBRATION_FILE) as f:
+            data = json.load(f)
+        with _cal_lock:
+            _cal_state["results"] = data
+            _cal_state["stage"]   = f"Loaded from disk ({data.get('completed_at','')[:10]})"
+        weights = data.get("weights", {})
+        if weights:
+            _cal_weights = weights
+            print(f"  [CAL] Loaded calibration weights (run: {data.get('completed_at','?')[:10]})")
+    except Exception as e:
+        print(f"  [CAL] Could not load calibration_data.json: {e}")
+
+
+# ══════════════════════════════════════════════════════════════
+#  UNBIASED SIGNAL LOG
+#  Every recommendation the bot generates is logged automatically,
+#  regardless of whether the user trades it.  After a hold period
+#  each entry is resolved against the actual stock price so the
+#  calibration engine can learn from ALL signals — not just the
+#  ones the user chose to enter.
+# ══════════════════════════════════════════════════════════════
+
+_signal_log_lock = threading.Lock()
+
+def _load_signal_log() -> list:
+    """Load signal log from disk.  Returns [] on any error."""
+    if not os.path.exists(SIGNAL_LOG_FILE):
+        return []
+    try:
+        with open(SIGNAL_LOG_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_signal_log(entries: list):
+    """Overwrite signal log on disk.  Silently drops oldest entries beyond 5 000."""
+    try:
+        # Keep most-recent 5 000 entries (resolved first, then pending)
+        resolved = [e for e in entries if e.get("resolved")]
+        pending  = [e for e in entries if not e.get("resolved")]
+        trimmed  = pending + resolved[-max(0, 5000 - len(pending)):]
+        with open(SIGNAL_LOG_FILE, "w") as f:
+            json.dump(trimmed, f, indent=2)
+    except Exception as e:
+        print(f"  [SigLog] Save failed: {e}")
+
+
+def _log_new_signals(totals: dict):
+    """
+    Called at the end of every scan.  Appends one entry per new recommendation
+    to the signal log.  Entries that already exist for the same ticker+strategy
+    within the last 3 days are skipped (avoids duplicates from live-refresh).
+    """
+    try:
+        entries    = _load_signal_log()
+        now_str    = datetime.now().isoformat()
+        today      = datetime.now().date()
+        # Strategy-aware resolution windows:
+        # Directional plays (buy call/put) move fast — 7 days captures the initial move.
+        # Premium-selling (sell put, covered call) needs more time to decay — 21 days.
+        HOLD_DAYS_BY_STRAT = {
+            "sell_put":     21,
+            "buy_call":      7,
+            "buy_put":       7,
+            "covered_call": 21,
+            "iron_condor":  14,
+        }
+
+        # Build a quick dedup set: (ticker, strategy, date[:10])
+        recent_keys = {
+            (e["ticker"], e["strategy"], e["signal_date"][:10])
+            for e in entries
+            if not e.get("resolved")
+        }
+
+        STRAT_MAP = {
+            "sell_puts":     "sell_put",
+            "buy_calls":     "buy_call",
+            "buy_puts":      "buy_put",
+            "covered_calls": "covered_call",
+            "iron_condors":  "iron_condor",
+        }
+
+        added = 0
+        for bucket, strat_key in STRAT_MAP.items():
+            hold_days  = HOLD_DAYS_BY_STRAT.get(strat_key, 7)
+            check_date = (datetime.now() + pd.DateOffset(days=hold_days)).date().isoformat()
+            for rec in totals.get(bucket, []):
+                ticker = rec.get("ticker", "")
+                key    = (ticker, strat_key, str(today))
+                if key in recent_keys:
+                    continue
+                entry = {
+                    "id":           str(uuid.uuid4()),
+                    "ticker":       ticker,
+                    "strategy":     strat_key,
+                    "signal_date":  now_str,
+                    "check_after":  check_date,
+                    "hold_days":    hold_days,
+                    "price_at_signal": rec.get("price"),
+                    "rsi_at_signal":   rec.get("rsi"),
+                    "score":           rec.get("score"),
+                    "vix_regime":      rec.get("vix_regime"),
+                    # Individual signal flags (for per-signal quality analysis)
+                    "sig_rsi_os":    rec.get("rsi", 100) < 30,
+                    "sig_bb_low":    rec.get("price", 0) < rec.get("bb_lower", 0),
+                    "sig_rsi_ob":    rec.get("rsi", 0) > 70,
+                    "sig_bb_high":   rec.get("price", 0) > rec.get("bb_upper", 0),
+                    "sig_macd_bull": rec.get("macd_bull", False),
+                    "sig_macd_bear": rec.get("macd_bear", False),
+                    "sig_reversal":  rec.get("reversal_up", False),
+                    "sig_vol_ok":    rec.get("vol_confirmed", False),
+                    "sig_mfi_os":    rec.get("sig_mfi_os", False),
+                    "sig_mfi_ob":    rec.get("sig_mfi_ob", False),
+                    "resolved":      False,
+                    "outcome":       None,
+                }
+                entries.append(entry)
+                recent_keys.add(key)
+                added += 1
+
+        if added:
+            with _signal_log_lock:
+                _save_signal_log(entries)
+            print(f"  [SigLog] Logged {added} new recommendations")
+    except Exception as e:
+        print(f"  [SigLog] Logging failed: {e}")
+
+
+def _resolve_signal_log():
+    """
+    Background job: for each unresolved signal log entry whose check_after
+    date has passed, fetch the current stock price and compute the outcome.
+    Runs every 6 hours via the scheduler.
+    """
+    try:
+        with _signal_log_lock:
+            entries = _load_signal_log()
+
+        today     = datetime.now().date()
+        to_check  = [
+            e for e in entries
+            if not e.get("resolved")
+            and e.get("check_after")
+            and datetime.strptime(e["check_after"][:10], "%Y-%m-%d").date() <= today
+        ]
+
+        if not to_check:
+            return
+
+        # Batch by ticker to minimise API calls
+        ticker_groups: dict = {}
+        for e in to_check:
+            ticker_groups.setdefault(e["ticker"], []).append(e)
+
+        resolved_count = 0
+        for sym, group in ticker_groups.items():
+            try:
+                hist = yf.Ticker(sym).history(period="5d")
+                if hist.empty:
+                    continue
+                cur_price = float(hist["Close"].iloc[-1])
+                for e in group:
+                    entry_price = e.get("price_at_signal")
+                    if not entry_price or entry_price <= 0:
+                        e["resolved"] = True
+                        e["outcome"]  = "no_price"
+                        continue
+                    stock_return_pct = round((cur_price - entry_price) / entry_price * 100, 2)
+                    strat = e.get("strategy", "")
+                    if strat == "buy_call":
+                        win = stock_return_pct > 3.0
+                    elif strat == "buy_put":
+                        win = stock_return_pct < -3.0
+                    elif strat in ("sell_put", "covered_call"):
+                        win = stock_return_pct > -5.0   # stock stayed stable/up
+                    else:
+                        win = stock_return_pct > 0
+                    e["resolved"]          = True
+                    e["resolved_at"]       = datetime.now().isoformat()
+                    e["price_at_resolve"]  = round(cur_price, 2)
+                    e["stock_return_pct"]  = stock_return_pct
+                    e["win"]               = win
+                    e["outcome"]           = "win" if win else "loss"
+                    resolved_count        += 1
+            except Exception as ex:
+                print(f"  [SigLog] Resolve error for {sym}: {ex}")
+
+        if resolved_count:
+            with _signal_log_lock:
+                _save_signal_log(entries)
+            print(f"  [SigLog] Resolved {resolved_count} entries")
+    except Exception as e:
+        print(f"  [SigLog] Resolve job failed: {e}")
+
+
+def _signal_log_summary() -> dict:
+    """Return aggregate stats from the signal log for the calibration display."""
+    try:
+        entries   = _load_signal_log()
+        resolved  = [e for e in entries if e.get("resolved") and e.get("outcome") not in (None, "no_price")]
+        pending   = [e for e in entries if not e.get("resolved")]
+        if not resolved:
+            return {"resolved": 0, "pending": len(pending), "by_strategy": {}, "sig_quality": []}
+
+        by_strat: dict = {}
+        for strat in ("buy_call", "buy_put", "sell_put", "covered_call"):
+            st = [e for e in resolved if e.get("strategy") == strat]
+            if st:
+                wins = [e for e in st if e.get("win")]
+                by_strat[strat] = {
+                    "count":    len(st),
+                    "win_rate": round(len(wins) / len(st) * 100, 1),
+                }
+
+        # Per-signal quality using actual live recommendations
+        SIGNAL_LABELS = {
+            "sig_rsi_os":    "RSI Oversold",
+            "sig_bb_low":    "Below BB Lower",
+            "sig_reversal":  "RSI Turning Up",
+            "sig_macd_bull": "MACD Bull Cross",
+            "sig_vol_ok":    "Volume Confirmed",
+            "sig_rsi_ob":    "RSI Overbought",
+            "sig_bb_high":   "Above BB Upper",
+            "sig_macd_bear": "MACD Bear Cross",
+        }
+        sig_rows = []
+        for flag, label in SIGNAL_LABELS.items():
+            subset = [e for e in resolved if e.get(flag)]
+            if len(subset) < 3:
+                continue
+            wins = [e for e in subset if e.get("win")]
+            sig_rows.append({
+                "signal":   label,
+                "count":    len(subset),
+                "win_rate": round(len(wins) / len(subset) * 100, 1),
+            })
+        sig_rows.sort(key=lambda x: x["win_rate"], reverse=True)
+
+        return {
+            "resolved":    len(resolved),
+            "pending":     len(pending),
+            "by_strategy": by_strat,
+            "sig_quality": sig_rows,
+        }
+    except Exception:
+        return {"resolved": 0, "pending": 0, "by_strategy": {}, "sig_quality": []}
+
+
+def _schedule_signal_log_resolver():
+    """Daemon thread: resolve pending signal log entries every 6 hours."""
+    import time as _time
+    _resolve_signal_log()   # run once immediately on startup
+    while True:
+        _time.sleep(6 * 3600)
+        _resolve_signal_log()
+
+
+# ══════════════════════════════════════════════════════════════
 #  LIVE REFRESH — re-checks only current signal tickers
 # ══════════════════════════════════════════════════════════════
 
@@ -3034,6 +4415,8 @@ def _run_scan(mode=None):
           f"buy_puts:{len(totals['buy_puts'])}  "
           f"covered_calls:{len(totals['covered_calls'])}  "
           f"iron_condors:{len(totals['iron_condors'])}")
+    # Log all recommendations to the unbiased signal log
+    threading.Thread(target=_log_new_signals, args=(totals,), daemon=True).start()
 
     # ── News enrichment (only for signal tickers, in parallel) ──
     signal_tickers = {r["ticker"] for strat in totals.values() for r in strat}
@@ -3569,6 +4952,160 @@ def api_optimizer_apply():
     applied.update(scan_state["wfo_params"])
     print(f"  [WFO] Applied best params: {applied}")
     return jsonify({"ok": True, "applied": applied})
+
+
+@app.route("/api/calibrate/run", methods=["POST"])
+def api_calibrate_run():
+    data   = request.get_json(silent=True) or {}
+    months = int(data.get("months", 12))
+    months = max(3, min(24, months))
+    universe = data.get("universe", "focus")   # "focus" | "snp500"
+    with _cal_lock:
+        if _cal_state["running"]:
+            return jsonify({"ok": False, "message": "Calibration already running"}), 409
+    t = threading.Thread(target=_run_calibration_job, args=(months, universe), daemon=True)
+    t.start()
+    return jsonify({"ok": True, "months": months, "universe": universe})
+
+
+@app.route("/api/calibrate/status")
+def api_calibrate_status():
+    with _cal_lock:
+        s = dict(_cal_state)
+    if s.get("results"):
+        r = s["results"]
+        s["completed_at"]  = r.get("completed_at")
+        s["total_trades"]  = r.get("total_trades")
+        s["tickers_used"]  = r.get("tickers_used")
+        s["months"]        = r.get("months")
+        del s["results"]
+    return jsonify(s)
+
+
+@app.route("/api/calibrate/results")
+def api_calibrate_results():
+    with _cal_lock:
+        r = _cal_state.get("results")
+    return jsonify(r or {})
+
+
+@app.route("/api/calibrate/logistic", methods=["POST"])
+def api_calibrate_logistic():
+    with _lr_lock:
+        if _lr_state["running"]:
+            return jsonify({"ok": False, "message": "Logistic calibration already running"}), 409
+    data     = request.get_json(silent=True) or {}
+    source   = data.get("source", "signal_log")   # "signal_log" | "backtest"
+    months   = max(3, min(24, int(data.get("months", 12))))
+    universe = data.get("universe", "snp500")
+    t = threading.Thread(target=_run_logistic_calibration,
+                         args=(source, months, universe), daemon=True)
+    t.start()
+    return jsonify({"ok": True, "source": source, "months": months, "universe": universe})
+
+
+@app.route("/api/calibrate/logistic/results")
+def api_calibrate_logistic_results():
+    with _lr_lock:
+        return jsonify({
+            "running": _lr_state.get("running", False),
+            "stage":   _lr_state.get("stage", "Idle"),
+            "results": _lr_state.get("results"),
+        })
+
+
+@app.route("/api/calibrate/hold-sweep", methods=["POST"])
+def api_hold_sweep():
+    with _hs_lock:
+        if _hs_state["running"]:
+            return jsonify({"error": "Already running"}), 409
+    data     = request.get_json(silent=True) or {}
+    months   = int(data.get("months", 12))
+    universe = data.get("universe", "focus")
+    t = threading.Thread(target=_run_hold_sweep_job,
+                         args=(months, universe), daemon=True)
+    t.start()
+    return jsonify({"started": True})
+
+
+@app.route("/api/calibrate/hold-sweep/results")
+def api_hold_sweep_results():
+    with _hs_lock:
+        return jsonify({
+            "running": _hs_state.get("running", False),
+            "stage":   _hs_state.get("stage", "Idle"),
+            "results": _hs_state.get("results"),
+        })
+
+
+@app.route("/api/signal-log/summary")
+def api_signal_log_summary():
+    return jsonify(_signal_log_summary())
+
+
+@app.route("/api/signal-log/entries")
+def api_signal_log_entries():
+    """Return recent signal log entries for display in the Calibrate tab."""
+    entries = _load_signal_log()
+    # Sort most recent first
+    entries.sort(key=lambda e: e.get("signal_date", ""), reverse=True)
+    # Return last 300 entries (enough for display, not too heavy)
+    out = []
+    for e in entries[:300]:
+        out.append({
+            "ticker":        e.get("ticker"),
+            "strategy":      e.get("strategy"),
+            "signal_date":   e.get("signal_date", "")[:10],
+            "check_after":   e.get("check_after", "")[:10],
+            "hold_days":     e.get("hold_days", 7),
+            "score":         e.get("score"),
+            "price":         e.get("price_at_signal"),
+            "vix_regime":    e.get("vix_regime"),
+            "resolved":      e.get("resolved", False),
+            "outcome":       e.get("outcome"),
+            "win":           e.get("win"),
+            "stock_return":  e.get("stock_return_pct"),
+        })
+    return jsonify({"entries": out, "total": len(entries)})
+
+
+@app.route("/api/vix/regime")
+def api_vix_regime():
+    vix    = get_vix()
+    regime = vix_regime(vix)
+    if regime == "high":
+        rsi_os  = max(RSI_OVERSOLD   - 5, 20)
+        rsi_ob  = min(RSI_OVERBOUGHT + 5, 80)
+        desc    = "High volatility — stocks can stay oversold longer; requiring more extreme RSI"
+        color   = "#ef4444"
+        icon    = "🔴"
+    elif regime == "low":
+        rsi_os  = RSI_OVERSOLD  + 2
+        rsi_ob  = RSI_OVERBOUGHT - 2
+        desc    = "Low volatility — options are cheap; thresholds slightly relaxed"
+        color   = "#22c55e"
+        icon    = "🟢"
+    else:
+        rsi_os  = RSI_OVERSOLD
+        rsi_ob  = RSI_OVERBOUGHT
+        desc    = "Normal conditions — standard thresholds active"
+        color   = "#f59e0b"
+        icon    = "🟡"
+    with _cal_lock:
+        cal_results = _cal_state.get("results")
+    return jsonify({
+        "vix":           vix,
+        "regime":        regime,
+        "icon":          icon,
+        "color":         color,
+        "description":   desc,
+        "rsi_oversold":  rsi_os,
+        "rsi_overbought":rsi_ob,
+        "base_rsi_os":   RSI_OVERSOLD,
+        "base_rsi_ob":   RSI_OVERBOUGHT,
+        "cal_active":    bool(_cal_weights),
+        "cal_date":      (cal_results or {}).get("completed_at", "")[:10] if cal_results else "",
+    })
 
 
 @app.route("/api/debug/scan/<sym>")
@@ -4526,6 +6063,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
   <div class="tab" onclick="switchTab('backtest')">📈 Backtest</div>
   <div class="tab" onclick="switchTab('bsmodel')">⚖️ B-S Model</div>
   <div class="tab" onclick="switchTab('performance')">📊 Performance</div>
+  <div class="tab" onclick="switchTab('calibrate')">🎯 Calibrate</div>
 </div>
 
 <!-- PANELS -->
@@ -4965,6 +6503,333 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
     </div>
   </div>
 </div>
+
+<!-- ══════════════════════════════════════════════════════════
+     CALIBRATE PANEL
+     ══════════════════════════════════════════════════════════ -->
+<div class="panel" id="panel-calibrate">
+  <div style="padding:24px;max-width:1000px;margin:0 auto">
+    <h2 style="color:var(--accent);font-size:18px;margin-bottom:4px">🎯 Signal Calibration</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:24px">
+      Trains the bot on recent market data to learn which signals have actually predicted
+      profitable moves. Scores update automatically once calibration completes.
+    </p>
+
+    <!-- VIX Regime Card -->
+    <div id="cal-regime-card" style="background:var(--surface2);border-radius:14px;
+         padding:18px 20px;border:1px solid var(--border);margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div style="font-size:28px" id="cal-regime-icon">⏳</div>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:700;color:var(--text)" id="cal-regime-label">Loading regime…</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px" id="cal-regime-desc"></div>
+        </div>
+        <div style="display:flex;gap:24px;flex-wrap:wrap">
+          <div style="text-align:center">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">VIX</div>
+            <div id="cal-vix-val" style="font-size:20px;font-weight:800;color:var(--text)">—</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Active RSI OS</div>
+            <div id="cal-rsi-os" style="font-size:20px;font-weight:800;color:var(--text)">—</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Active RSI OB</div>
+            <div id="cal-rsi-ob" style="font-size:20px;font-weight:800;color:var(--text)">—</div>
+          </div>
+        </div>
+      </div>
+      <div id="cal-threshold-note" style="margin-top:10px;font-size:11px;
+           color:var(--muted);padding-top:10px;border-top:1px solid var(--border)"></div>
+    </div>
+
+    <!-- Run Calibration -->
+    <div style="background:var(--surface2);border-radius:14px;padding:18px 20px;
+         border:1px solid var(--border);margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px">
+            📡 Run Signal Calibration
+          </div>
+          <div style="font-size:12px;color:var(--muted)">
+            Backtests every signal combination over your chosen window using free historical data.
+            Takes ~2–3 minutes. Re-run monthly to keep weights current.
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <select id="cal-months" style="background:var(--surface);border:1px solid var(--border);
+                  color:var(--text);border-radius:8px;padding:6px 10px;font-size:13px">
+            <option value="6">6 months</option>
+            <option value="12" selected>12 months</option>
+            <option value="18">18 months</option>
+            <option value="24">24 months</option>
+          </select>
+          <select id="cal-universe" style="background:var(--surface);border:1px solid var(--border);
+                  color:var(--text);border-radius:8px;padding:6px 10px;font-size:13px">
+            <option value="focus">Focus List (~70 stocks, fast)</option>
+            <option value="snp500">S&amp;P 500 (500 stocks, ~10 min)</option>
+          </select>
+          <button id="cal-run-btn" class="btn btn-primary" onclick="runCalibration()"
+                  style="white-space:nowrap">🔬 Run Calibration</button>
+          <select id="lr-source" style="background:var(--surface);border:1px solid var(--border);
+                  color:var(--text);border-radius:8px;padding:6px 10px;font-size:13px"
+                  onchange="document.getElementById('lr-hist-opts').style.display=this.value==='backtest'?'flex':'none'">
+            <option value="signal_log">🧠 Smart: Live Signal Log</option>
+            <option value="backtest">🧠 Smart: Historical Backtest</option>
+          </select>
+          <span id="lr-hist-opts" style="display:none;align-items:center;gap:6px;flex-wrap:wrap">
+            <select id="lr-months" style="background:var(--surface);border:1px solid var(--border);
+                    color:var(--text);border-radius:8px;padding:6px 10px;font-size:13px">
+              <option value="6">6 months</option>
+              <option value="12" selected>12 months</option>
+              <option value="18">18 months</option>
+            </select>
+            <select id="lr-universe" style="background:var(--surface);border:1px solid var(--border);
+                    color:var(--text);border-radius:8px;padding:6px 10px;font-size:13px">
+              <option value="snp500" selected>S&amp;P 500</option>
+              <option value="focus">Focus List</option>
+            </select>
+          </span>
+          <button id="cal-lr-btn" class="btn" onclick="runLogisticCalibration()"
+                  style="white-space:nowrap;background:var(--surface);border:1px solid var(--accent);
+                         color:var(--accent)">
+            🧠 Smart Calibrate
+          </button>
+        </div>
+      </div>
+      <div id="cal-progress-wrap" style="display:none">
+        <div style="height:6px;background:var(--surface);border-radius:3px;overflow:hidden;margin-bottom:6px">
+          <div id="cal-progress-bar" style="height:100%;background:var(--accent);
+               width:0%;transition:width .4s;border-radius:3px"></div>
+        </div>
+        <div id="cal-status-text" style="font-size:12px;color:var(--muted)">Starting…</div>
+      </div>
+      <div id="cal-last-run" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+    </div>
+
+    <!-- Signal Win Rates -->
+    <div id="cal-results-wrap" style="display:none">
+
+      <!-- Simulated signal quality -->
+      <div style="background:var(--surface2);border-radius:14px;padding:18px 20px;
+           border:1px solid var(--border);margin-bottom:20px">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px">
+          📊 Signal Win Rates <span style="font-size:11px;font-weight:400;color:var(--muted)" id="cal-sim-meta"></span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:14px">
+          How often each signal predicted a profitable move over the last
+          <span id="cal-months-label">12</span> months.
+          Signals scoring ≥60% boost live scores; &lt;40% reduce them.
+        </div>
+        <div id="cal-signal-rows"></div>
+      </div>
+
+      <!-- Logistic Regression Weights card (shown after Smart Calibrate) -->
+      <div id="cal-lr-wrap" style="display:none;background:var(--surface2);border-radius:14px;
+           padding:18px 20px;border:1px solid var(--accent);margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap">
+          <div style="font-size:13px;font-weight:700;color:var(--accent)">🧠 Smart Calibration — Logistic Regression Weights</div>
+          <div style="margin-left:auto;font-size:11px;color:var(--muted)" id="cal-lr-meta"></div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
+          Signals weighted by their <em>joint</em> predictive power across your actual bot recommendations.
+          Unlike individual win-rates, this accounts for signal interactions — e.g. RSI oversold
+          is far more valuable <em>when combined with</em> MACD bull cross.
+          Bars &gt; 1.0× = signal helps when others are present; &lt; 1.0× = signal is redundant or harmful in context.
+        </div>
+        <div id="cal-lr-status" style="font-size:12px;color:var(--muted);margin-bottom:10px"></div>
+        <div id="cal-lr-rows"></div>
+      </div>
+
+      <!-- Per-strategy sim summary -->
+      <div style="background:var(--surface2);border-radius:14px;padding:18px 20px;
+           border:1px solid var(--border);margin-bottom:20px">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:14px">
+          📈 Simulated Strategy Performance
+        </div>
+        <div id="cal-strat-rows" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px"></div>
+      </div>
+
+      <!-- Live signal log (unbiased) -->
+      <div style="background:var(--surface2);border-radius:14px;
+           padding:18px 20px;border:1px solid var(--border);margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;flex-wrap:wrap">
+          <div style="font-size:13px;font-weight:700;color:var(--text);cursor:pointer;user-select:none"
+               onclick="toggleSigLog()" title="Click to collapse/expand">
+            📡 All Bot Recommendations <span id="siglog-chevron" style="font-size:11px;color:var(--muted)">▼</span>
+          </div>
+          <div style="font-size:11px;color:var(--muted)">
+            Every signal the bot has generated — whether you traded it or not
+          </div>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px">
+              Show
+              <select id="siglog-rows-select" onchange="rerenderSigLog()"
+                      style="background:var(--surface);border:1px solid var(--border);
+                             color:var(--text);border-radius:6px;padding:2px 6px;font-size:11px">
+                <option value="10">10</option>
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="0">All</option>
+              </select>
+              rows
+            </label>
+            <div style="font-size:11px;color:var(--muted)" id="cal-siglog-meta"></div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:14px" id="cal-siglog-notice"></div>
+
+        <div id="siglog-body-wrap">
+          <!-- Win rate bars (only shown once enough entries are resolved) -->
+          <div id="cal-siglog-quality-wrap" style="display:none;margin-bottom:16px">
+            <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;
+                 letter-spacing:.5px;margin-bottom:8px">Signal Win Rates (from live recommendations)</div>
+            <div id="cal-siglog-rows"></div>
+          </div>
+
+          <!-- Recommendations table -->
+          <div style="overflow-x:auto">
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead>
+                <tr style="border-bottom:1px solid var(--border)">
+                  <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Date</th>
+                  <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Ticker</th>
+                  <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Strategy</th>
+                  <th style="text-align:right;padding:6px 8px;color:var(--muted);font-weight:600">Score</th>
+                  <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">VIX</th>
+                  <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Resolves</th>
+                  <th style="text-align:right;padding:6px 8px;color:var(--muted);font-weight:600">Return</th>
+                  <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Outcome</th>
+                </tr>
+              </thead>
+              <tbody id="cal-siglog-tbody">
+                <tr><td colspan="8" style="padding:20px;text-align:center;color:var(--muted)">
+                  Run a scan to start logging recommendations
+                </td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Actual user trades -->
+      <div id="cal-actual-wrap" style="background:var(--surface2);border-radius:14px;
+           padding:18px 20px;border:1px solid var(--border);margin-bottom:20px;display:none">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:14px">
+          🏆 Your Actual Trades
+          <span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:6px">
+            Real closed trades from your Performance log — weighted more heavily than simulations
+          </span>
+        </div>
+        <div id="cal-actual-rows" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px"></div>
+      </div>
+
+    </div><!-- /cal-results-wrap -->
+
+    <!-- ─────────────────────────────────────────────────────────
+         HOLD HORIZON ANALYSIS
+         ───────────────────────────────────────────────────────── -->
+    <div style="background:var(--surface2);border-radius:14px;
+         padding:18px 20px;border:1px solid var(--border);margin-bottom:20px">
+      <div style="display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:12px">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px">
+            ⏱️ Hold Horizon Analysis
+          </div>
+          <div style="font-size:12px;color:var(--muted)">
+            Runs the backtest but records option P&amp;L at 1, 2, 3, 5, 7, 10, 14 and 21 day
+            checkpoints so you can see exactly when each strategy peaks — and whether you're
+            leaving money on the table by holding too long.
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <select id="hs-universe"
+                  style="background:var(--surface);border:1px solid var(--border);
+                         color:var(--text);border-radius:8px;padding:6px 10px;font-size:13px">
+            <option value="focus">Focus List (~70 stocks, fast)</option>
+            <option value="snp500">S&amp;P 500 (500 stocks, ~10 min)</option>
+          </select>
+          <select id="hs-months"
+                  style="background:var(--surface);border:1px solid var(--border);
+                         color:var(--text);border-radius:8px;padding:6px 10px;font-size:13px">
+            <option value="6">6 months</option>
+            <option value="12" selected>12 months</option>
+            <option value="18">18 months</option>
+          </select>
+          <button id="hs-run-btn" class="btn btn-primary" onclick="runHoldSweep()"
+                  style="white-space:nowrap">⏱️ Run Analysis</button>
+        </div>
+      </div>
+
+      <!-- Progress bar -->
+      <div id="hs-progress-wrap" style="display:none;margin-bottom:12px">
+        <div style="height:6px;background:var(--surface);border-radius:3px;overflow:hidden;margin-bottom:4px">
+          <div id="hs-progress-bar"
+               style="height:100%;background:var(--accent);width:30%;border-radius:3px;
+                      animation:pulse-bar 1.4s ease-in-out infinite"></div>
+        </div>
+        <div id="hs-status-text" style="font-size:12px;color:var(--muted)">Starting…</div>
+      </div>
+
+      <!-- Results -->
+      <div id="hs-results-wrap" style="display:none">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:12px" id="hs-meta"></div>
+
+        <!-- Chart -->
+        <div style="position:relative;height:280px;margin-bottom:16px">
+          <canvas id="hs-chart"></canvas>
+        </div>
+
+        <!-- Summary table -->
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px" id="hs-table">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Strategy</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">1d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">2d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">3d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">5d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">7d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">10d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">14d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">21d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--accent);font-weight:700">🏆 Best</th>
+              </tr>
+            </thead>
+            <tbody id="hs-tbody"></tbody>
+          </table>
+        </div>
+
+        <!-- Win-rate table -->
+        <div style="margin-top:12px;overflow-x:auto">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);
+               text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">
+            Win Rate % at Each Hold Duration
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px" id="hs-wr-table">
+            <thead>
+              <tr style="border-bottom:1px solid var(--border)">
+                <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Strategy</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">1d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">2d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">3d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">5d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">7d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">10d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">14d</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">21d</th>
+              </tr>
+            </thead>
+            <tbody id="hs-wr-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div><!-- /panel-calibrate -->
 
 <script>
 // ── State ──────────────────────────────────────────────────────
@@ -5719,7 +7584,9 @@ function buildMCSection(d, id) {
 }
 
 // ── Position sizing ────────────────────────────────────────────
-let _riskBudget = 0;   // loaded from backend on startup
+let _riskBudget    = 0;    // loaded from backend on startup
+let _stopLossPct   = 15;   // mirrors SELL_STOP_LOSS,   loaded from /api/config/risk-budget
+let _profitTgtPct  = 30;   // mirrors SELL_PROFIT_TARGET, loaded from /api/config/risk-budget
 
 function buildSizingBlock(d, id, opt, sid, isCondor) {
   if (!_riskBudget || _riskBudget <= 0) return '';
@@ -5731,8 +7598,8 @@ function buildSizingBlock(d, id, opt, sid, isCondor) {
 
   if (costPerContract <= 0) return '';
 
-  const stopPct     = ${SELL_STOP_LOSS} / 100;   // e.g. 0.15
-  const profitPct   = ${SELL_PROFIT_TARGET} / 100; // e.g. 0.30
+  const stopPct   = _stopLossPct  / 100;
+  const profitPct = _profitTgtPct / 100;
   const maxLossPerContract = costPerContract * stopPct;
   const maxProfitPerContract = costPerContract * profitPct;
 
@@ -5763,33 +7630,33 @@ function buildSizingBlock(d, id, opt, sid, isCondor) {
     }
   }, 0);
 
-  return \`
+  return `
   <div style="border-top:1px solid var(--border);padding:12px 16px;
               background:rgba(167,139,250,0.05)">
     <div style="font-size:10px;color:var(--muted);text-transform:uppercase;
-                letter-spacing:.6px;margin-bottom:10px">💰 Position Sizing (budget $\${_riskBudget})</div>
+                letter-spacing:.6px;margin-bottom:10px">💰 Position Sizing (budget $${_riskBudget})</div>
     <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
       <div style="display:flex;flex-direction:column;gap:2px">
         <span style="font-size:10px;color:var(--muted)">Recommended</span>
-        <span style="font-size:18px;font-weight:800;color:var(--text)">\${recommended} contract\${recommended!==1?'s':''}</span>
+        <span style="font-size:18px;font-weight:800;color:var(--text)">${recommended} contract${recommended!==1?'s':''}</span>
       </div>
       <div style="display:flex;flex-direction:column;gap:2px">
         <span style="font-size:10px;color:var(--muted)">Total spend</span>
-        <span style="font-size:14px;font-weight:700;color:var(--text)">$\${actualSpend.toFixed(2)}</span>
+        <span style="font-size:14px;font-weight:700;color:var(--text)">$${actualSpend.toFixed(2)}</span>
       </div>
       <div style="display:flex;flex-direction:column;gap:2px">
-        <span style="font-size:10px;color:var(--muted)">Max loss (${SELL_STOP_LOSS}% stop)</span>
-        <span style="font-size:14px;font-weight:700;color:var(--red)">-$\${actualMaxLoss.toFixed(2)}</span>
+        <span style="font-size:10px;color:var(--muted)">Max loss (${_stopLossPct}% stop)</span>
+        <span style="font-size:14px;font-weight:700;color:var(--red)">-$${actualMaxLoss.toFixed(2)}</span>
       </div>
       <div style="display:flex;flex-direction:column;gap:2px">
-        <span style="font-size:10px;color:var(--muted)">Max profit (${SELL_PROFIT_TARGET}% target)</span>
-        <span style="font-size:14px;font-weight:700;color:var(--green)">+$\${actualMaxProfit.toFixed(2)}</span>
+        <span style="font-size:10px;color:var(--muted)">Max profit (${_profitTgtPct}% target)</span>
+        <span style="font-size:14px;font-weight:700;color:var(--green)">+$${actualMaxProfit.toFixed(2)}</span>
       </div>
       <div style="margin-left:auto">
-        <span style="font-size:12px;font-weight:600;color:\${badgeColor}">\${badge}</span>
+        <span style="font-size:12px;font-weight:600;color:${badgeColor}">${badge}</span>
       </div>
     </div>
-  </div>\`;
+  </div>`;
 }
 
 async function setRiskBudget(val) {
@@ -5809,7 +7676,9 @@ async function setRiskBudget(val) {
 async function initRiskBudget() {
   try {
     const d = await fetch('/api/config/risk-budget').then(r => r.json());
-    _riskBudget = d.risk_budget || 0;
+    _riskBudget   = d.risk_budget       || 0;
+    _stopLossPct  = d.stop_loss_pct     || 15;
+    _profitTgtPct = d.profit_target_pct || 30;
     if (_riskBudget > 0) {
       document.getElementById('risk-budget-input').value = _riskBudget;
     }
@@ -7130,7 +8999,607 @@ window.onload = async () => {
   document.getElementById('cnt-tracked').textContent = tracked.length;
   // Auto-refresh tracked tab every 60s if it's active
   setInterval(()=>{ if(activeTab==='tracked') refreshTracked(); }, 60000);
+  // Load VIX regime on startup
+  loadCalRegime();
+  // Load any saved calibration results and signal log stats
+  loadCalResults();
+  loadSignalLogStats();
 };
+
+// ── Calibration ───────────────────────────────────────────────
+let calPoll = null;
+
+async function loadCalRegime() {
+  try {
+    const d = await fetch('/api/vix/regime').then(r => r.json());
+    document.getElementById('cal-regime-icon').textContent  = d.icon  || '⚪';
+    document.getElementById('cal-regime-label').textContent =
+      `${d.icon} VIX Regime: ${(d.regime || 'unknown').toUpperCase()}`;
+    document.getElementById('cal-regime-label').style.color = d.color || 'var(--text)';
+    document.getElementById('cal-regime-desc').textContent  = d.description || '';
+    document.getElementById('cal-vix-val').textContent      = d.vix != null ? d.vix.toFixed(1) : '—';
+    document.getElementById('cal-rsi-os').textContent       = d.rsi_oversold  != null ? d.rsi_oversold  : '—';
+    document.getElementById('cal-rsi-ob').textContent       = d.rsi_overbought != null ? d.rsi_overbought : '—';
+
+    const baseOs = d.base_rsi_os;
+    const baseOb = d.base_rsi_ob;
+    const adjOs  = d.rsi_oversold;
+    const adjOb  = d.rsi_overbought;
+    let note = '';
+    if (adjOs !== baseOs || adjOb !== baseOb) {
+      note = `Thresholds adjusted from defaults (OS: ${baseOs} → ${adjOs}, OB: ${baseOb} → ${adjOb}) due to ${d.regime} VIX environment.`;
+    } else {
+      note = `Thresholds at defaults (OS: ${baseOs}, OB: ${baseOb}) — no VIX adjustment needed.`;
+    }
+    if (d.cal_active) note += '  •  🎯 Calibration weights active — signal scores adjusted.';
+    if (d.cal_date)   note += `  Last calibrated: ${d.cal_date}.`;
+    document.getElementById('cal-threshold-note').textContent = note;
+  } catch(e) {
+    console.error('loadCalRegime:', e);
+  }
+}
+
+async function runCalibration() {
+  const months   = parseInt(document.getElementById('cal-months').value) || 12;
+  const universe = document.getElementById('cal-universe').value;
+  const btn      = document.getElementById('cal-run-btn');
+  btn.disabled = true; btn.textContent = '⏳ Running…';
+  document.getElementById('cal-progress-wrap').style.display = 'block';
+  document.getElementById('cal-status-text').textContent = 'Starting calibration…';
+  document.getElementById('cal-results-wrap').style.display = 'none';
+
+  const r = await fetch('/api/calibrate/run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({months, universe})
+  });
+  if (!r.ok) {
+    const err = await r.json();
+    alert(err.message || 'Calibration error');
+    btn.disabled = false; btn.textContent = '🔬 Run Calibration';
+    return;
+  }
+
+  if (calPoll) clearInterval(calPoll);
+  calPoll = setInterval(async () => {
+    try {
+      const d = await fetch('/api/calibrate/status').then(r => r.json());
+      if (d.running) {
+        const pct = d.total ? Math.round(d.progress / d.total * 100) : 0;
+        document.getElementById('cal-progress-bar').style.width = pct + '%';
+        document.getElementById('cal-status-text').textContent =
+          `${d.stage} — ${d.progress}/${d.total} tickers (${pct}%)`;
+      } else {
+        clearInterval(calPoll);
+        btn.disabled = false; btn.textContent = '🔬 Run Calibration';
+        document.getElementById('cal-progress-bar').style.width = '100%';
+        document.getElementById('cal-status-text').textContent = d.stage || 'Complete';
+        if (d.completed_at) {
+          document.getElementById('cal-last-run').textContent =
+            `Last run: ${new Date(d.completed_at).toLocaleString()} · ${d.tickers_used} tickers · ${d.total_trades} trades`;
+        }
+        await loadCalResults();
+        loadCalRegime();
+        setTimeout(() => {
+          document.getElementById('cal-progress-wrap').style.display = 'none';
+        }, 2000);
+      }
+    } catch(e) {}
+  }, 2000);
+}
+
+async function runLogisticCalibration() {
+  const btn      = document.getElementById('cal-lr-btn');
+  const source   = document.getElementById('lr-source')?.value   || 'signal_log';
+  const months   = parseInt(document.getElementById('lr-months')?.value  || '12');
+  const universe = document.getElementById('lr-universe')?.value || 'snp500';
+  btn.disabled = true; btn.textContent = '⏳ Starting…';
+
+  try {
+    const r = await fetch('/api/calibrate/logistic', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({source, months, universe}),
+    });
+    if (!r.ok) {
+      const err = await r.json();
+      alert(err.message || 'Smart calibration error');
+      btn.disabled = false; btn.textContent = '🧠 Smart Calibrate';
+      return;
+    }
+  } catch(e) {
+    alert('Could not reach server'); btn.disabled = false; btn.textContent = '🧠 Smart Calibrate';
+    return;
+  }
+
+  // Poll until done
+  const poll = setInterval(async () => {
+    try {
+      const d = await fetch('/api/calibrate/logistic/results').then(r => r.json());
+      if (d.running) {
+        btn.textContent = '⏳ ' + (d.stage || 'Fitting…').slice(0, 30) + '…';
+      } else {
+        clearInterval(poll);
+        btn.disabled = false; btn.textContent = '🧠 Smart Calibrate';
+        if (d.results) renderLRResults(d.results);
+      }
+    } catch(e) {}
+  }, 1500);
+}
+
+function renderLRResults(data) {
+  const wrap = document.getElementById('cal-lr-wrap');
+  if (!wrap) return;
+  wrap.style.display = 'block';
+
+  const meta = document.getElementById('cal-lr-meta');
+  if (meta) {
+    const src = data.source === 'backtest'
+      ? `${data.months}m ${data.universe} backtest`
+      : 'live signal log';
+    meta.textContent =
+      `${data.total_entries || 0} samples · ${src} · run ${(data.completed_at||'').slice(0,10)}`;
+  }
+
+  const STRAT_LABELS = {
+    buy_call: '📈 Buy Call', sell_put: '💰 Sell Put',
+    buy_put:  '📉 Buy Put',  covered_call: '🛡 Covered Call',
+  };
+
+  // Weight bar color: green >1.2, amber ~1.0, red <0.8
+  const WC = w => w >= 1.3 ? 'var(--green)' : w >= 1.0 ? '#22c55e' :
+                   w >= 0.8 ? '#f59e0b'      : w >= 0.6 ? '#f97316' : 'var(--red)';
+  // Bar width: map [0.3 … 2.0] → [15% … 100%]
+  const WW = w => Math.round(Math.max(15, Math.min(100, (w - 0.3) / 1.7 * 100)));
+
+  const rows = document.getElementById('cal-lr-rows');
+  if (!rows) return;
+
+  const strats = data.strategies || {};
+  let html = '';
+
+  for (const [strat, res] of Object.entries(strats)) {
+    const label = STRAT_LABELS[strat] || strat;
+    html += `<div style="margin-bottom:18px">
+      <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:6px;
+                  display:flex;align-items:center;gap:10px">
+        ${label}`;
+
+    if (res.status === 'ok') {
+      const splitNote = res.split_method && res.split_method.includes('median')
+        ? ` · <span style="color:var(--accent)" title="All trades had the same outcome so the model learned what separates above-median from below-median P&L trades">median split</span>`
+        : '';
+      html += `<span style="font-size:11px;font-weight:400;color:var(--muted)">
+        ${res.count} entries · ${res.win_rate}% win rate · model accuracy ${res.accuracy}%${splitNote}
+      </span>`;
+    } else {
+      const msg = res.message || res.status || 'unavailable';
+      html += `<span style="font-size:11px;color:var(--muted);font-style:italic">${msg}</span>`;
+    }
+    html += `</div>`;
+
+    if (res.status === 'ok' && res.coef_details) {
+      // Sort by weight descending for readability
+      const details = [...res.coef_details].sort((a,b) => b.weight - a.weight);
+      for (const d of details) {
+        const col = WC(d.weight);
+        const ww  = WW(d.weight);
+        const dir = d.coef >= 0 ? '▲' : '▼';
+        html += `<div style="display:flex;align-items:center;gap:10px;margin-bottom:7px;font-size:12px">
+          <div style="width:150px;color:var(--text);flex-shrink:0">${d.label}</div>
+          <div style="flex:1;background:var(--surface);border-radius:4px;height:16px;overflow:hidden;min-width:60px;position:relative">
+            <div style="width:${ww}%;height:100%;background:${col};transition:width .5s;border-radius:4px"></div>
+            <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--muted);opacity:.3"></div>
+          </div>
+          <div style="width:44px;text-align:right;font-weight:700;color:${col}">${d.weight.toFixed(2)}×</div>
+          <div style="width:56px;text-align:right;color:var(--muted);font-size:11px">${dir} ${Math.abs(d.odds_ratio).toFixed(2)} OR</div>
+        </div>`;
+      }
+    }
+    html += `</div>`;
+  }
+
+  if (!html) html = '<div style="color:var(--muted);font-size:12px">No strategy results available.</div>';
+  rows.innerHTML = html;
+
+  // Show status note
+  const statusEl = document.getElementById('cal-lr-status');
+  if (statusEl) {
+    const fitted = Object.values(strats).filter(r => r.status === 'ok').length;
+    const waiting = Object.values(strats).filter(r => r.status === 'insufficient_data').length;
+    if (waiting > 0) {
+      statusEl.innerHTML = `<span style="color:var(--accent)">⚠ ${waiting} strategy/strategies need more resolved entries (min 20).
+        Keep running scans — entries resolve automatically after 7–21 days.</span>`;
+    } else {
+      statusEl.innerHTML = '';
+    }
+  }
+}
+
+async function loadCalResults() {
+  try {
+    const d = await fetch('/api/calibrate/results').then(r => r.json());
+    if (!d || !d.sim_quality) return;
+    renderCalResults(d);
+  } catch(e) {}
+  // Also load live signal log stats (updates independently of calibration)
+  loadSignalLogStats();
+  // Load LR calibration results if available
+  try {
+    const lr = await fetch('/api/calibrate/logistic/results').then(r => r.json());
+    if (lr.results) renderLRResults(lr.results);
+  } catch(e) {}
+}
+
+async function loadSignalLogStats() {
+  try {
+    const [d, entries] = await Promise.all([
+      fetch('/api/signal-log/summary').then(r => r.json()),
+      fetch('/api/signal-log/entries').then(r => r.json()),
+    ]);
+
+    // ── Meta line ──────────────────────────────────────────────────────
+    const meta = document.getElementById('cal-siglog-meta');
+    if (meta) {
+      const res = d.resolved || 0;
+      const pen = d.pending  || 0;
+      meta.textContent = `${res} resolved · ${pen} pending · bot logs every scan automatically`;
+    }
+
+    // ── Win-rate bars ──────────────────────────────────────────────────
+    const rows = document.getElementById('cal-siglog-rows');
+    if (rows) {
+      const WR_COLOR = wr => wr >= 70 ? 'var(--green)' : wr >= 60 ? '#22c55e' : wr >= 50 ? '#f59e0b' : wr >= 40 ? '#f97316' : 'var(--red)';
+      const sigQ = d.sig_quality || [];
+      if (sigQ.length === 0 && (d.resolved || 0) < 3) {
+        rows.innerHTML = `<div style="color:var(--muted);font-size:12px">
+          Run a few scans and wait for the first outcomes to resolve.
+          The log grows automatically after each scan.
+        </div>`;
+      } else {
+        rows.innerHTML = sigQ.map(r => {
+          const col = WR_COLOR(r.win_rate);
+          return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:12px">
+            <div style="width:150px;color:var(--text);flex-shrink:0">${r.signal}</div>
+            <div style="flex:1;background:var(--surface);border-radius:4px;height:16px;overflow:hidden;min-width:60px">
+              <div style="width:${Math.round(r.win_rate)}%;height:100%;background:${col};border-radius:4px"></div>
+            </div>
+            <div style="width:44px;text-align:right;font-weight:700;color:${col}">${r.win_rate}%</div>
+            <div style="width:65px;text-align:right;color:var(--muted)">${r.count} live recs</div>
+          </div>`;
+        }).join('') || '<div style="color:var(--muted);font-size:12px">Not enough resolved entries yet.</div>';
+      }
+    }
+
+    // ── Signal log table ───────────────────────────────────────────────
+    window._sigLogEntries = entries.entries || [];  // cache for re-render
+    rerenderSigLog();
+  } catch(e) { console.error('loadSignalLogStats error', e); }
+}
+
+// Cached entries so row-count changes don't need a re-fetch
+window._sigLogEntries = [];
+window._sigLogCollapsed = false;
+
+function toggleSigLog() {
+  window._sigLogCollapsed = !window._sigLogCollapsed;
+  const wrap = document.getElementById('siglog-body-wrap');
+  const chev = document.getElementById('siglog-chevron');
+  if (wrap) wrap.style.display = window._sigLogCollapsed ? 'none' : 'block';
+  if (chev) chev.textContent = window._sigLogCollapsed ? '▶' : '▼';
+}
+
+function rerenderSigLog() {
+  const tbody = document.getElementById('cal-siglog-tbody');
+  if (!tbody) return;
+  const list = window._sigLogEntries || [];
+  if (list.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--muted)">
+      Run a scan to start logging recommendations
+    </td></tr>`;
+    return;
+  }
+
+  const limitSel = document.getElementById('siglog-rows-select');
+  const limit    = limitSel ? parseInt(limitSel.value) : 25;
+  const shown    = limit === 0 ? list : list.slice(0, limit);
+
+  const STRAT_LABEL = {
+    buy_call: '📈 Buy Call', buy_put: '📉 Buy Put',
+    sell_put: '💰 Sell Put', covered_call: '🛡 Covered Call',
+    iron_condor: '🦅 Iron Condor',
+  };
+  const REGIME_COLOR = { high: '#ef4444', normal: '#f59e0b', low: '#22c55e' };
+
+  tbody.innerHTML = shown.map(e => {
+    const strat  = STRAT_LABEL[e.strategy] || e.strategy;
+    const regime = e.vix_regime || 'normal';
+    const regCol = REGIME_COLOR[regime] || 'var(--muted)';
+    const regLbl = regime.charAt(0).toUpperCase() + regime.slice(1);
+
+    let retCell     = `<td style="padding:5px 8px;text-align:right;color:var(--muted)">—</td>`;
+    let outcomeCell = `<td style="padding:5px 8px"><span style="color:var(--muted)">⏳ Pending</span></td>`;
+
+    if (e.outcome && e.outcome !== 'pending') {
+      const ret   = e.stock_return !== null && e.stock_return !== undefined
+                     ? parseFloat(e.stock_return).toFixed(1) : null;
+      const isWin = e.outcome === 'win';
+      retCell = `<td style="padding:5px 8px;text-align:right;font-weight:700;
+                    color:${isWin ? 'var(--green)' : 'var(--red)'}">
+                  ${ret !== null ? (ret >= 0 ? '+' : '') + ret + '%' : '—'}
+                 </td>`;
+      outcomeCell = `<td style="padding:5px 8px">
+                      <span style="color:${isWin ? 'var(--green)' : 'var(--red)'}">
+                        ${isWin ? '🟢 Win' : '🔴 Loss'}
+                      </span>
+                     </td>`;
+    }
+
+    const signalDate = (e.signal_date || '').slice(0, 10);
+    const checkAfter = (e.check_after || '').slice(0, 10);
+    const score      = e.score !== undefined ? Math.round(e.score) : '—';
+
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:5px 8px;color:var(--muted);white-space:nowrap">${signalDate}</td>
+      <td style="padding:5px 8px;font-weight:700;color:var(--text)">${e.ticker || '—'}</td>
+      <td style="padding:5px 8px;white-space:nowrap">${strat}</td>
+      <td style="padding:5px 8px;text-align:right;font-weight:700;color:var(--accent)">${score}</td>
+      <td style="padding:5px 8px;text-align:center">
+        <span style="color:${regCol};font-size:11px;font-weight:600;
+               background:${regCol}22;border-radius:4px;padding:2px 6px">${regLbl}</span>
+      </td>
+      <td style="padding:5px 8px;color:var(--muted);white-space:nowrap">${checkAfter}</td>
+      ${retCell}
+      ${outcomeCell}
+    </tr>`;
+  }).join('');
+
+  // Append a "showing X of Y" footer row if limited
+  if (limit > 0 && list.length > limit) {
+    tbody.innerHTML += `<tr><td colspan="8" style="padding:8px;text-align:center;
+      color:var(--muted);font-size:11px;font-style:italic">
+      Showing ${limit} of ${list.length} entries — change the row selector above to see more
+    </td></tr>`;
+  }
+}
+
+function renderCalResults(d) {
+  document.getElementById('cal-results-wrap').style.display = 'block';
+  document.getElementById('cal-months-label').textContent = d.months || 12;
+
+  const meta = `· ${d.tickers_used} tickers · ${d.total_trades} trades · run ${(d.completed_at||'').slice(0,10)}`;
+  document.getElementById('cal-sim-meta').textContent = meta;
+
+  // Signal win-rate bars
+  const WR_COLOR = wr => wr >= 70 ? 'var(--green)' : wr >= 60 ? '#22c55e' : wr >= 50 ? '#f59e0b' : wr >= 40 ? '#f97316' : 'var(--red)';
+  const WEIGHT_LABEL = wr => wr >= 70 ? '▲ +30%' : wr >= 60 ? '▲ +10%' : wr >= 50 ? '→ neutral' : wr >= 40 ? '▼ −25%' : '▼ −50%';
+
+  const sigRows = (d.sim_quality || []).map(r => {
+    const bar  = Math.round(r.win_rate);
+    const col  = WR_COLOR(r.win_rate);
+    const wlbl = WEIGHT_LABEL(r.win_rate);
+    return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;font-size:12px">
+      <div style="width:150px;color:var(--text);flex-shrink:0;font-weight:500">${r.signal}</div>
+      <div style="flex:1;background:var(--surface);border-radius:4px;height:18px;overflow:hidden;min-width:80px">
+        <div style="width:${bar}%;height:100%;background:${col};transition:width .5s;border-radius:4px"></div>
+      </div>
+      <div style="width:44px;text-align:right;font-weight:700;color:${col}">${r.win_rate}%</div>
+      <div style="width:70px;text-align:right;color:var(--muted)">${r.count} trades</div>
+      <div style="width:60px;text-align:right;color:${r.avg_pnl>0?'var(--green)':'var(--red)'};font-weight:600">
+        ${r.avg_pnl>0?'+':''}${r.avg_pnl}%
+      </div>
+      <div style="width:72px;text-align:right;font-size:11px;
+           color:${col};background:${col}22;border-radius:4px;padding:2px 5px">${wlbl}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('cal-signal-rows').innerHTML = sigRows ||
+    '<div style="color:var(--muted);font-size:13px">Not enough signal data yet.</div>';
+
+  // Per-strategy simulated summary
+  const byStrat = (d.sim_summary || {}).by_strategy || {};
+  const stratLabels = {buy_call:'📈 Buy Calls', buy_put:'📉 Buy Puts', sell_put:'💰 Sell Puts'};
+  document.getElementById('cal-strat-rows').innerHTML =
+    Object.entries(byStrat).map(([s, v]) => {
+      const col = v.win_rate >= 55 ? 'var(--green)' : v.win_rate >= 45 ? '#f59e0b' : 'var(--red)';
+      return `<div style="background:var(--surface);border-radius:10px;padding:14px;border:1px solid var(--border)">
+        <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">${stratLabels[s]||s}</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${v.count} trades</div>
+        <div style="font-size:18px;font-weight:800;color:${col}">${v.win_rate}%</div>
+        <div style="font-size:11px;color:var(--muted)">win rate</div>
+        <div style="font-size:13px;font-weight:700;margin-top:4px;
+             color:${v.avg_pnl>0?'var(--green)':'var(--red)'}">${v.avg_pnl>0?'+':''}${v.avg_pnl}% avg</div>
+      </div>`;
+    }).join('') || '<div style="color:var(--muted);font-size:13px">No strategy data.</div>';
+
+  // Actual user trades
+  const actual = d.actual_trades || {};
+  if (Object.keys(actual).length > 0) {
+    document.getElementById('cal-actual-wrap').style.display = 'block';
+    document.getElementById('cal-actual-rows').innerHTML =
+      Object.entries(actual).map(([s, v]) => {
+        const col = v.win_rate >= 55 ? 'var(--green)' : v.win_rate >= 45 ? '#f59e0b' : 'var(--red)';
+        return `<div style="background:var(--surface);border-radius:10px;padding:14px;border:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">${stratLabels[s]||s}</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${v.count} real trades</div>
+          <div style="font-size:18px;font-weight:800;color:${col}">${v.win_rate}%</div>
+          <div style="font-size:11px;color:var(--muted)">actual win rate</div>
+          <div style="font-size:13px;font-weight:700;margin-top:4px;
+               color:${v.avg_pnl>0?'var(--green)':'var(--red)'}">${v.avg_pnl>0?'+':''}${v.avg_pnl}% avg P&L</div>
+        </div>`;
+      }).join('');
+  }
+}
+
+// ── Hold Horizon Analysis ──────────────────────────────────────────────────
+
+let _hsChartInstance = null;
+let _hsPollTimer     = null;
+
+async function runHoldSweep() {
+  const universe = document.getElementById('hs-universe').value;
+  const months   = parseInt(document.getElementById('hs-months').value);
+  document.getElementById('hs-run-btn').disabled = true;
+  document.getElementById('hs-progress-wrap').style.display = 'block';
+  document.getElementById('hs-results-wrap').style.display  = 'none';
+  document.getElementById('hs-status-text').textContent = 'Starting…';
+
+  try {
+    const r = await fetch('/api/calibrate/hold-sweep', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({universe, months}),
+    });
+    if (!r.ok) {
+      const e = await r.json();
+      alert('Hold sweep error: ' + (e.error || r.status));
+      document.getElementById('hs-run-btn').disabled = false;
+      return;
+    }
+    pollHoldSweep();
+  } catch(e) {
+    alert('Hold sweep failed: ' + e);
+    document.getElementById('hs-run-btn').disabled = false;
+  }
+}
+
+function pollHoldSweep() {
+  if (_hsPollTimer) clearInterval(_hsPollTimer);
+  _hsPollTimer = setInterval(async () => {
+    try {
+      const d = await fetch('/api/calibrate/hold-sweep/results').then(r => r.json());
+      document.getElementById('hs-status-text').textContent = d.stage || '…';
+      if (!d.running) {
+        clearInterval(_hsPollTimer);
+        _hsPollTimer = null;
+        document.getElementById('hs-run-btn').disabled = false;
+        document.getElementById('hs-progress-wrap').style.display = 'none';
+        if (d.results) renderHoldSweepResults(d.results);
+      }
+    } catch(e) { /* ignore transient errors */ }
+  }, 1500);
+}
+
+function renderHoldSweepResults(r) {
+  document.getElementById('hs-results-wrap').style.display = 'block';
+
+  const ts  = r.completed_at ? new Date(r.completed_at).toLocaleString() : '';
+  const uni = r.universe === 'snp500' ? 'S&P 500' : 'Focus List';
+  document.getElementById('hs-meta').textContent =
+    `${r.n_trades?.toLocaleString() || '?'} trades · ${r.months}m · ${uni} · ${ts}`;
+
+  const INTERVALS = r.intervals || [1,2,3,5,7,10,14,21];
+  const LABELS    = INTERVALS.map(d => d + 'd');
+
+  const COLORS = {
+    buy_call: { border:'#4ade80', bg:'rgba(74,222,128,0.15)' },
+    buy_put:  { border:'#f87171', bg:'rgba(248,113,113,0.15)' },
+    sell_put: { border:'#60a5fa', bg:'rgba(96,165,250,0.15)' },
+  };
+  const NAMES = { buy_call: 'Buy Call', buy_put: 'Buy Put', sell_put: 'Sell Put' };
+
+  const datasets = [];
+  const strats   = ['buy_call', 'buy_put', 'sell_put'];
+
+  for (const strat of strats) {
+    const sd = r.by_strategy?.[strat];
+    if (!sd) continue;
+    const data = INTERVALS.map(d => sd.by_day?.[String(d)]?.avg_pnl ?? null);
+    datasets.push({
+      label: NAMES[strat],
+      data,
+      borderColor:      COLORS[strat].border,
+      backgroundColor:  COLORS[strat].bg,
+      borderWidth: 2.5,
+      pointRadius: INTERVALS.map((d, i) => d === sd.optimal_day ? 7 : 4),
+      pointBackgroundColor: INTERVALS.map((d, i) =>
+        d === sd.optimal_day ? COLORS[strat].border : 'transparent'),
+      tension: 0.35,
+      fill: false,
+      spanGaps: true,
+    });
+  }
+
+  // Chart
+  const ctx = document.getElementById('hs-chart').getContext('2d');
+  if (_hsChartInstance) { _hsChartInstance.destroy(); _hsChartInstance = null; }
+  _hsChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: { labels: LABELS, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          labels: { color: getComputedStyle(document.body).getPropertyValue('--text') || '#e2e8f0' }
+        },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y != null ? ctx.parsed.y.toFixed(1) + '%' : 'n/a'}`
+          }
+        },
+        annotation: {},
+      },
+      scales: {
+        x: {
+          ticks: { color: '#94a3b8' },
+          grid:  { color: 'rgba(148,163,184,0.12)' },
+          title: { display: true, text: 'Hold Duration (trading days)', color: '#94a3b8' },
+        },
+        y: {
+          ticks: { color: '#94a3b8', callback: v => v + '%' },
+          grid:  { color: 'rgba(148,163,184,0.12)' },
+          title: { display: true, text: 'Avg P&L %', color: '#94a3b8' },
+        },
+      },
+    }
+  });
+
+  // P&L table
+  let pnlRows = '';
+  for (const strat of strats) {
+    const sd = r.by_strategy?.[strat];
+    if (!sd) continue;
+    const cells = INTERVALS.map(d => {
+      const dd = sd.by_day?.[String(d)];
+      if (!dd) return '<td style="text-align:center;padding:5px 8px;color:var(--muted)">—</td>';
+      const isOpt = d === sd.optimal_day;
+      const color = dd.avg_pnl > 0 ? 'var(--green)' : dd.avg_pnl < 0 ? 'var(--red)' : 'var(--muted)';
+      const bg    = isOpt ? 'background:rgba(99,102,241,0.18);border-radius:4px;' : '';
+      return `<td style="text-align:center;padding:5px 8px;${bg}">
+        <span style="color:${color};font-weight:${isOpt?'800':'400'}">${dd.avg_pnl > 0 ? '+' : ''}${dd.avg_pnl}%</span>
+      </td>`;
+    }).join('');
+    const optLabel = `${sd.optimal_day}d`;
+    pnlRows += `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:5px 8px;font-weight:600;color:var(--text)">${NAMES[strat]}</td>
+      ${cells}
+      <td style="text-align:center;padding:5px 8px;font-weight:800;color:var(--accent)">${optLabel}</td>
+    </tr>`;
+  }
+  document.getElementById('hs-tbody').innerHTML = pnlRows;
+
+  // Win-rate table
+  let wrRows = '';
+  for (const strat of strats) {
+    const sd = r.by_strategy?.[strat];
+    if (!sd) continue;
+    const cells = INTERVALS.map(d => {
+      const dd = sd.by_day?.[String(d)];
+      if (!dd) return '<td style="text-align:center;padding:5px 8px;color:var(--muted)">—</td>';
+      const wr  = dd.win_rate;
+      const color = wr >= 55 ? 'var(--green)' : wr >= 45 ? 'var(--text)' : 'var(--red)';
+      return `<td style="text-align:center;padding:5px 8px">
+        <span style="color:${color}">${wr}%</span>
+      </td>`;
+    }).join('');
+    wrRows += `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:5px 8px;font-weight:600;color:var(--text)">${NAMES[strat]}</td>
+      ${cells}
+    </tr>`;
+  }
+  document.getElementById('hs-wr-tbody').innerHTML = wrRows;
+}
 </script>
 </body>
 </html>
@@ -7154,11 +9623,21 @@ def main():
     # Restore last WFO run from disk (auto-applies best params if found)
     _load_wfo_results()
 
+    # Restore last backtest results from disk
+    _load_bt_results()
+
+    # Restore last calibration weights from disk (adjusts live scores immediately)
+    _load_calibration_on_startup()
+    _load_lr_calibration_on_startup()   # overlay LR weights on top (more precise)
+
     # Fetch live 6-month T-bill rate from FRED before first scan
     threading.Thread(target=fetch_risk_free_rate, daemon=True).start()
 
     # Start sell-signal tracker in the background
     threading.Thread(target=_schedule_track_checker, daemon=True).start()
+
+    # Resolve pending signal log entries (checks outcomes every 6 hours)
+    threading.Thread(target=_schedule_signal_log_resolver, daemon=True).start()
 
     # Open browser after short delay so Flask has time to start
     threading.Timer(1.5, lambda: webbrowser.open(f"http://localhost:{SERVER_PORT}")).start()

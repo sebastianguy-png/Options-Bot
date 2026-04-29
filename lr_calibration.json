@@ -1,0 +1,171 @@
+{
+  "source": "backtest",
+  "months": 6,
+  "universe": "snp500",
+  "strategies": {
+    "buy_call": {
+      "status": "ok",
+      "count": 27247,
+      "accuracy": 53.7,
+      "win_rate": 50.0,
+      "split_method": "median split (\u2265-63.3%)",
+      "coef_details": [
+        {
+          "flag": "sig_rsi_os",
+          "label": "RSI Oversold",
+          "coef": 0.169,
+          "odds_ratio": 1.184,
+          "weight": 1.184
+        },
+        {
+          "flag": "sig_bb_low",
+          "label": "Below BB Lower",
+          "coef": -0.313,
+          "odds_ratio": 0.731,
+          "weight": 0.731
+        },
+        {
+          "flag": "sig_reversal",
+          "label": "RSI Turning Up",
+          "coef": -0.079,
+          "odds_ratio": 0.924,
+          "weight": 0.924
+        },
+        {
+          "flag": "sig_macd_bull",
+          "label": "MACD Bull Cross",
+          "coef": 0.009,
+          "odds_ratio": 1.009,
+          "weight": 1.009
+        },
+        {
+          "flag": "sig_vol_ok",
+          "label": "Volume Confirmed",
+          "coef": 0.274,
+          "odds_ratio": 1.316,
+          "weight": 1.316
+        },
+        {
+          "flag": "sig_rsi_ob",
+          "label": "RSI Overbought",
+          "coef": -0.084,
+          "odds_ratio": 0.919,
+          "weight": 0.919
+        },
+        {
+          "flag": "sig_bb_high",
+          "label": "Above BB Upper",
+          "coef": 0.069,
+          "odds_ratio": 1.072,
+          "weight": 1.072
+        },
+        {
+          "flag": "sig_macd_bear",
+          "label": "MACD Bear Cross",
+          "coef": -0.169,
+          "odds_ratio": 0.844,
+          "weight": 0.844
+        }
+      ]
+    },
+    "sell_put": {
+      "status": "insufficient_data",
+      "count": 2,
+      "message": "Need 20 samples (have 2)"
+    },
+    "buy_put": {
+      "status": "ok",
+      "count": 24808,
+      "accuracy": 52.7,
+      "win_rate": 50.0,
+      "split_method": "median split (\u2265-92.2%)",
+      "coef_details": [
+        {
+          "flag": "sig_rsi_os",
+          "label": "RSI Oversold",
+          "coef": -0.188,
+          "odds_ratio": 0.828,
+          "weight": 0.828
+        },
+        {
+          "flag": "sig_bb_low",
+          "label": "Below BB Lower",
+          "coef": 0.027,
+          "odds_ratio": 1.028,
+          "weight": 1.028
+        },
+        {
+          "flag": "sig_reversal",
+          "label": "RSI Turning Up",
+          "coef": 0.046,
+          "odds_ratio": 1.047,
+          "weight": 1.047
+        },
+        {
+          "flag": "sig_macd_bull",
+          "label": "MACD Bull Cross",
+          "coef": -0.038,
+          "odds_ratio": 0.963,
+          "weight": 0.963
+        },
+        {
+          "flag": "sig_vol_ok",
+          "label": "Volume Confirmed",
+          "coef": -0.254,
+          "odds_ratio": 0.775,
+          "weight": 0.775
+        },
+        {
+          "flag": "sig_rsi_ob",
+          "label": "RSI Overbought",
+          "coef": 0.054,
+          "odds_ratio": 1.056,
+          "weight": 1.056
+        },
+        {
+          "flag": "sig_bb_high",
+          "label": "Above BB Upper",
+          "coef": -0.091,
+          "odds_ratio": 0.913,
+          "weight": 0.913
+        },
+        {
+          "flag": "sig_macd_bear",
+          "label": "MACD Bear Cross",
+          "coef": 0.057,
+          "odds_ratio": 1.059,
+          "weight": 1.059
+        }
+      ]
+    },
+    "covered_call": {
+      "status": "insufficient_data",
+      "count": 0,
+      "message": "Need 20 samples (have 0)"
+    }
+  },
+  "weights": {
+    "buy_call": {
+      "sig_rsi_os": 1.184,
+      "sig_bb_low": 0.731,
+      "sig_reversal": 0.924,
+      "sig_macd_bull": 1.009,
+      "sig_vol_ok": 1.316,
+      "sig_rsi_ob": 0.919,
+      "sig_bb_high": 1.072,
+      "sig_macd_bear": 0.844
+    },
+    "buy_put": {
+      "sig_rsi_os": 0.828,
+      "sig_bb_low": 1.028,
+      "sig_reversal": 1.047,
+      "sig_macd_bull": 0.963,
+      "sig_vol_ok": 0.775,
+      "sig_rsi_ob": 1.056,
+      "sig_bb_high": 0.913,
+      "sig_macd_bear": 1.059
+    }
+  },
+  "total_entries": 52057,
+  "completed_at": "2026-04-29T09:35:28.110261"
+}

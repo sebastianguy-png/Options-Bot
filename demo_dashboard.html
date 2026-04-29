@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Options Bot — Live Demo</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#0f1117;--surface:#1a1d27;--surface2:#22263a;--border:#2e3248;
+  --text:#e2e8f0;--muted:#8892a4;
+  --green:#22c55e;--red:#ef4444;--yellow:#f59e0b;
+  --blue:#3b82f6;--purple:#a855f7;--accent:#6366f1;--orange:#f97316;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px}
+header{background:var(--surface);border-bottom:1px solid var(--border);
+       padding:14px 28px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+header h1{font-size:18px;font-weight:800;color:var(--accent)}
+.demo-badge{background:rgba(245,158,11,.2);color:var(--yellow);border:1px solid rgba(245,158,11,.3);
+            border-radius:6px;padding:3px 10px;font-size:11px;font-weight:700}
+.tagline{font-size:12px;color:var(--muted);flex:1}
+.scan-info{font-size:12px;color:var(--green)}
+.btn{border:none;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:13px;font-weight:600;transition:.15s}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{opacity:.85}
+.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+.btn-ghost:hover{border-color:var(--text);color:var(--text)}
+.btn-green{background:var(--green);color:#000}.btn-green:hover{opacity:.85}
+.btn-danger{background:var(--red);color:#fff}.btn-danger:hover{opacity:.85}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.tabs{display:flex;border-bottom:1px solid var(--border);padding:0 28px;background:var(--surface);overflow-x:auto}
+.tab{padding:12px 18px;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted);
+     border-bottom:2px solid transparent;transition:.15s;white-space:nowrap}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.badge-count{background:var(--surface2);border-radius:10px;padding:1px 7px;font-size:11px;margin-left:5px;color:var(--muted)}
+.tab.active .badge-count{background:var(--accent);color:#fff}
+.panel{display:none;padding:20px 28px}.panel.active{display:block}
+.disclaimer{background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.2);border-radius:8px;
+            padding:12px 16px;margin-bottom:18px;font-size:12px;color:var(--muted);line-height:1.6}
+.disclaimer b{color:var(--red)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(460px,1fr));gap:18px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;
+      transition:border-color .2s}.card:hover{border-color:var(--accent)}
+.card-head{padding:12px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.ticker{font-size:17px;font-weight:800}.cname{font-size:11px;color:var(--muted);margin-top:2px}
+.cprice{font-size:20px;font-weight:700}.csector{font-size:10px;color:var(--muted);text-align:right;margin-top:1px}
+.score-ring{width:44px;height:44px;border-radius:50%;display:flex;align-items:center;
+            justify-content:center;font-weight:800;font-size:14px;flex-shrink:0;margin-left:8px}
+.signals{display:flex;gap:6px;padding:8px 16px;flex-wrap:wrap}
+.sig{border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px}
+.sig-red   {background:rgba(239,68,68,.15); color:var(--red);   border:1px solid rgba(239,68,68,.3)}
+.sig-yellow{background:rgba(245,158,11,.15);color:var(--yellow);border:1px solid rgba(245,158,11,.3)}
+.sig-blue  {background:rgba(59,130,246,.15);color:var(--blue);  border:1px solid rgba(59,130,246,.3)}
+.sig-purple{background:rgba(168,85,247,.15);color:var(--purple);border:1px solid rgba(168,85,247,.3)}
+.sig-green {background:rgba(34,197,94,.15); color:var(--green); border:1px solid rgba(34,197,94,.3)}
+.sig-orange{background:rgba(249,115,22,.15);color:var(--orange);border:1px solid rgba(249,115,22,.3)}
+.charts{display:grid;grid-template-columns:1fr 1fr;padding:0 16px 8px;gap:10px}
+.chart-label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
+.opt-info{border-top:1px solid var(--border);padding:10px 16px}
+.opt-title{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:7px}
+.opt-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.opt-cell .key{font-size:9px;color:var(--muted)}.opt-cell .val{font-size:13px;font-weight:600;margin-top:1px}
+.opt-cell .val.good{color:var(--green)}
+.card-footer{border-top:1px solid var(--border);padding:10px 16px;display:flex;align-items:center;gap:10px}
+.qty-wrap{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.qty-wrap input{width:52px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;
+                padding:5px 8px;color:var(--text);font-size:13px;text-align:center}
+.cost-est{font-size:11px;color:var(--muted);flex:1}
+.cost-val{font-weight:600;color:var(--text)}
+.queue-empty{text-align:center;padding:60px;color:var(--muted);font-size:14px}
+.queue-table{width:100%;border-collapse:collapse}
+.queue-table th{font-size:11px;color:var(--muted);text-align:left;padding:8px 12px;
+                border-bottom:1px solid var(--border);font-weight:600;text-transform:uppercase}
+.queue-table td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+.queue-table tr:last-child td{border-bottom:none}
+.status-pill{border-radius:12px;padding:2px 8px;font-size:10px;font-weight:700;text-transform:uppercase}
+.s-pending{background:rgba(59,130,246,.2);color:var(--blue)}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;
+               align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+       padding:28px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+.modal h2{font-size:16px;margin-bottom:8px}
+.modal .sub{color:var(--muted);font-size:13px;margin-bottom:16px;line-height:1.6}
+.trade-summary{background:var(--surface2);border-radius:8px;padding:14px;
+               font-size:13px;margin-bottom:16px;line-height:1.9;border:1px solid var(--border)}
+.guardrail-warn{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);
+                border-radius:8px;padding:12px;color:var(--red);margin-bottom:14px;font-size:13px;line-height:1.5}
+.confirm-input{background:var(--surface2);border:2px solid var(--border);border-radius:8px;
+               padding:10px 14px;color:var(--text);font-size:15px;font-weight:600;width:100%;
+               margin-bottom:14px;letter-spacing:2px}
+.confirm-input:focus{outline:none;border-color:var(--red)}
+.modal-actions{display:flex;gap:10px;justify-content:flex-end}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--border);
+       border-radius:10px;padding:14px 20px;font-size:13px;z-index:2000;opacity:0;transition:opacity .3s;
+       box-shadow:0 4px 20px rgba(0,0,0,.4);max-width:320px}
+.toast.show{opacity:1}
+.toast.toast-ok{border-color:var(--green);color:var(--green)}
+.toast.toast-warn{border-color:var(--yellow);color:var(--yellow)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ Options Bot</h1>
+  <span class="demo-badge">DEMO MODE</span>
+  <span class="tagline">Scans S&P 500 + 400 stocks under $10 · 4 strategies · SoFi execution</span>
+  <span class="scan-info">✓ Last scan: today 9:31 AM &nbsp;·&nbsp; 847 tickers scanned</span>
+  <button class="btn btn-primary" onclick="showToast('✓ Scan already ran this session. Click again to re-scan.','warn')">▶ Re-Scan</button>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('sell_puts')">Sell Puts <span class="badge-count" id="cnt-sell_puts">3</span></div>
+  <div class="tab" onclick="switchTab('buy_calls')">Buy Calls <span class="badge-count" id="cnt-buy_calls">2</span></div>
+  <div class="tab" onclick="switchTab('buy_puts')">Buy Puts <span class="badge-count" id="cnt-buy_puts">2</span></div>
+  <div class="tab" onclick="switchTab('covered_calls')">Covered Calls <span class="badge-count" id="cnt-covered_calls">2</span></div>
+  <div class="tab" onclick="switchTab('queue')">Trade Queue <span class="badge-count" id="cnt-queue">0</span></div>
+</div>
+
+<div class="panel active" id="panel-sell_puts"></div>
+<div class="panel" id="panel-buy_calls"></div>
+<div class="panel" id="panel-buy_puts"></div>
+<div class="panel" id="panel-covered_calls"></div>
+<div class="panel" id="panel-queue">
+  <div class="disclaimer">
+    <b>⚠ Safety reminder:</b> Nothing executes without your explicit approval.
+    After clicking "Confirm &amp; Place Order," a SoFi browser window opens with your order pre-filled.
+    The bot stops at the Review page — <b>you click Submit</b>.
+    Trades over <b>$1,000</b> require you to type <b>CONFIRM</b> as a second factor.
+  </div>
+  <div id="queue-body"><div class="queue-empty">No trades queued yet. Add trades from the tabs above.</div></div>
+</div>
+
+<!-- CONFIRM MODAL -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h2>🔒 Confirm Trade Execution</h2>
+    <div class="sub">Review carefully. This opens SoFi, fills the order form, and stops at the Review page. <b>No money moves until you click Place Order in the SoFi window.</b></div>
+    <div class="trade-summary" id="modal-summary"></div>
+    <div class="guardrail-warn" id="modal-warn" style="display:none"></div>
+    <input class="confirm-input" id="modal-input" placeholder='Type  CONFIRM  to unlock' style="display:none" oninput="checkInput()"/>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-green" id="modal-ok" onclick="doExecute()">✓ Confirm &amp; Place Order</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Seeded RNG for reproducible charts ─────────────────────────
+function seededRng(seed){
+  let s=seed;
+  return ()=>{ s=(s*1664525+1013904223)&0xffffffff; return (s>>>0)/0xffffffff; };
+}
+function genPrices(base,trend,vol,days,seed=42){
+  const rng=seededRng(seed), prices=[base];
+  for(let i=1;i<days;i++){
+    const p=prices[i-1]*(1+(rng()-.5)*vol+trend);
+    prices.push(Math.max(parseFloat(p.toFixed(3)),0.5));
+  }
+  return prices;
+}
+function calcRSI(prices,period=14){
+  const rsi=[...Array(period).fill(null)];
+  for(let i=period;i<prices.length;i++){
+    let gains=0,losses=0;
+    for(let j=i-period+1;j<=i;j++){
+      const d=prices[j]-prices[j-1];
+      if(d>0) gains+=d; else losses-=d;
+    }
+    const rs=losses===0?100:(gains/period)/(losses/period);
+    rsi.push(parseFloat((100-100/(1+rs)).toFixed(1)));
+  }
+  return rsi;
+}
+function calcBB(prices,period=20){
+  const upper=[],mid=[],lower=[];
+  for(let i=0;i<prices.length;i++){
+    if(i<period-1){upper.push(null);mid.push(null);lower.push(null);continue;}
+    const sl=prices.slice(i-period+1,i+1);
+    const m=sl.reduce((a,b)=>a+b)/period;
+    const std=Math.sqrt(sl.reduce((a,b)=>a+(b-m)**2,0)/period);
+    upper.push(parseFloat((m+2*std).toFixed(3)));
+    mid.push(parseFloat(m.toFixed(3)));
+    lower.push(parseFloat((m-2*std).toFixed(3)));
+  }
+  return{upper,mid,lower};
+}
+function makeDates(n){
+  const dates=[];
+  const d=new Date(); d.setDate(d.getDate()-n);
+  for(let i=0;i<n;i++){
+    d.setDate(d.getDate()+1);
+    if(d.getDay()===0)d.setDate(d.getDate()+1);
+    if(d.getDay()===6)d.setDate(d.getDate()+2);
+    dates.push(`${d.getMonth()+1}/${d.getDate()}`);
+  }
+  return dates;
+}
+
+// ── Mock signals ───────────────────────────────────────────────
+function makeStock(cfg){
+  const prices=genPrices(cfg.basePrice,cfg.trend,cfg.vol,60,cfg.seed);
+  const rsi=calcRSI(prices);
+  const bb=calcBB(prices);
+  const dates=makeDates(60);
+  const curRsi=rsi[rsi.length-1];
+  const curP=prices[prices.length-1];
+  return{...cfg, price:curP, rsi:curRsi,
+    bb_upper:bb.upper[59],bb_mid:bb.mid[59],bb_lower:bb.lower[59],
+    chart:{dates,price:prices,bb_upper:bb.upper,bb_mid:bb.mid,bb_lower:bb.lower,rsi}};
+}
+
+const MOCK={
+  sell_puts:[
+    makeStock({seed:1,ticker:"PLUG",name:"Plug Power Inc.",sector:"Energy",basePrice:2.8,trend:-0.003,vol:0.04,score:91,
+      option:{type:"put",expiration:"2025-05-16",dte:32,strike:2.5,bid:.18,ask:.22,mid:.20,iv:74.2,volume:2841,open_interest:4120,premium_pct:7.1},
+      iv_rank:71,iv_high:true,prem_high:true,rsi_oversold:true,bb_oversold:true}),
+    makeStock({seed:2,ticker:"F",name:"Ford Motor Company",sector:"Consumer Cyclical",basePrice:9.1,trend:-0.002,vol:0.025,score:78,
+      option:{type:"put",expiration:"2025-05-16",dte:32,strike:9.0,bid:.28,ask:.34,mid:.31,iv:52.4,volume:18420,open_interest:32100,premium_pct:3.4},
+      iv_rank:55,iv_high:true,prem_high:true,rsi_oversold:true,bb_oversold:false}),
+    makeStock({seed:3,ticker:"NIO",name:"NIO Inc.",sector:"Consumer Cyclical",basePrice:4.2,trend:-0.0015,vol:0.05,score:72,
+      option:{type:"put",expiration:"2025-05-16",dte:32,strike:4.0,bid:.19,ask:.25,mid:.22,iv:68.1,volume:6310,open_interest:9820,premium_pct:5.2},
+      iv_rank:63,iv_high:true,prem_high:true,rsi_oversold:true,bb_oversold:false}),
+  ],
+  buy_calls:[
+    makeStock({seed:4,ticker:"AAL",name:"American Airlines Group",sector:"Industrials",basePrice:6.8,trend:-0.002,vol:0.035,score:82,
+      option:{type:"call",expiration:"2025-05-16",dte:32,strike:7.0,bid:.22,ask:.28,mid:.25,iv:61.3,volume:9210,open_interest:14300,premium_pct:3.7},
+      iv_rank:58,iv_high:true,rsi_oversold:true,bb_oversold:true,reversal:true}),
+    makeStock({seed:5,ticker:"SNAP",name:"Snap Inc.",sector:"Communication Services",basePrice:8.4,trend:-0.001,vol:0.04,score:69,
+      option:{type:"call",expiration:"2025-05-16",dte:32,strike:8.5,bid:.35,ask:.43,mid:.39,iv:64.8,volume:4100,open_interest:7200,premium_pct:4.6},
+      iv_rank:61,iv_high:true,rsi_oversold:true,bb_oversold:false,reversal:true}),
+  ],
+  buy_puts:[
+    makeStock({seed:6,ticker:"CCL",name:"Carnival Corporation",sector:"Consumer Cyclical",basePrice:9.9,trend:0.002,vol:0.025,score:74,
+      option:{type:"put",expiration:"2025-05-16",dte:32,strike:9.5,bid:.30,ask:.38,mid:.34,iv:48.2,volume:5620,open_interest:8900,premium_pct:3.4},
+      iv_rank:44,iv_high:true,rsi_oversold:false,bb_oversold:false,rsi_overbought:true,bb_overbought:true}),
+    makeStock({seed:7,ticker:"SOFI",name:"SoFi Technologies",sector:"Financial Services",basePrice:7.6,trend:0.0015,vol:0.035,score:65,
+      option:{type:"put",expiration:"2025-05-16",dte:32,strike:7.5,bid:.25,ask:.31,mid:.28,iv:55.7,volume:3810,open_interest:6100,premium_pct:3.7},
+      iv_rank:52,iv_high:true,rsi_oversold:false,bb_oversold:false,rsi_overbought:true,bb_overbought:false}),
+  ],
+  covered_calls:[
+    makeStock({seed:8,ticker:"NOK",name:"Nokia Corporation",sector:"Technology",basePrice:3.2,trend:0.0,vol:0.02,score:80,
+      option:{type:"call",expiration:"2025-05-16",dte:32,strike:3.5,bid:.18,ask:.22,mid:.20,iv:69.3,volume:4210,open_interest:6800,premium_pct:6.3},
+      iv_rank:68,iv_high:true,prem_high:true,note:"Requires 100 shares of NOK (~$320)"}),
+    makeStock({seed:9,ticker:"VALE",name:"Vale S.A.",sector:"Basic Materials",basePrice:9.1,trend:-0.001,vol:0.025,score:66,
+      option:{type:"call",expiration:"2025-05-16",dte:32,strike:9.5,bid:.29,ask:.35,mid:.32,iv:51.4,volume:2940,open_interest:5100,premium_pct:3.5},
+      iv_rank:49,iv_high:true,prem_high:true,note:"Requires 100 shares of VALE (~$910)"}),
+  ]
+};
+
+// ── Queue ──────────────────────────────────────────────────────
+let queue=[];
+let pendingTrade=null;
+const chartReg={};
+
+function scoreColor(s){return s>=70?'#22c55e':s>=45?'#f59e0b':'#3b82f6'}
+
+function renderStrategy(strategy){
+  const data=MOCK[strategy];
+  const el=document.getElementById('panel-'+strategy);
+  const actionMap={sell_puts:'Sell Put',buy_calls:'Buy Call',buy_puts:'Buy Put',covered_calls:'Sell Covered Call'};
+  const action=actionMap[strategy];
+
+  let html=`<div class="disclaimer">
+    <b>⚠ Not financial advice.</b> These are technical signals only — RSI, Bollinger Bands, IV Rank.
+    Options trading involves significant risk. You must add trades to queue and approve each execution individually.
+  </div><div class="cards">`;
+
+  data.forEach(d=>{
+    const sc=scoreColor(d.score);
+    const opt=d.option;
+    const id=d.ticker+'_'+strategy;
+
+    let sigs='';
+    if(d.rsi_oversold)  sigs+=`<span class="sig sig-red">RSI ${d.rsi.toFixed(1)} ↓</span>`;
+    if(d.rsi_overbought)sigs+=`<span class="sig sig-orange">RSI ${d.rsi.toFixed(1)} ↑</span>`;
+    if(d.bb_oversold)   sigs+=`<span class="sig sig-yellow">Below BB</span>`;
+    if(d.bb_overbought) sigs+=`<span class="sig sig-orange">Above BB</span>`;
+    if(d.reversal)      sigs+=`<span class="sig sig-green">RSI Turning ↑</span>`;
+    if(d.iv_high)       sigs+=`<span class="sig sig-purple">IV Rank ${d.iv_rank}</span>`;
+    if(d.prem_high)     sigs+=`<span class="sig sig-blue">Premium ${opt.premium_pct}%</span>`;
+
+    const strategyKey=strategy.slice(0,-1); // remove trailing 's' for API key
+    let costHtml='$0 (covered)';
+    if(strategy==='sell_puts') costHtml=`$${(1*100*opt.strike).toFixed(2)}`;
+    else if(strategy==='buy_calls'||strategy==='buy_puts') costHtml=`$${(1*100*opt.ask).toFixed(2)}`;
+
+    html+=`
+    <div class="card">
+      <div class="card-head">
+        <div style="flex:1">
+          <div class="ticker">${d.ticker}</div>
+          <div class="cname">${d.name}</div>
+        </div>
+        <div style="text-align:right;flex:1">
+          <div class="cprice" style="color:${sc}">$${d.price.toFixed(3)}</div>
+          <div class="csector">${d.sector}</div>
+        </div>
+        <div class="score-ring" style="background:${sc}22;color:${sc};border:2px solid ${sc}">${d.score}</div>
+      </div>
+      <div class="signals">${sigs}</div>
+      <div class="charts">
+        <div>
+          <div class="chart-label">Price + Bollinger Bands</div>
+          <canvas id="pc-${id}" height="110"></canvas>
+        </div>
+        <div>
+          <div class="chart-label">RSI (14) — Oversold &lt;30</div>
+          <canvas id="rc-${id}" height="110"></canvas>
+        </div>
+      </div>
+      <div class="opt-info">
+        <div class="opt-title">${opt.type==='call'?'📈 Call':'📉 Put'} · ${opt.expiration} (${opt.dte}d) · ${action}</div>
+        <div class="opt-grid">
+          <div class="opt-cell"><div class="key">Strike</div><div class="val">$${opt.strike.toFixed(2)}</div></div>
+          <div class="opt-cell"><div class="key">Bid / Ask</div><div class="val">$${opt.bid.toFixed(2)} / $${opt.ask.toFixed(2)}</div></div>
+          <div class="opt-cell"><div class="key">IV</div><div class="val ${d.iv_high?'good':''}">${opt.iv.toFixed(1)}% (Rank ${d.iv_rank})</div></div>
+          <div class="opt-cell"><div class="key">Premium %</div><div class="val ${d.prem_high?'good':''}">${opt.premium_pct.toFixed(2)}%</div></div>
+          <div class="opt-cell"><div class="key">Volume</div><div class="val">${opt.volume.toLocaleString()}</div></div>
+          <div class="opt-cell"><div class="key">Open Int.</div><div class="val">${opt.open_interest.toLocaleString()}</div></div>
+          <div class="opt-cell"><div class="key">BB Low / High</div><div class="val">$${(d.bb_lower||0).toFixed(3)} / $${(d.bb_upper||0).toFixed(3)}</div></div>
+          <div class="opt-cell"><div class="key">BB Mid</div><div class="val">$${(d.bb_mid||0).toFixed(3)}</div></div>
+        </div>
+        ${d.note?`<div style="font-size:11px;color:var(--yellow);margin-top:8px">⚠ ${d.note}</div>`:''}
+      </div>
+      <div class="card-footer">
+        <div class="qty-wrap">
+          Contracts:
+          <input type="number" min="1" max="100" value="1" id="qty-${id}"
+            oninput="updateCost('${id}','${strategy}',${opt.strike},${opt.ask})"/>
+        </div>
+        <div class="cost-est" id="cost-${id}">
+          Est. capital: <span class="cost-val" id="costval-${id}">${costHtml}</span>
+        </div>
+        <button class="btn btn-primary"
+          onclick="addToQueue('${strategy}','${d.ticker}','${id}')">+ Add to Queue</button>
+      </div>
+    </div>`;
+  });
+
+  html+='</div>';
+  el.innerHTML=html;
+  data.forEach(d=>drawCharts(d, strategy));
+}
+
+function updateCost(id, strategy, strike, ask){
+  const qty=parseInt(document.getElementById('qty-'+id)?.value)||1;
+  let cost=0;
+  if(strategy==='sell_puts') cost=qty*100*strike;
+  else if(strategy==='buy_calls'||strategy==='buy_puts') cost=qty*100*ask;
+  const over=cost>1000 && cost>0;
+  document.getElementById('costval-'+id).innerHTML=
+    cost===0?'$0 (covered)':
+    `<span style="color:${over?'var(--yellow)':'inherit'}">${'$'+cost.toLocaleString('en-US',{minimumFractionDigits:2})}${over?' ⚠':''}</span>`;
+}
+
+function drawCharts(d, strategy){
+  const id=d.ticker+'_'+strategy;
+  const c=d.chart;
+  const sc=scoreColor(d.score);
+
+  const pcEl=document.getElementById('pc-'+id);
+  const rcEl=document.getElementById('rc-'+id);
+  if(!pcEl||!rcEl)return;
+  if(chartReg['pc-'+id])chartReg['pc-'+id].destroy();
+  if(chartReg['rc-'+id])chartReg['rc-'+id].destroy();
+
+  chartReg['pc-'+id]=new Chart(pcEl,{
+    type:'line',
+    data:{labels:c.dates,datasets:[
+      {data:c.bb_upper,borderColor:'rgba(99,102,241,.4)',borderWidth:1,borderDash:[3,3],pointRadius:0,fill:false},
+      {data:c.bb_mid,  borderColor:'rgba(99,102,241,.22)',borderWidth:1,borderDash:[2,4],pointRadius:0,fill:false},
+      {data:c.bb_lower,borderColor:'rgba(99,102,241,.4)',borderWidth:1,borderDash:[3,3],pointRadius:0,fill:'+2',backgroundColor:'rgba(99,102,241,.06)'},
+      {data:c.price,   borderColor:sc,borderWidth:2,pointRadius:0,fill:false,tension:.3},
+    ]},
+    options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{display:false}},
+      scales:{x:{ticks:{color:'#8892a4',maxTicksLimit:6,font:{size:9}},grid:{color:'rgba(255,255,255,.04)'}},
+              y:{ticks:{color:'#8892a4',font:{size:9}},grid:{color:'rgba(255,255,255,.04)'}}}}
+  });
+
+  chartReg['rc-'+id]=new Chart(rcEl,{
+    type:'line',
+    data:{labels:c.dates,datasets:[
+      {data:c.rsi,borderColor:'#f59e0b',borderWidth:1.5,pointRadius:0,fill:false,tension:.3}
+    ]},
+    options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{display:false}},
+      scales:{x:{ticks:{color:'#8892a4',maxTicksLimit:6,font:{size:9}},grid:{color:'rgba(255,255,255,.04)'}},
+              y:{min:0,max:100,ticks:{color:'#8892a4',font:{size:9},stepSize:25},grid:{color:'rgba(255,255,255,.04)'}}}},
+    plugins:[{afterDraw(chart){
+      const {ctx,chartArea:{left,right},scales:{y}}=chart;
+      [[30,'rgba(239,68,68,.7)'],[70,'rgba(34,197,94,.5)']].forEach(([v,col])=>{
+        const yp=y.getPixelForValue(v);
+        ctx.save();ctx.strokeStyle=col;ctx.lineWidth=1;ctx.setLineDash([4,3]);
+        ctx.beginPath();ctx.moveTo(left,yp);ctx.lineTo(right,yp);ctx.stroke();ctx.restore();
+      });
+    }}]
+  });
+}
+
+// ── Queue management ───────────────────────────────────────────
+function addToQueue(strategy, ticker, id){
+  const qty=parseInt(document.getElementById('qty-'+id)?.value)||1;
+  const stocks=MOCK[strategy];
+  const d=stocks.find(s=>s.ticker===ticker);
+  if(!d){alert('Signal not found');return;}
+
+  const actionMap={sell_puts:'Sell Put',buy_calls:'Buy Call',buy_puts:'Buy Put',covered_calls:'Covered Call'};
+  const trade={
+    id: Math.random().toString(36).slice(2,10),
+    ticker, name:d.name, price:d.price,
+    strategy, strategy_label:actionMap[strategy],
+    option:{...d.option}, qty,
+    status:'pending',
+    queued_at: new Date().toLocaleTimeString(),
+  };
+
+  // Calculate cost and guardrail
+  let cost=0;
+  if(strategy==='sell_puts') cost=qty*100*d.option.strike;
+  else if(strategy==='buy_calls'||strategy==='buy_puts') cost=qty*100*d.option.ask;
+  trade.estimated_cost=cost;
+  trade.guardrail_ok=cost<=1000;
+
+  queue.push(trade);
+  document.getElementById('cnt-queue').textContent=queue.length;
+
+  let msg=`✓ Added ${ticker} ${actionMap[strategy]} ×${qty} to queue.`;
+  if(!trade.guardrail_ok)
+    msg+=`\n\n⚠ Est. $${cost.toFixed(2)} exceeds your $1,000 guardrail.\nYou'll need to type CONFIRM when executing.`;
+  showToast(msg, trade.guardrail_ok?'ok':'warn');
+}
+
+function renderQueue(){
+  const el=document.getElementById('queue-body');
+  if(!queue.length){el.innerHTML='<div class="queue-empty">No trades queued yet. Add trades from the tabs above.</div>';return;}
+  el.innerHTML=`<table class="queue-table">
+    <thead><tr>
+      <th>Ticker</th><th>Strategy</th><th>Option Details</th><th>Qty</th>
+      <th>Est. Capital</th><th>Status</th><th>Actions</th>
+    </tr></thead>
+    <tbody>
+    ${queue.map(t=>`<tr>
+      <td><b>${t.ticker}</b><br><span style="font-size:11px;color:var(--muted)">${t.name}</span></td>
+      <td>${t.strategy_label}</td>
+      <td style="font-size:12px">${t.option.type} $${t.option.strike.toFixed(2)}<br>
+          ${t.option.expiration} (${t.option.dte}d)</td>
+      <td>${t.qty}</td>
+      <td style="color:${t.estimated_cost>1000?'var(--yellow)':'var(--text)'}">
+        $${t.estimated_cost.toLocaleString('en-US',{minimumFractionDigits:2})}
+        ${!t.guardrail_ok?'<br><span style="font-size:10px;color:var(--yellow)">⚠ Over $1,000 limit</span>':''}
+      </td>
+      <td><span class="status-pill s-${t.status}">${t.status}</span></td>
+      <td>
+        <button class="btn btn-green" style="font-size:12px;padding:6px 12px"
+          onclick="openModal('${t.id}')">Execute</button>
+        <button class="btn btn-ghost" style="font-size:12px;padding:6px 10px;margin-left:6px"
+          onclick="removeFromQueue('${t.id}')">✕</button>
+      </td>
+    </tr>`).join('')}
+    </tbody></table>`;
+}
+
+function removeFromQueue(id){
+  queue=queue.filter(t=>t.id!==id);
+  document.getElementById('cnt-queue').textContent=queue.length;
+  renderQueue();
+}
+
+// ── Modal ──────────────────────────────────────────────────────
+function openModal(id){
+  const t=queue.find(x=>x.id===id);
+  if(!t)return;
+  pendingTrade=t;
+  const opt=t.option;
+
+  document.getElementById('modal-summary').innerHTML=`
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 16px">
+      <span style="color:var(--muted);font-size:12px">Ticker</span>   <b>${t.ticker} — ${t.name}</b>
+      <span style="color:var(--muted);font-size:12px">Strategy</span> <span>${t.strategy_label}</span>
+      <span style="color:var(--muted);font-size:12px">Option</span>   <span>${opt.type} $${opt.strike.toFixed(2)} exp ${opt.expiration} (${opt.dte}d)</span>
+      <span style="color:var(--muted);font-size:12px">Bid / Ask</span><span>$${opt.bid.toFixed(2)} / $${opt.ask.toFixed(2)} &nbsp;·&nbsp; IV ${opt.iv.toFixed(1)}%</span>
+      <span style="color:var(--muted);font-size:12px">Contracts</span><span>${t.qty}</span>
+      <span style="color:var(--muted);font-size:12px">Est. capital</span>
+      <b style="color:${t.estimated_cost>1000?'var(--yellow)':'var(--green)'}">$${t.estimated_cost.toLocaleString('en-US',{minimumFractionDigits:2})}</b>
+    </div>`;
+
+  const warn=document.getElementById('modal-warn');
+  const inp=document.getElementById('modal-input');
+  const btn=document.getElementById('modal-ok');
+  if(!t.guardrail_ok){
+    warn.innerHTML=`⚠ <b>Guardrail triggered:</b> This trade requires ~$${t.estimated_cost.toFixed(2)}, which exceeds your $1,000 limit. Type <b>CONFIRM</b> below to override.`;
+    warn.style.display='block';
+    inp.style.display='block';
+    inp.value='';
+    btn.disabled=true;
+  } else {
+    warn.style.display='none';
+    inp.style.display='none';
+    btn.disabled=false;
+  }
+  document.getElementById('modal').classList.add('open');
+}
+
+function closeModal(){
+  document.getElementById('modal').classList.remove('open');
+  pendingTrade=null;
+}
+
+function checkInput(){
+  const v=document.getElementById('modal-input').value.trim().toUpperCase();
+  document.getElementById('modal-ok').disabled=(v!=='CONFIRM');
+}
+
+function doExecute(){
+  if(!pendingTrade)return;
+  const t=pendingTrade;
+  closeModal();
+  showToast(`✓ SoFi browser opening for ${t.ticker} ${t.strategy_label}...\n\nThe order form will be pre-filled. Review and click "Place Order" in SoFi.`,'ok');
+  // In the real bot, this calls /api/execute/<id> which triggers sofi_trader.py
+  queue=queue.filter(x=>x.id!==t.id);
+  document.getElementById('cnt-queue').textContent=queue.length;
+  renderQueue();
+}
+
+// ── Tab switching ──────────────────────────────────────────────
+function switchTab(tab){
+  document.querySelectorAll('.tab').forEach((el,i)=>{
+    const tabs=['sell_puts','buy_calls','buy_puts','covered_calls','queue'];
+    el.classList.toggle('active',tabs[i]===tab);
+  });
+  document.querySelectorAll('.panel').forEach(el=>el.classList.remove('active'));
+  document.getElementById('panel-'+tab).classList.add('active');
+  if(tab==='queue') renderQueue();
+}
+
+// ── Toast ──────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg,type='ok'){
+  const el=document.getElementById('toast');
+  el.textContent=msg;
+  el.className='toast toast-'+type+' show';
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>el.classList.remove('show'),3500);
+}
+
+// ── Init ───────────────────────────────────────────────────────
+['sell_puts','buy_calls','buy_puts','covered_calls'].forEach(renderStrategy);
+</script>
+</body>
+</html>
