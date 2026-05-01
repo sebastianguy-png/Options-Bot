@@ -117,6 +117,7 @@ SCAN_DELAY_S         = 0.15    # Seconds to sleep between ticker fetches (thrott
 HOLD_SWEEP_INTERVALS = [1, 2, 3, 5, 7, 10, 14, 21]  # Trading days for hold-horizon analysis
 SERVER_PORT          = 5000    # Web dashboard port
 LIVE_REFRESH_MINS    = 5       # How often to re-check current signal tickers (minutes)
+AUTO_RESCAN_HOURS    = 2       # How often to re-run the full universe scan (hours)
 
 # ── Scan modes ────────────────────────────────────────────────
 # "focus"  → ~80 high-liquidity names with active options markets
@@ -201,7 +202,20 @@ SELL_STOP_LOSS       = 15    # % loss on the option premium  → cut loss (2:1 r
 # RSI reversal thresholds — exit when mean reversion is complete:
 SELL_RSI_BULL_TARGET = 52    # Buy Call: RSI back above this → bounce done, take profit (was 55)
 SELL_RSI_BEAR_TARGET = 48    # Buy Put:  RSI back below this → pullback done, take profit (was 45)
-TRACK_CHECK_MINS     = 10    # How often (minutes) to re-scan tracked tickers
+TRACK_CHECK_MINS         = 360  # How often (minutes) to re-run full sell-signal check (6 hours)
+TRACK_PRICE_REFRESH_MINS = 5    # How often (minutes) to refresh just the option prices
+
+# ── FOMC meeting decision dates (day of announcement) ─────────
+# Source: federalreserve.gov/monetarypolicy/fomccalendars.htm
+# Update each December when the Fed publishes the following year's schedule.
+FOMC_DATES = [
+    # 2025
+    "2025-01-29", "2025-03-19", "2025-05-07", "2025-06-18",
+    "2025-07-30", "2025-09-17", "2025-10-29", "2025-12-10",
+    # 2026
+    "2026-01-28", "2026-03-19", "2026-04-29", "2026-06-10",
+    "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
+]
 
 # ──────────────────────────────────────────────────────────────
 #  FLASK APP
@@ -222,6 +236,10 @@ scan_lock = threading.Lock()
 # Live refresh state
 _live_refresh_stop  = threading.Event()   # set to stop the loop
 _live_refresh_mins  = LIVE_REFRESH_MINS   # mutable at runtime via UI
+
+# Auto-rescan state
+_auto_rescan_hours  = AUTO_RESCAN_HOURS   # mutable at runtime via UI
+_next_rescan_at     = None                # datetime of next scheduled full scan
 
 # Tracked positions state
 track_lock = threading.Lock()
@@ -564,6 +582,91 @@ def vix_term_structure(vix, vix3m):
     if ratio < 0.95:
         return "contango"
     return "flat"
+
+
+# ── Fed meeting proximity + yield curve sentiment ─────────────
+_fed_cache = {"value": None, "ts": None}
+
+def get_fed_context():
+    """
+    Returns a dict describing proximity to the next/last FOMC meeting and
+    yield-curve-derived rate sentiment.  Cached for 6 hours.
+
+    Keys:
+      days_to_next_fed    int  – calendar days until next FOMC decision date
+      days_since_last_fed int  – calendar days since last FOMC decision date
+      next_fed_date       str  – ISO date of next meeting (YYYY-MM-DD)
+      last_fed_date       str  – ISO date of last meeting
+      pre_fed_window      bool – within 5 calendar days BEFORE meeting (~3 trading days)
+      post_fed_window     bool – within 2 calendar days AFTER meeting
+      irx                 float – 3-month T-bill yield (^IRX, annualised %)
+      fvx                 float – 5-year Treasury yield (^FVX, annualised %)
+      yield_spread        float – fvx - irx (positive = normal; negative = inverted)
+      yield_inverted      bool  – irx > fvx → recession / rate-cut expectations
+      yield_steep         bool  – fvx - irx > 1.5 → growth / rate-hike expectations
+
+    Strategy implications wired into scoring:
+      pre_fed_window  → penalise buy_call / buy_put (IV inflated, will crush post-meeting)
+                         bonus for sell_put (collect elevated premium)
+      post_fed_window → penalise sell_put (IV already crushed, thin premium)
+      yield_inverted  → penalise buy_call (macro headwind); mild bonus for buy_put
+      yield_steep     → mild bonus for buy_call (macro tailwind)
+    """
+    import time as _time
+    now = _time.time()
+    if _fed_cache["value"] is not None and (now - _fed_cache["ts"]) < 21600:  # 6 h
+        return _fed_cache["value"]
+
+    from datetime import date as _date
+    today = _date.today()
+    fomc  = sorted([_date.fromisoformat(d) for d in FOMC_DATES])
+
+    past   = [d for d in fomc if d <= today]
+    future = [d for d in fomc if d >  today]
+
+    last_fed   = past[-1]   if past   else fomc[0]
+    next_fed   = future[0]  if future else fomc[-1]
+
+    days_to   = (next_fed - today).days
+    days_since = (today - last_fed).days
+
+    pre_fed  = 0 < days_to  <= 5   # ~3 trading days ahead
+    post_fed = days_since <= 2     # within 2 days after
+
+    # Yield curve from yfinance — ^IRX = 3-month, ^FVX = 5-year
+    irx = fvx = None
+    try:
+        irx_hist = _yf_call(yf.Ticker("^IRX").history, period="5d")
+        if not irx_hist.empty:
+            irx = round(float(irx_hist["Close"].iloc[-1]), 3)
+    except Exception:
+        pass
+    try:
+        fvx_hist = _yf_call(yf.Ticker("^FVX").history, period="5d")
+        if not fvx_hist.empty:
+            fvx = round(float(fvx_hist["Close"].iloc[-1]), 3)
+    except Exception:
+        pass
+
+    spread         = round(fvx - irx, 3) if (irx is not None and fvx is not None) else None
+    yield_inverted = (spread is not None and spread < 0)
+    yield_steep    = (spread is not None and spread > 1.5)
+
+    result = {
+        "days_to_next_fed":    days_to,
+        "days_since_last_fed": days_since,
+        "next_fed_date":       next_fed.isoformat(),
+        "last_fed_date":       last_fed.isoformat(),
+        "pre_fed_window":      pre_fed,
+        "post_fed_window":     post_fed,
+        "irx":                 irx,
+        "fvx":                 fvx,
+        "yield_spread":        spread,
+        "yield_inverted":      yield_inverted,
+        "yield_steep":         yield_steep,
+    }
+    _fed_cache.update(value=result, ts=now)
+    return result
 
 
 # ── SPY market regime cache (refreshed every 30 min) ─────────
@@ -1345,6 +1448,13 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         vix_backw    = vix_ts == "backwardation"   # panic → reversals more likely
         vix_contango = vix_ts == "contango"        # calm  → sell premium more reliable
 
+        # ── Fed meeting proximity + yield curve sentiment ─────
+        _fed         = get_fed_context()
+        pre_fed      = _fed["pre_fed_window"]      # ~3 trading days before FOMC
+        post_fed     = _fed["post_fed_window"]     # 0-2 days after FOMC
+        yield_inv    = _fed["yield_inverted"]      # 3m > 5y → recession/cut pricing
+        yield_steep  = _fed["yield_steep"]         # 5y - 3m > 1.5% → growth pricing
+
         # ── VIX-adjusted RSI thresholds ───────────────────────
         # High fear (VIX > 25): stocks stay oversold longer → require more extreme RSI
         # Low VIX  (< 15):      options are cheap → slightly relaxed thresholds
@@ -1565,6 +1675,16 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
             "vix_ts":        vix_ts,
             "vix_backw":     vix_backw,
             "vix_contango":  vix_contango,
+            # Fed meeting proximity + yield curve
+            "days_to_next_fed":    _fed["days_to_next_fed"],
+            "next_fed_date":       _fed["next_fed_date"],
+            "pre_fed_window":      pre_fed,
+            "post_fed_window":     post_fed,
+            "irx":                 _fed["irx"],
+            "fvx":                 _fed["fvx"],
+            "yield_spread":        _fed["yield_spread"],
+            "yield_inverted":      yield_inv,
+            "yield_steep":         yield_steep,
             # GARCH(1,1) volatility estimate
             "garch_vol":     round(calc_garch_vol(closes) * 100, 1),  # as % e.g. 32.4
             # MFI
@@ -1597,7 +1717,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
                 if iv_high or prem_high:
                     score = _score_sell_put(cur_rsi, price, cur_bb_l, iv_rank, opt["premium_pct"],
                                             hv_high=hv_high, vix_contango=vix_contango,
-                                            adx_mode=adx_mode)
+                                            adx_mode=adx_mode, pre_fed=pre_fed, post_fed=post_fed)
                     mc = run_monte_carlo(price, opt["strike"], opt["iv"], opt["dte"], "sell_put", opt["mid"])
                     _bs = black_scholes(price, opt["strike"], opt["dte"]/365.0, RISK_FREE_RATE, opt["iv"]/100, "put")
                     _bs_mp = bs_mispricing(_bs["fair_value"] if _bs else None, opt["mid"])
@@ -1621,7 +1741,9 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
                                         above_ma50=above_ma50, hv_low=hv_low,
                                         rs_strong=rs_strong, squeeze=squeeze_setup,
                                         near_52w_low=near_52w_low, vix_backw=vix_backw,
-                                        adx_mode=adx_mode, confluence=bull_signals)
+                                        adx_mode=adx_mode, confluence=bull_signals,
+                                        pre_fed=pre_fed, yield_inverted=yield_inv,
+                                        yield_steep=yield_steep)
                 mc = run_monte_carlo(price, opt["strike"], opt["iv"], opt["dte"], "buy_call", opt["mid"])
                 _bs = black_scholes(price, opt["strike"], opt["dte"]/365.0, RISK_FREE_RATE, opt["iv"]/100, "call")
                 _bs_mp = bs_mispricing(_bs["fair_value"] if _bs else None, opt["mid"])
@@ -1643,7 +1765,8 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
                 score = _score_buy_put(cur_rsi, price, cur_bb_u,
                                        rs_weak=rs_weak, earnings_soon=earnings_soon,
                                        near_52w_high=near_52w_high, adx_mode=adx_mode,
-                                       confluence=bear_signals)
+                                       confluence=bear_signals, pre_fed=pre_fed,
+                                       yield_inverted=yield_inv)
                 mc = run_monte_carlo(price, opt["strike"], opt["iv"], opt["dte"], "buy_put", opt["mid"])
                 _bs = black_scholes(price, opt["strike"], opt["dte"]/365.0, RISK_FREE_RATE, opt["iv"]/100, "put")
                 _bs_mp = bs_mispricing(_bs["fair_value"] if _bs else None, opt["mid"])
@@ -1759,7 +1882,8 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
 # ── Scoring helpers ───────────────────────────────────────────
 
 def _score_sell_put(rsi, price, bb_l, iv_rank, prem_pct,
-                    hv_high=False, vix_contango=False, adx_mode="normal"):
+                    hv_high=False, vix_contango=False, adx_mode="normal",
+                    pre_fed=False, post_fed=False):
     w     = _cal_weights.get("sell_put", {})
     rsi_w = w.get("sig_rsi_os",    1.0)
     bb_w  = w.get("sig_bb_low",    1.0)
@@ -1777,12 +1901,17 @@ def _score_sell_put(rsi, price, bb_l, iv_rank, prem_pct,
     if vix_contango: s += 10
     # Ranging market → mean-reversion (stock stays near support) more reliable
     if adx_mode == "ranging": s += 8
+    # Pre-Fed window: IV is inflated → more premium to collect; favour selling
+    if pre_fed:  s += 10
+    # Post-Fed window: IV has already crushed → premium is thin; penalise selling
+    if post_fed: s -= 12
     return min(max(round(s), 0), 100)
 
 def _score_buy_call(rsi, price, bb_l, reversal,
                     above_ma50=False, hv_low=False, rs_strong=False, squeeze=False,
                     near_52w_low=False, vix_backw=False, adx_mode="normal",
-                    confluence=0):
+                    confluence=0, pre_fed=False, yield_inverted=False,
+                    yield_steep=False):
     w     = _cal_weights.get("buy_call", {})
     rsi_w = w.get("sig_rsi_os",     1.0)
     bb_w  = w.get("sig_bb_low",     1.0)
@@ -1814,10 +1943,17 @@ def _score_buy_call(rsi, price, bb_l, reversal,
     # Multi-signal confluence bonus: 4+ signals firing = high conviction
     if confluence >= 4: s += 15
     elif confluence >= 3: s += 8
+    # Pre-Fed window: IV inflated, will crush after announcement → penalise long options
+    if pre_fed:        s -= 12
+    # Yield curve inverted (3m > 5y): recession / rate-cut expectations → macro headwind
+    if yield_inverted: s -= 8
+    # Yield curve steep (5y - 3m > 1.5%): growth / normalisation expectations → tailwind
+    if yield_steep:    s += 6
     return min(max(round(s), 0), 100)
 
 def _score_buy_put(rsi, price, bb_u, rs_weak=False, earnings_soon=False,
-                   near_52w_high=False, adx_mode="normal", confluence=0):
+                   near_52w_high=False, adx_mode="normal", confluence=0,
+                   pre_fed=False, yield_inverted=False):
     w     = _cal_weights.get("buy_put", {})
     rsi_w = w.get("sig_rsi_ob",    1.0)
     bb_w  = w.get("sig_bb_high",   1.0)
@@ -1837,6 +1973,10 @@ def _score_buy_put(rsi, price, bb_u, rs_weak=False, earnings_soon=False,
     # Multi-signal confluence bonus
     if confluence >= 4: s += 15
     elif confluence >= 3: s += 8
+    # Pre-Fed window: IV inflated, will crush after announcement → penalise long options
+    if pre_fed:        s -= 12
+    # Yield curve inverted: recession / rate-cut pricing → mild macro tailwind for puts
+    if yield_inverted: s += 5
     return min(max(round(s), 0), 100)
 
 def _score_iron_condor(rsi, iv_rank, net_credit, price):
@@ -2248,13 +2388,31 @@ def get_sell_signal(position: dict) -> dict:
             strike = opt.get("strike")
             otype  = opt.get("type", "call")
             if exp and strike:
-                chain = _yf_call(tkr.option_chain, exp)
-                opts  = chain.calls if otype == "call" else chain.puts
-                row   = opts[abs(opts["strike"] - strike) < 0.01]
+                opt_tkr = yf.Ticker(sym)
+                chain   = _yf_call(opt_tkr.option_chain, exp)
+                opts    = chain.calls if otype == "call" else chain.puts
+                row     = opts[abs(opts["strike"] - strike) < 0.01]
                 if not row.empty:
                     row_data                         = row.iloc[0]
                     current_mid, current_bid_val, \
                     current_ask_val, _, price_quality = _option_price_detail(row_data)
+
+                    # ── Sanity-check for grossly corrupt yfinance data ──
+                    # Only reject if impliedVolatility > 300% (decimal 3.0) —
+                    # a sure sign the row's price columns belong to a different
+                    # strike. We intentionally don't cap by price here because
+                    # high-IV stocks and longer-dated options can legitimately
+                    # exceed any fixed percentage of stock price.
+                    _row_iv = float(row_data.get("impliedVolatility") or 0)
+                    if _row_iv > 3.0:
+                        print(
+                            f"[PriceCheck] {sym} strike={strike} mid={current_mid:.3f} "
+                            f"iv={_row_iv:.2f} — rejected (IV > 300%, likely misaligned row)"
+                        )
+                        current_mid     = 0.0
+                        current_bid_val = 0.0
+                        current_ask_val = 0.0
+                        price_quality   = "unavailable"
         except Exception:
             pass
 
@@ -2372,28 +2530,53 @@ def get_sell_signal(position: dict) -> dict:
 
 
 def _run_tracked_check():
-    """Background thread — re-check sell signals on all tracked positions."""
+    """Background thread — re-check sell signals on all tracked positions.
+
+    Loads a snapshot of position IDs at the start, computes each sell signal
+    (network calls, outside the lock), then re-loads from disk before writing
+    back — so any edits the user makes during the check (entry price, strike,
+    etc.) are never overwritten by stale data.
+    """
     import time as _time
-    positions = load_tracked()
-    if not positions:
+    with track_lock:
+        snapshot = load_tracked()
+    if not snapshot:
         return
-    print(f"\n[Track] Checking {len(positions)} tracked position(s)…")
-    for pos in positions:
+    print(f"\n[Track] Checking {len(snapshot)} tracked position(s)…")
+    for pos in snapshot:
         try:
             sig = get_sell_signal(pos)
+            clear_override = sig.pop("_clear_live_override", False)
+            # Re-load fresh copy from disk so any user edits are preserved.
+            # CRITICAL: only write last_signal back if the option (strike/exp/type)
+            # hasn't been changed since we loaded the snapshot — if it has, the
+            # _refresh_after_edit thread will handle the fresh signal for the new option.
+            snap_opt = pos.get("option") or {}
             with track_lock:
-                pos["last_checked"] = datetime.now().isoformat()
-                # If yfinance returned a live quote, clear the manual override
-                if sig.pop("_clear_live_override", False):
-                    pos.pop("live_price_override",    None)
-                    pos.pop("live_price_override_at", None)
-                    print(f"[Track] {pos.get('ticker')} — live quote restored, clearing manual price override")
-                pos["last_signal"]  = sig
+                positions = load_tracked()
+                for p in positions:
+                    if p["id"] == pos["id"]:
+                        disk_opt = p.get("option") or {}
+                        option_unchanged = (
+                            disk_opt.get("strike")     == snap_opt.get("strike") and
+                            disk_opt.get("expiration") == snap_opt.get("expiration") and
+                            disk_opt.get("type")       == snap_opt.get("type")
+                        )
+                        if not option_unchanged:
+                            # Option was edited during our network call — skip this write-back
+                            print(f"[Track] {p.get('ticker')} option changed during check, skipping stale signal write.")
+                            break
+                        p["last_checked"] = datetime.now().isoformat()
+                        if clear_override:
+                            p.pop("live_price_override",    None)
+                            p.pop("live_price_override_at", None)
+                            print(f"[Track] {p.get('ticker')} — live quote restored, clearing manual price override")
+                        p["last_signal"] = sig
+                        break
+                save_tracked(positions)
         except Exception:
             pass
         _time.sleep(2)   # space out option chain fetches to avoid rate limits
-    with track_lock:
-        save_tracked(positions)
     print(f"[Track] Done checking tracked positions.")
 
 
@@ -2403,6 +2586,86 @@ def _schedule_track_checker():
     t = threading.Timer(TRACK_CHECK_MINS * 60, _schedule_track_checker)
     t.daemon = True
     t.start()
+
+
+def _refresh_tracked_prices():
+    """
+    Lightweight price-only refresh for tracked positions.
+    Runs every TRACK_PRICE_REFRESH_MINS minutes.
+    Only updates bid/ask/mid/price_quality in last_signal — does NOT
+    re-run the full RSI/BB sell-signal analysis (that stays on the 6h cycle).
+    Uses the same safe per-position save pattern to avoid race conditions.
+    """
+    import time as _time
+    while True:
+        _time.sleep(TRACK_PRICE_REFRESH_MINS * 60)
+        try:
+            with track_lock:
+                positions = load_tracked()
+            if not positions:
+                continue
+
+            for pos in positions:
+                opt    = pos.get("option") or {}
+                exp    = opt.get("expiration")
+                strike = opt.get("strike")
+                otype  = opt.get("type", "call")
+                sym    = pos.get("ticker", "")
+                if not (exp and strike and sym):
+                    continue
+
+                # Skip if user has an active manual price override
+                if pos.get("live_price_override") is not None:
+                    continue
+
+                snap_strike = strike
+                snap_exp    = exp
+                snap_type   = otype
+
+                try:
+                    tkr   = yf.Ticker(sym)
+                    chain = _yf_call(tkr.option_chain, exp)
+                    opts  = chain.calls if otype == "call" else chain.puts
+                    row   = opts[abs(opts["strike"] - float(strike)) < 0.01]
+                    if row.empty:
+                        continue
+                    r = row.iloc[0]
+                    # IV sanity check — reject grossly corrupt rows
+                    _iv = float(r.get("impliedVolatility") or 0)
+                    if _iv > 3.0:
+                        continue
+                    mid, bid, ask, _, quality = _option_price_detail(r)
+                except Exception:
+                    continue
+
+                # Save only if option hasn't changed since we fetched
+                with track_lock:
+                    positions_now = load_tracked()
+                    for p in positions_now:
+                        if p["id"] != pos["id"]:
+                            continue
+                        disk_opt = p.get("option") or {}
+                        if (disk_opt.get("strike")     != snap_strike or
+                            disk_opt.get("expiration") != snap_exp    or
+                            disk_opt.get("type")       != snap_type):
+                            break   # option changed during fetch — skip
+                        sig = p.get("last_signal") or {}
+                        sig["current_option_mid"] = round(mid, 3) if mid > 0 else None
+                        sig["current_bid"]        = round(bid, 3) if bid > 0 else None
+                        sig["current_ask"]        = round(ask, 3) if ask > 0 else None
+                        sig["price_quality"]      = quality
+                        # Recompute P&L if we have an entry price
+                        entry = float(p.get("entry_price") or 0)
+                        if entry > 0 and mid > 0:
+                            pct = (mid - entry) / entry * 100
+                            sig["pct_change"]    = round(pct, 1)
+                            sig["dollar_change"] = round((mid - entry) * 100, 2)
+                        p["last_signal"] = sig
+                        break
+                    save_tracked(positions_now)
+
+        except Exception as e:
+            print(f"  [PriceRefresh] Error: {e}")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -4092,67 +4355,98 @@ def _log_new_signals(totals: dict):
 
 def _resolve_signal_log():
     """
-    Background job: for each unresolved signal log entry whose check_after
-    date has passed, fetch the current stock price and compute the outcome.
-    Runs every 6 hours via the scheduler.
+    Background job (runs every 6 hours):
+    - ALL pending entries: refresh live stock price → store current_return_pct
+      so the UI can show live unrealized P&L immediately after signal date.
+    - Entries past check_after: also finalize win/loss outcome.
+
+    Safe pattern: snapshot → network work → re-load + merge by UUID.
     """
     try:
         with _signal_log_lock:
-            entries = _load_signal_log()
+            snapshot = _load_signal_log()
 
-        today     = datetime.now().date()
-        to_check  = [
-            e for e in entries
-            if not e.get("resolved")
-            and e.get("check_after")
-            and datetime.strptime(e["check_after"][:10], "%Y-%m-%d").date() <= today
-        ]
+        today    = datetime.now().date()
+        pending  = [e for e in snapshot if not e.get("resolved")]
 
-        if not to_check:
+        if not pending:
             return
 
-        # Batch by ticker to minimise API calls
+        # Batch all pending by ticker (one API call per ticker)
         ticker_groups: dict = {}
-        for e in to_check:
+        for e in pending:
             ticker_groups.setdefault(e["ticker"], []).append(e)
 
+        all_updates: dict = {}   # id → fields to merge
         resolved_count = 0
+        live_count     = 0
+
         for sym, group in ticker_groups.items():
             try:
-                hist = yf.Ticker(sym).history(period="5d")
-                if hist.empty:
+                hist = _yf_call(yf.Ticker(sym).history, period="5d")
+                if hist is None or hist.empty:
                     continue
                 cur_price = float(hist["Close"].iloc[-1])
+
                 for e in group:
                     entry_price = e.get("price_at_signal")
-                    if not entry_price or entry_price <= 0:
-                        e["resolved"] = True
-                        e["outcome"]  = "no_price"
-                        continue
-                    stock_return_pct = round((cur_price - entry_price) / entry_price * 100, 2)
-                    strat = e.get("strategy", "")
-                    if strat == "buy_call":
-                        win = stock_return_pct > 3.0
-                    elif strat == "buy_put":
-                        win = stock_return_pct < -3.0
-                    elif strat in ("sell_put", "covered_call"):
-                        win = stock_return_pct > -5.0   # stock stayed stable/up
-                    else:
-                        win = stock_return_pct > 0
-                    e["resolved"]          = True
-                    e["resolved_at"]       = datetime.now().isoformat()
-                    e["price_at_resolve"]  = round(cur_price, 2)
-                    e["stock_return_pct"]  = stock_return_pct
-                    e["win"]               = win
-                    e["outcome"]           = "win" if win else "loss"
-                    resolved_count        += 1
-            except Exception as ex:
-                print(f"  [SigLog] Resolve error for {sym}: {ex}")
+                    past_hold   = (
+                        e.get("check_after")
+                        and datetime.strptime(e["check_after"][:10], "%Y-%m-%d").date() <= today
+                    )
 
-        if resolved_count:
+                    if not entry_price or entry_price <= 0:
+                        # Can't compute P&L — only mark resolved if hold is done
+                        if past_hold:
+                            all_updates[e["id"]] = {"resolved": True, "outcome": "no_price"}
+                            resolved_count += 1
+                        continue
+
+                    stock_return_pct = round((cur_price - entry_price) / entry_price * 100, 2)
+                    update = {
+                        "current_price":      round(cur_price, 2),
+                        "current_return_pct": stock_return_pct,
+                        "live_updated_at":    datetime.now().isoformat(),
+                    }
+
+                    if past_hold:
+                        # Hold period complete — lock in win/loss
+                        strat = e.get("strategy", "")
+                        if strat == "buy_call":
+                            win = stock_return_pct > 3.0
+                        elif strat == "buy_put":
+                            win = stock_return_pct < -3.0
+                        elif strat in ("sell_put", "covered_call"):
+                            win = stock_return_pct > -5.0
+                        else:
+                            win = stock_return_pct > 0
+                        update.update({
+                            "resolved":         True,
+                            "resolved_at":      datetime.now().isoformat(),
+                            "price_at_resolve": round(cur_price, 2),
+                            "stock_return_pct": stock_return_pct,
+                            "win":              win,
+                            "outcome":          "win" if win else "loss",
+                        })
+                        resolved_count += 1
+                    else:
+                        live_count += 1
+
+                    all_updates[e["id"]] = update
+
+            except Exception as ex:
+                print(f"  [SigLog] Price fetch error for {sym}: {ex}")
+
+        if all_updates:
             with _signal_log_lock:
+                entries = _load_signal_log()
+                for entry in entries:
+                    updates = all_updates.get(entry.get("id"))
+                    if updates:
+                        entry.update(updates)
                 _save_signal_log(entries)
-            print(f"  [SigLog] Resolved {resolved_count} entries")
+            print(f"  [SigLog] Updated {len(all_updates)} entries "
+                  f"({resolved_count} resolved, {live_count} live P&L refresh)")
     except Exception as e:
         print(f"  [SigLog] Resolve job failed: {e}")
 
@@ -4310,6 +4604,30 @@ def _start_live_refresh():
     _live_refresh_stop = threading.Event()
     t = threading.Thread(target=_live_refresh_loop, daemon=True)
     t.start()
+
+
+def _auto_rescan_loop():
+    """
+    Daemon thread: re-runs the full universe scan every _auto_rescan_hours hours.
+    Schedules the next run from the moment the PREVIOUS scan FINISHES, so a
+    slow scan never causes a backlog.  Skips a cycle if a scan is already running.
+    """
+    global _next_rescan_at
+    import time as _time
+    while True:
+        _next_rescan_at = datetime.now() + timedelta(hours=_auto_rescan_hours)
+        secs = _auto_rescan_hours * 3600
+        print(f"  [AutoScan] Next full scan in {_auto_rescan_hours}h "
+              f"(~{_next_rescan_at.strftime('%H:%M')})")
+        _time.sleep(secs)
+        with scan_lock:
+            already_running = scan_state.get("running", False)
+        if already_running:
+            print("  [AutoScan] Skipping — scan already in progress")
+            continue
+        print("  [AutoScan] Triggering scheduled full scan…")
+        _run_scan()   # blocks until scan completes; loop then reschedules
+
 
 
 # ══════════════════════════════════════════════════════════════
@@ -4548,13 +4866,15 @@ def api_scan_start():
 def api_scan_status():
     with scan_lock:
         return jsonify({
-            "running":      scan_state["running"],
-            "progress":     scan_state["progress"],
-            "total":        scan_state["total"],
-            "last_scan":    scan_state["last_scan"],
-            "last_refresh": scan_state.get("last_refresh"),
-            "live_active":  not _live_refresh_stop.is_set(),
-            "live_mins":    _live_refresh_mins,
+            "running":         scan_state["running"],
+            "progress":        scan_state["progress"],
+            "total":           scan_state["total"],
+            "last_scan":       scan_state["last_scan"],
+            "last_refresh":    scan_state.get("last_refresh"),
+            "live_active":     not _live_refresh_stop.is_set(),
+            "live_mins":       _live_refresh_mins,
+            "next_rescan":     _next_rescan_at.strftime("%H:%M") if _next_rescan_at else None,
+            "rescan_hours":    _auto_rescan_hours,
             "counts": {k: len(v) for k, v in scan_state["results"].items()},
         })
 
@@ -5062,9 +5382,12 @@ def api_signal_log_entries():
             "price":         e.get("price_at_signal"),
             "vix_regime":    e.get("vix_regime"),
             "resolved":      e.get("resolved", False),
-            "outcome":       e.get("outcome"),
-            "win":           e.get("win"),
-            "stock_return":  e.get("stock_return_pct"),
+            "outcome":            e.get("outcome"),
+            "win":                e.get("win"),
+            "stock_return_pct":   e.get("stock_return_pct"),
+            "current_return_pct": e.get("current_return_pct"),
+            "current_price":      e.get("current_price"),
+            "live_updated_at":    (e.get("live_updated_at") or "")[:16],
         })
     return jsonify({"entries": out, "total": len(entries)})
 
@@ -5557,40 +5880,96 @@ def api_track_update_option(position_id):
         entry_price_auto      = None
         try:
             tkr   = yf.Ticker(ticker)
+            # Fetch current stock price for misalignment sanity check
+            _hist = _yf_call(tkr.history, period="2d")
+            _stock_price = float(_hist["Close"].iloc[-1]) if _hist is not None and not _hist.empty else 0.0
             chain = _yf_call(tkr.option_chain, new_exp)
             opts  = chain.calls if new_type == "call" else chain.puts
             row   = opts[abs(opts["strike"] - new_strike) < 0.01]
             if not row.empty:
                 r = row.iloc[0]
                 mid, bid, ask, last, quality = _option_price_detail(r)
-                new_opt["bid"]            = round(float(r.get("bid") or 0), 3)
-                new_opt["ask"]            = round(float(r.get("ask") or 0), 3)
-                new_opt["mid"]            = round(mid, 3)
-                new_opt["iv"]             = round(float(r.get("impliedVolatility") or 0) * 100, 1)
-                new_opt["volume"]         = int(r.get("volume") or 0)
-                new_opt["open_interest"]  = int(r.get("openInterest") or 0)
-                # Re-compute DTE from today to expiration
-                from datetime import date as _date
-                try:
-                    exp_date = _date.fromisoformat(new_exp)
-                    new_opt["dte"] = max((exp_date - _date.today()).days, 0)
-                except Exception:
-                    pass
-                # Auto-set entry price to current mid if not already manually set
-                if mid > 0:
-                    entry_price_auto = round(mid, 3)
+
+                # ── Sanity-check for grossly corrupt yfinance data ──
+                _row_iv   = float(r.get("impliedVolatility") or 0)
+                _price_ok = True
+                if _row_iv > 3.0:
+                    print(
+                        f"[PriceCheck] {ticker} edit strike={new_strike} mid={mid:.3f} "
+                        f"iv={_row_iv:.2f} — rejected (IV > 300%, likely misaligned row)"
+                    )
+                    _price_ok = False
+
+                if _price_ok:
+                    new_opt["bid"]            = round(float(r.get("bid") or 0), 3)
+                    new_opt["ask"]            = round(float(r.get("ask") or 0), 3)
+                    new_opt["mid"]            = round(mid, 3)
+                    new_opt["iv"]             = round(float(r.get("impliedVolatility") or 0) * 100, 1)
+                    new_opt["volume"]         = int(r.get("volume") or 0)
+                    new_opt["open_interest"]  = int(r.get("openInterest") or 0)
+                    # Re-compute DTE from today to expiration
+                    from datetime import date as _date
+                    try:
+                        exp_date = _date.fromisoformat(new_exp)
+                        new_opt["dte"] = max((exp_date - _date.today()).days, 0)
+                    except Exception:
+                        pass
+                    # Auto-set entry price only from a live or near-live quote.
+                    # Never use lastPrice alone — it can be days old for thinly-traded
+                    # options and will produce a wildly wrong P&L baseline.
+                    # quality values that indicate a real-time price:
+                    #   "live"       – fresh two-sided bid+ask
+                    #   "stale_bid"  – bid looks old but ask is current
+                    #   "ask_only"   – no bid yet (common at open), ask is current
+                    # Excluded: "last_only" (lastPrice only, no live quote) and "unavailable"
+                    if mid > 0 and quality in ("live", "stale_bid", "ask_only"):
+                        entry_price_auto = round(mid, 3)
         except Exception as e:
             print(f"[option edit] Could not fetch live data for {ticker} {new_exp} {new_type} ${new_strike}: {e}")
 
         pos["option"]      = new_opt
-        pos["last_signal"] = None   # force re-check on next background pass
+        pos["last_signal"] = None   # will be populated by the immediate refresh below
         pos["last_checked"]= None
 
-        # Update entry price to live mid (unless user already set it manually)
+        # Update entry price to live mid (unless user already set it manually).
+        # entry_price_manual = True means the user deliberately typed in their
+        # actual fill price and it must never be auto-overwritten.
         if entry_price_auto and not pos.get("entry_price_manual"):
             pos["entry_price"] = entry_price_auto
 
         save_tracked(positions)
+        pos_id_to_refresh = pos["id"]
+
+    # ── Immediate sell-signal refresh for the edited position ──────
+    # Don't wait 6 hours for the background pass — run get_sell_signal
+    # now in a short-lived thread so the card shows live prices within seconds.
+    def _refresh_after_edit(pid):
+        import time as _time
+        _time.sleep(0.5)   # let the response return first
+        try:
+            with track_lock:
+                positions = load_tracked()
+                target = next((p for p in positions if p["id"] == pid), None)
+            if target is None:
+                return
+            sig = get_sell_signal(target)
+            clear_override = sig.pop("_clear_live_override", False)
+            with track_lock:
+                positions = load_tracked()
+                for p in positions:
+                    if p["id"] == pid:
+                        p["last_checked"] = datetime.now().isoformat()
+                        if clear_override:
+                            p.pop("live_price_override",    None)
+                            p.pop("live_price_override_at", None)
+                        p["last_signal"] = sig
+                        break
+                save_tracked(positions)
+            print(f"[Track] Immediate refresh after option edit for {target.get('ticker')} done.")
+        except Exception as ex:
+            print(f"[Track] Immediate refresh failed: {ex}")
+
+    threading.Thread(target=_refresh_after_edit, args=(pos_id_to_refresh,), daemon=True).start()
 
     return jsonify({
         "ok":    True,
@@ -6681,6 +7060,13 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
         <div style="font-size:11px;color:var(--muted);margin-bottom:14px" id="cal-siglog-notice"></div>
 
         <div id="siglog-body-wrap">
+          <!-- Per-strategy W/L summary cards -->
+          <div id="siglog-strat-summary" style="display:none;margin-bottom:18px">
+            <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;
+                 letter-spacing:.5px;margin-bottom:10px">Performance by Strategy</div>
+            <div id="siglog-strat-cards" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+          </div>
+
           <!-- Win rate bars (only shown once enough entries are resolved) -->
           <div id="cal-siglog-quality-wrap" style="display:none;margin-bottom:16px">
             <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;
@@ -6699,8 +7085,8 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
                   <th style="text-align:right;padding:6px 8px;color:var(--muted);font-weight:600">Score</th>
                   <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">VIX</th>
                   <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Resolves</th>
-                  <th style="text-align:right;padding:6px 8px;color:var(--muted);font-weight:600">Return</th>
-                  <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Outcome</th>
+                  <th style="text-align:right;padding:6px 8px;color:var(--muted);font-weight:600">Stock Δ</th>
+                  <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Status</th>
                 </tr>
               </thead>
               <tbody id="cal-siglog-tbody">
@@ -6951,9 +7337,11 @@ function pollScanStatus() {
       // Only stop when we've confirmed the scan actually ran
       bar.style.width = '100%';
       setTimeout(()=>{ bar.style.width='0%'; },800);
-      info.textContent = data.last_scan
+      const lastStr = data.last_scan
         ? `Last scan: ${new Date(data.last_scan).toLocaleTimeString()}`
         : 'Not yet scanned';
+      const nextStr = data.next_rescan ? ` · Next: ${data.next_rescan}` : '';
+      info.textContent = lastStr + nextStr;
       document.getElementById('btn-scan').disabled = false;
       clearInterval(scanPoll);
       clearInterval(resultPoll);
@@ -7185,6 +7573,21 @@ function buildCard(d, strategy) {
     };
     const [mktColor, mktLabel] = mktMap[d.market_trend] || [];
     if(mktColor) sigs += `<span class="sig ${mktColor}">${mktLabel}</span>`;
+  }
+  // Fed meeting proximity + yield curve
+  if(d.days_to_next_fed != null) {
+    if(d.pre_fed_window) {
+      sigs += `<span class="sig sig-orange">🏦 FOMC in ${d.days_to_next_fed}d — IV inflated</span>`;
+    } else if(d.post_fed_window) {
+      sigs += `<span class="sig sig-blue">🏦 Post-FOMC — IV crushed</span>`;
+    } else if(d.days_to_next_fed <= 14) {
+      sigs += `<span class="sig sig-blue">🏦 FOMC in ${d.days_to_next_fed}d</span>`;
+    }
+  }
+  if(d.yield_inverted) {
+    sigs += `<span class="sig sig-red">📉 Yield Curve Inverted ${d.yield_spread?.toFixed(2)}%</span>`;
+  } else if(d.yield_steep) {
+    sigs += `<span class="sig sig-green">📈 Yield Curve Steep +${d.yield_spread?.toFixed(2)}%</span>`;
   }
   // GARCH volatility estimate
   if(d.garch_vol != null) {
@@ -7891,12 +8294,15 @@ async function refreshTracked() {
     const entryStr    = entryMid != null ? entryLabel+'$'+entryMid.toFixed(3) : '—';
 
     // ── Price quality badge ─────────────────────────────────
+    // "live" = Yahoo returned a two-sided bid+ask, but Yahoo option chain
+    // data can lag real-time by 15–30 min. Use Live Price to override
+    // with your broker's real-time quote when prices seem off.
     const qBadge = {
-      live:        { icon: '🟢', label: 'Live',         color: 'var(--green)' },
+      live:        { icon: '🟡', label: 'Yahoo quote',  color: '#f59e0b' },
       stale_bid:   { icon: '🟡', label: 'Stale bid',    color: '#f59e0b' },
       ask_only:    { icon: '🟡', label: 'Ask only',     color: '#f59e0b' },
       last_only:   { icon: '🔴', label: 'Stale',        color: 'var(--red)' },
-      manual:      { icon: '✏️', label: 'Manual price', color: '#a78bfa' },
+      manual:      { icon: '🟢', label: 'Manual price', color: 'var(--green)' },
       unavailable: { icon: '⚫', label: 'No quote',     color: 'var(--muted)' },
     };
     const qInfo = qBadge[priceQuality] || qBadge['unavailable'];
@@ -8978,7 +9384,8 @@ async function runBSAnalysis() {
 window.onload = async () => {
   const s = await fetch('/api/scan/status').then(r=>r.json());
   if(s.last_scan) {
-    document.getElementById('scan-info').textContent = `Last scan: ${new Date(s.last_scan).toLocaleTimeString()}`;
+    const _nextStr = s.next_rescan ? ` · Next: ${s.next_rescan}` : '';
+    document.getElementById('scan-info').textContent = `Last scan: ${new Date(s.last_scan).toLocaleTimeString()}${_nextStr}`;
     ['sell_puts','buy_calls','buy_puts','covered_calls'].forEach(loadStrategy);
   }
   // Restore WFO results if saved from a previous session
@@ -9297,7 +9704,69 @@ function rerenderSigLog() {
     tbody.innerHTML = `<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--muted)">
       Run a scan to start logging recommendations
     </td></tr>`;
+    document.getElementById('siglog-tally').style.display = 'none';
     return;
+  }
+
+  // ── Per-strategy W/L summary cards (all resolved entries) ──
+  const STRAT_META = {
+    buy_call:     { label: '📈 Buy Call',      short: 'Buy Call' },
+    buy_put:      { label: '📉 Buy Put',       short: 'Buy Put' },
+    sell_put:     { label: '💰 Sell Put',      short: 'Sell Put' },
+    covered_call: { label: '🛡 Covered Call',  short: 'Cvrd Call' },
+    iron_condor:  { label: '🦅 Iron Condor',   short: 'Condor' },
+  };
+  const resolved = list.filter(e => e.outcome && e.outcome !== 'pending' && e.outcome !== 'no_price');
+  const summaryWrap = document.getElementById('siglog-strat-summary');
+  const cardsEl     = document.getElementById('siglog-strat-cards');
+  if (resolved.length > 0 && cardsEl) {
+    // Group by strategy
+    const byStrat = {};
+    for (const e of resolved) {
+      const s = e.strategy || 'unknown';
+      if (!byStrat[s]) byStrat[s] = { wins: 0, losses: 0, returns: [] };
+      if (e.outcome === 'win') byStrat[s].wins++;
+      else byStrat[s].losses++;
+      const ret = e.stock_return_pct !== undefined && e.stock_return_pct !== null
+                  ? parseFloat(e.stock_return_pct) : null;
+      if (ret !== null) byStrat[s].returns.push(ret);
+    }
+    const stratOrder = ['buy_call','buy_put','sell_put','covered_call','iron_condor'];
+    cardsEl.innerHTML = stratOrder
+      .filter(s => byStrat[s])
+      .map(s => {
+        const d      = byStrat[s];
+        const total  = d.wins + d.losses;
+        const pct    = Math.round(d.wins / total * 100);
+        const avgRet = d.returns.length
+                       ? (d.returns.reduce((a,b)=>a+b,0) / d.returns.length).toFixed(1)
+                       : null;
+        const pctCol = pct >= 60 ? 'var(--green)' : pct >= 45 ? '#f59e0b' : 'var(--red)';
+        const retStr = avgRet !== null
+                       ? `<div style="font-size:11px;color:${parseFloat(avgRet)>=0?'var(--green)':'var(--red)'};
+                              margin-top:3px;font-weight:600">
+                            avg ${parseFloat(avgRet)>=0?'+':''}${avgRet}% stock
+                          </div>`
+                       : '';
+        const meta   = STRAT_META[s] || { label: s, short: s };
+        return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;
+                     padding:10px 14px;min-width:120px;flex:1">
+          <div style="font-size:11px;color:var(--muted);margin-bottom:6px">${meta.label}</div>
+          <div style="display:flex;align-items:baseline;gap:6px">
+            <span style="font-size:16px;font-weight:700;color:${pctCol}">${pct}%</span>
+            <span style="font-size:11px;color:var(--muted)">${total} trades</span>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:3px">
+            <span style="color:var(--green)">${d.wins}W</span>
+            <span style="color:var(--border)"> / </span>
+            <span style="color:var(--red)">${d.losses}L</span>
+          </div>
+          ${retStr}
+        </div>`;
+      }).join('');
+    summaryWrap.style.display = 'block';
+  } else if (summaryWrap) {
+    summaryWrap.style.display = 'none';
   }
 
   const limitSel = document.getElementById('siglog-rows-select');
@@ -9321,8 +9790,11 @@ function rerenderSigLog() {
     let outcomeCell = `<td style="padding:5px 8px"><span style="color:var(--muted)">⏳ Pending</span></td>`;
 
     if (e.outcome && e.outcome !== 'pending') {
-      const ret   = e.stock_return !== null && e.stock_return !== undefined
-                     ? parseFloat(e.stock_return).toFixed(1) : null;
+      // ── Final resolved outcome ──
+      const ret   = e.stock_return_pct !== null && e.stock_return_pct !== undefined
+                     ? parseFloat(e.stock_return_pct).toFixed(1)
+                     : (e.stock_return !== null && e.stock_return !== undefined
+                        ? parseFloat(e.stock_return).toFixed(1) : null);
       const isWin = e.outcome === 'win';
       retCell = `<td style="padding:5px 8px;text-align:right;font-weight:700;
                     color:${isWin ? 'var(--green)' : 'var(--red)'}">
@@ -9332,6 +9804,22 @@ function rerenderSigLog() {
                       <span style="color:${isWin ? 'var(--green)' : 'var(--red)'}">
                         ${isWin ? '🟢 Win' : '🔴 Loss'}
                       </span>
+                     </td>`;
+    } else if (e.current_return_pct !== null && e.current_return_pct !== undefined) {
+      // ── Live unrealized P&L (hold period not yet complete) ──
+      const liveRet = parseFloat(e.current_return_pct).toFixed(1);
+      const isUp    = e.current_return_pct >= 0;
+      // For buy_put the direction is inverted — stock down is good
+      const strat_key = e.strategy || '';
+      const isGood  = strat_key === 'buy_put' ? !isUp
+                    : strat_key === 'sell_put' || strat_key === 'covered_call' ? e.current_return_pct > -5
+                    : isUp;
+      const liveCol = isGood ? 'var(--green)' : 'var(--red)';
+      retCell = `<td style="padding:5px 8px;text-align:right;font-weight:700;color:${liveCol}">
+                  ${isUp ? '+' : ''}${liveRet}%
+                 </td>`;
+      outcomeCell = `<td style="padding:5px 8px">
+                      <span style="color:var(--muted);font-size:11px">📊 Live</span>
                      </td>`;
     }
 
@@ -9636,8 +10124,12 @@ def main():
     # Start sell-signal tracker in the background
     threading.Thread(target=_schedule_track_checker, daemon=True).start()
 
+    # Lightweight option price refresh every TRACK_PRICE_REFRESH_MINS minutes
+    threading.Thread(target=_refresh_tracked_prices, daemon=True).start()
+
     # Resolve pending signal log entries (checks outcomes every 6 hours)
     threading.Thread(target=_schedule_signal_log_resolver, daemon=True).start()
+
 
     # Open browser after short delay so Flask has time to start
     threading.Timer(1.5, lambda: webbrowser.open(f"http://localhost:{SERVER_PORT}")).start()
