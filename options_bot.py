@@ -113,6 +113,8 @@ MIN_DTE              = 14      # Min days to expiry
 MAX_DTE              = 45      # Max days to expiry
 MIN_OPEN_INTEREST    = 10      # Min OI on selected option
 MAX_WORKERS          = 8       # Parallel scan threads (I/O-bound; Yahoo latency is the bottleneck)
+WFO_CPU_WORKERS      = (os.cpu_count() or 8)   # Parallel WFO threads (CPU-bound; use all logical cores)
+SCAN_PREFETCH_WORKERS = 16     # Prefetch phase only — more aggressive (4 calls × N tickers)
 SCAN_DELAY_S         = 0.15    # Seconds to sleep between ticker fetches (throttle)
 HOLD_SWEEP_INTERVALS = [1, 2, 3, 5, 7, 10, 14, 21]  # Trading days for hold-horizon analysis
 SERVER_PORT          = 5000    # Web dashboard port
@@ -1151,14 +1153,17 @@ def pick_option(tkr_obj, stock_price, option_type="put",
 #  UNIVERSE LOADER
 # ══════════════════════════════════════════════════════════════
 
-def get_universe():
+def get_universe(force_mode=None):
     """
     Fetch ticker universe from multiple sources, falling back gracefully.
     Priority: GitHub CSV → Wikipedia → built-in expanded list
     Respects the global SCAN_MODE — 'focus' returns FOCUS_LIST directly.
+    Pass force_mode='full' to override SCAN_MODE (used by WFO when the
+    user explicitly requested the full universe).
     """
     import requests
-    if SCAN_MODE == "focus":
+    effective_mode = force_mode or SCAN_MODE
+    if effective_mode == "focus":
         tickers = list(dict.fromkeys(FOCUS_LIST))
         print(f"  → Focus mode: {len(tickers)} tickers")
         return tickers
@@ -3350,6 +3355,63 @@ def _expand_grid(grid):
     return [dict(zip(keys, c)) for c in combos]
 
 
+# Process-pool worker globals (set per-worker via initializer).
+# Lets workers reuse data maps across all combos without re-pickling them.
+_WFO_HIST_MAP    = None
+_WFO_SPLIT_MAP   = None
+_WFO_PRECOMP_MAP = None
+
+
+def _wfo_worker_init(hist_map, split_map, precomp_map):
+    """Initializer for ProcessPoolExecutor - runs once per worker process."""
+    global _WFO_HIST_MAP, _WFO_SPLIT_MAP, _WFO_PRECOMP_MAP
+    _WFO_HIST_MAP    = hist_map
+    _WFO_SPLIT_MAP   = split_map
+    _WFO_PRECOMP_MAP = precomp_map
+
+
+def _wfo_eval_train_proc(combo):
+    """Process-pool worker: evaluate one param combo on the training window."""
+    hold   = combo.get("hold_days", 21)
+    params = {k: v for k, v in combo.items() if k != "hold_days"}
+    all_t  = []
+    for sym, hist in _WFO_HIST_MAP.items():
+        split  = _WFO_SPLIT_MAP[sym]
+        pc     = _WFO_PRECOMP_MAP[sym]
+        trades = run_backtest_ticker(sym, hold_days=hold, params=params,
+                                     hist=hist, idx_end=split, precomp=pc)
+        all_t.extend(trades)
+    return _wfo_sharpe(all_t), len(all_t), combo
+
+
+def _wfo_eval_val_proc(item):
+    """Process-pool worker: evaluate one combo on the validation window."""
+    train_sharpe, train_n, combo = item
+    hold   = combo.get("hold_days", 21)
+    params = {k: v for k, v in combo.items() if k != "hold_days"}
+    val_trades = []
+    for sym, hist in _WFO_HIST_MAP.items():
+        split  = _WFO_SPLIT_MAP[sym]
+        pc     = _WFO_PRECOMP_MAP[sym]
+        trades = run_backtest_ticker(sym, hold_days=hold, params=params,
+                                      hist=hist, idx_start=split, precomp=pc)
+        val_trades.extend(trades)
+    val_sharpe = _wfo_sharpe(val_trades)
+    val_wr     = round(len([t for t in val_trades if t["win"]]) /
+                       max(len(val_trades), 1) * 100, 1)
+    val_avg    = round(sum(t["pnl_pct"] for t in val_trades) /
+                       max(len(val_trades), 1), 1)
+    return {
+        "params":       combo,
+        "train_sharpe": train_sharpe,
+        "train_trades": train_n,
+        "val_sharpe":   val_sharpe,
+        "val_trades":   len(val_trades),
+        "val_win_rate": val_wr,
+        "val_avg_pnl":  val_avg,
+    }
+
+
 def _run_wfo_job(tickers):
     """
     Walk-forward optimization across `tickers`.
@@ -3405,74 +3467,49 @@ def _run_wfo_job(tickers):
     # ── Step 3: compute split index per ticker ──────────────────
     split_map = {sym: int(len(h) * 0.75) for sym, h in hist_map.items()}
 
-    # ── Step 4: sweep param grid on training window (parallelized) ──
+    # Steps 4 & 5: param sweep + validation in one process pool.
+    # ProcessPoolExecutor bypasses the GIL so all CPU cores work in parallel.
+    # One pool spans both phases (workers stay alive between them).
+    # Workers receive the data maps once via initializer.
     with _wfo_lock:
-        _wfo_state["stage"] = f"Training {len(combos)} param combos…"
+        _wfo_state["stage"] = f"Training {len(combos)} param combos..."
 
-    progress_counter = [0]
-    progress_lock    = threading.Lock()
-
-    def _eval_combo_train(combo):
-        hold   = combo.get("hold_days", 21)
-        params = {k: v for k, v in combo.items() if k != "hold_days"}
-        all_t  = []
-        for sym, hist in hist_map.items():
-            split  = split_map[sym]
-            pc     = precomp_map[sym]
-            trades = run_backtest_ticker(sym, hold_days=hold, params=params,
-                                         hist=hist, idx_end=split, precomp=pc)
-            all_t.extend(trades)
-        with progress_lock:
-            progress_counter[0] += 1
-            with _wfo_lock:
-                _wfo_state["progress"] = progress_counter[0]
-        return _wfo_sharpe(all_t), len(all_t), combo
-
+    print(f"  [WFO] Training sweep: {len(combos)} combos x {len(hist_map)} tickers using {WFO_CPU_WORKERS} processes")
+    print(f"  [WFO] Spawning workers (first run after startup takes ~10-60s)...")
     train_scores = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(_eval_combo_train, combo): combo for combo in combos}
-        for fut in as_completed(futures):
+    leaderboard  = []
+    with ProcessPoolExecutor(
+        max_workers=WFO_CPU_WORKERS,
+        initializer=_wfo_worker_init,
+        initargs=(hist_map, split_map, precomp_map),
+    ) as pool:
+        train_futures = {pool.submit(_wfo_eval_train_proc, combo): combo for combo in combos}
+        train_done = 0
+        for fut in as_completed(train_futures):
             try:
                 sharpe, n_trades, combo = fut.result()
                 train_scores.append((sharpe, n_trades, combo))
             except Exception:
                 pass
+            train_done += 1
+            with _wfo_lock:
+                _wfo_state["progress"] = train_done
 
-    # Sort by training Sharpe, keep top 10
-    train_scores.sort(key=lambda x: x[0], reverse=True)
-    top10 = train_scores[:10]
+        train_scores.sort(key=lambda x: x[0], reverse=True)
+        top10 = train_scores[:10]
 
-    # ── Step 5: validate top-10 on held-out window ──────────────
-    with _wfo_lock:
-        _wfo_state["stage"] = "Validating top 10 combos…"
-
-    leaderboard = []
-    for val_i, (train_sharpe, train_n, combo) in enumerate(top10):
-        hold   = combo.get("hold_days", 21)
-        params = {k: v for k, v in combo.items() if k != "hold_days"}
-        val_trades = []
-        for sym, hist in hist_map.items():
-            split  = split_map[sym]
-            pc     = precomp_map[sym]
-            trades = run_backtest_ticker(sym, hold_days=hold, params=params,
-                                          hist=hist, idx_start=split, precomp=pc)
-            val_trades.extend(trades)
-        val_sharpe = _wfo_sharpe(val_trades)
-        val_wr     = round(len([t for t in val_trades if t["win"]]) /
-                           max(len(val_trades), 1) * 100, 1)
-        val_avg    = round(sum(t["pnl_pct"] for t in val_trades) /
-                           max(len(val_trades), 1), 1)
-        leaderboard.append({
-            "params":       combo,
-            "train_sharpe": train_sharpe,
-            "train_trades": train_n,
-            "val_sharpe":   val_sharpe,
-            "val_trades":   len(val_trades),
-            "val_win_rate": val_wr,
-            "val_avg_pnl":  val_avg,
-        })
         with _wfo_lock:
-            _wfo_state["progress"] = len(combos) + val_i + 1
+            _wfo_state["stage"] = "Validating top 10 combos..."
+        val_futures = [pool.submit(_wfo_eval_val_proc, item) for item in top10]
+        val_done = 0
+        for fut in as_completed(val_futures):
+            try:
+                leaderboard.append(fut.result())
+            except Exception:
+                pass
+            val_done += 1
+            with _wfo_lock:
+                _wfo_state["progress"] = len(combos) + val_done
 
     leaderboard.sort(key=lambda x: x["val_sharpe"], reverse=True)
     best = leaderboard[0] if leaderboard else None
@@ -4108,7 +4145,7 @@ def _run_hold_sweep_job(months=12, universe="focus"):
     try:
         # ── Get ticker list ──────────────────────────────────────────
         if universe == "snp500":
-            tickers = _get_snp500_tickers()
+            tickers = get_universe(force_mode="full")
         else:
             tickers = FOCUS_LIST[:]
         if not tickers:
@@ -4129,6 +4166,10 @@ def _run_hold_sweep_job(months=12, universe="focus"):
                 h = yf.Ticker(tkr).history(period="2y")
                 if h.empty or len(h) < 120:
                     return []
+                # yfinance.Ticker.history returns tz-aware index; strip it so the
+                # cutoff comparison works (cutoff is tz-naive).
+                if h.index.tz is not None:
+                    h.index = h.index.tz_localize(None)
                 h = h[h.index >= cutoff]
                 if len(h) < 60:
                     return []
@@ -4136,7 +4177,8 @@ def _run_hold_sweep_job(months=12, universe="focus"):
                 return run_backtest_ticker(
                     tkr, hold_days=21, hist=h, precomp=pc, record_path=True
                 )
-            except Exception:
+            except Exception as _e:
+                print(f"  [HoldSweep] {tkr} skipped: {_e}")
                 return []
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
@@ -4684,9 +4726,9 @@ def _run_scan(mode=None):
     # ── Parallel prefetch phase: all network calls fire simultaneously ───────
     # This fires ~3 Yahoo API calls per ticker (info, calendar, option chain)
     # in parallel across all tickers, so scan_ticker does zero network calls.
-    print(f"  [Prefetch] Firing network calls for {len(tickers)} tickers in parallel…")
+    print(f"  [Prefetch] Firing network calls for {len(tickers)} tickers in parallel ({SCAN_PREFETCH_WORKERS} workers)…")
     prefetch_map = {}
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+    with ThreadPoolExecutor(max_workers=SCAN_PREFETCH_WORKERS) as pool:
         pf_futures = {pool.submit(_prefetch_ticker, sym): sym for sym in tickers}
         for fut in as_completed(pf_futures):
             sym = pf_futures[fut]
@@ -5224,7 +5266,7 @@ def api_optimizer_run():
         if not tickers:
             return jsonify({"ok": False, "message": "No signals — run a scan first"}), 400
     elif mode == "full":
-        tickers = get_universe()
+        tickers = get_universe(force_mode="full")
     else:
         tickers = list(dict.fromkeys(FOCUS_LIST))
     t = threading.Thread(target=_run_wfo_job, args=(tickers,), daemon=True)
@@ -5339,6 +5381,8 @@ def api_hold_sweep():
     with _hs_lock:
         if _hs_state["running"]:
             return jsonify({"error": "Already running"}), 409
+        # Mark running synchronously so the first poll doesn't race the thread
+        _hs_state.update(running=True, stage="Starting…", results=None)
     data     = request.get_json(silent=True) or {}
     months   = int(data.get("months", 12))
     universe = data.get("universe", "focus")
