@@ -24,8 +24,8 @@ Run:
 # ──────────────────────────────────────────────────────────────
 #  IMPORTS
 # ──────────────────────────────────────────────────────────────
-import os, sys, json, uuid, threading, webbrowser, time, warnings
-from datetime import datetime
+import os, sys, json, uuid, threading, webbrowser, time, warnings, pickle
+from datetime import datetime, timedelta
 from math import log, sqrt, exp
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 import threading as _threading
@@ -112,9 +112,12 @@ DC_PERIOD            = 20      # Donchian Channel window (highest high / lowest 
 MIN_DTE              = 14      # Min days to expiry
 MAX_DTE              = 45      # Max days to expiry
 MIN_OPEN_INTEREST    = 10      # Min OI on selected option
+MIN_VOLUME           = 10      # Min daily volume on selected option (avoid getting stuck in illiquid contracts)
 MAX_WORKERS          = 8       # Parallel scan threads (I/O-bound; Yahoo latency is the bottleneck)
 WFO_CPU_WORKERS      = (os.cpu_count() or 8)   # Parallel WFO threads (CPU-bound; use all logical cores)
 SCAN_PREFETCH_WORKERS = 16     # Prefetch phase only — more aggressive (4 calls × N tickers)
+PREFETCH_CACHE_FILE      = "prefetch_cache.pkl"   # Disk cache for tkr.info / tkr.calendar
+PREFETCH_CACHE_TTL_HOURS = 24                     # Info/calendar barely change day-to-day
 SCAN_DELAY_S         = 0.15    # Seconds to sleep between ticker fetches (throttle)
 HOLD_SWEEP_INTERVALS = [1, 2, 3, 5, 7, 10, 14, 21]  # Trading days for hold-horizon analysis
 SERVER_PORT          = 5000    # Web dashboard port
@@ -195,17 +198,26 @@ TRACK_FILE           = "tracked_positions.json"
 PERFORMANCE_FILE     = "performance.json"
 WFO_FILE             = "wfo_results.json"     # persists last WFO run across restarts
 BT_FILE              = "backtest_results.json"  # persists last backtest run across restarts
+HS_RESULTS_FILE      = "hold_horizon_results.json"  # persists last Hold Horizon Analysis
 SIGNAL_LOG_FILE      = "signal_log.json"      # unbiased log of every bot recommendation
 
 # ── Tracked position sell-signal thresholds ───────────────────
 # A sell signal fires when ANY of these conditions are met:
 SELL_PROFIT_TARGET   = 30    # % gain on the option premium  → take profit (was 50)
 SELL_STOP_LOSS       = 15    # % loss on the option premium  → cut loss (2:1 reward:risk, was 25)
+# Trailing stop — once option P&L hits TRAIL_ACTIVATE_PCT, the effective stop
+# becomes (peak_pnl − TRAIL_LOCK_PCT). Prevents giving back gains on reversal.
+TRAIL_ACTIVATE_PCT   = 15    # Trailing stop activates once option P&L >= this
+TRAIL_LOCK_PCT       = 8     # Lock minimum (peak − this) once trailing is active
+# Stagnation exit — close positions that haven't moved meaningfully in N days.
+# Theta bleeds long options; sitting flat is a slow loss.
+STAGNANT_DAYS        = 3     # Trading days held before stagnation check applies
+STAGNANT_RANGE       = 5     # If |option P&L| within ±this after STAGNANT_DAYS → exit
 # RSI reversal thresholds — exit when mean reversion is complete:
 SELL_RSI_BULL_TARGET = 52    # Buy Call: RSI back above this → bounce done, take profit (was 55)
 SELL_RSI_BEAR_TARGET = 48    # Buy Put:  RSI back below this → pullback done, take profit (was 45)
 TRACK_CHECK_MINS         = 360  # How often (minutes) to re-run full sell-signal check (6 hours)
-TRACK_PRICE_REFRESH_MINS = 5    # How often (minutes) to refresh just the option prices
+TRACK_PRICE_REFRESH_MINS = 3    # How often (minutes) to refresh just the option prices
 
 # ── FOMC meeting decision dates (day of announcement) ─────────
 # Source: federalreserve.gov/monetarypolicy/fomccalendars.htm
@@ -674,6 +686,79 @@ def get_fed_context():
 # ── SPY market regime cache (refreshed every 30 min) ─────────
 _spy_cache = {"trend": None, "ts": None}
 
+def get_macro_regime():
+    """
+    Decide which strategies should be ENABLED based on current macro regime.
+    Returns dict: {strategy_name: bool, "reason": str, "label": str}.
+
+    Logic (most-restrictive wins):
+      VIX high + backwardation -> defensive only (disable Buy Call)
+      VIX > 30                 -> panic — disable all long premium (Buy Call, Buy Put)
+      Yield curve inverted     -> disable Buy Call (recession risk on long calls)
+      bear_strong market trend -> disable Buy Call (don't catch falling knives)
+      bull_strong + VIX low    -> disable Buy Put (no edge in shorting strength)
+      Otherwise                -> all strategies enabled
+
+    This is the top-level "should the bot even consider this strategy today"
+    gate. Individual signal confluence still has to pass for any qualified
+    strategy. Designed to protect portfolio on systemic bad days.
+    """
+    enabled = {
+        "buy_call":     True,
+        "buy_put":      True,
+        "sell_put":     True,
+        "covered_call": True,
+        "iron_condor":  True,
+    }
+    reasons = []
+    label_parts = []
+    try:
+        vix      = get_vix() or 18.0
+        regime   = vix_regime(vix)        # "low" / "normal" / "high"
+        term     = vix_term_structure()    # "contango" / "backwardation" / "flat"
+        fed_ctx  = get_fed_context() or {}
+        trend    = get_market_trend()      # "bull_strong" / "bull_weak" / ...
+        yi       = fed_ctx.get("yield_inverted", False)
+
+        # --- Panic regime: VIX > 30 ---
+        if vix > 30:
+            enabled["buy_call"] = False
+            enabled["buy_put"]  = False
+            reasons.append(f"VIX {vix:.1f} > 30 — panic regime, no long premium")
+            label_parts.append("panic")
+
+        # --- High VIX + backwardation: defensive ---
+        elif regime == "high" and term == "backwardation":
+            enabled["buy_call"] = False
+            reasons.append("High VIX in backwardation — disable Buy Call (downside risk)")
+            label_parts.append("def")
+
+        # --- Yield curve inverted: recession risk ---
+        if yi and enabled["buy_call"]:
+            enabled["buy_call"] = False
+            reasons.append("Yield curve inverted — disable Buy Call (recession lean)")
+            label_parts.append("inv")
+
+        # --- Bear-strong trend: don't fight downtrend with calls ---
+        if trend == "bear_strong" and enabled["buy_call"]:
+            enabled["buy_call"] = False
+            reasons.append("Bear-strong trend — disable Buy Call")
+            label_parts.append("bear")
+
+        # --- Bull-strong + low VIX: no edge buying puts ---
+        if trend == "bull_strong" and regime == "low" and enabled["buy_put"]:
+            enabled["buy_put"] = False
+            reasons.append("Bull-strong + low VIX — disable Buy Put (no shorting edge)")
+            label_parts.append("bull")
+
+    except Exception as _e:
+        reasons.append(f"regime lookup error ({_e}) — all strategies enabled by default")
+
+    enabled["reason"] = "; ".join(reasons) if reasons else "Normal regime — all strategies enabled"
+    enabled["label"]  = "+".join(label_parts) if label_parts else "normal"
+    return enabled
+
+
 def get_market_trend():
     """
     Return broad market trend based on SPY vs its 200-day MA + ADX.
@@ -719,34 +804,81 @@ def get_market_trend():
         return _spy_cache["trend"] or "neutral"
 
 
+def _spy_aligned(stock_closes):
+    """
+    Return (stk_closes, spy_closes) restricted to their common trading days,
+    with both indexes normalized to tz-naive dates. yf.download (the bulk scan
+    path) and yf.Ticker().history (the SPY cache) can hand back indexes with
+    different timezones; without normalizing, .intersection() comes back empty
+    and every beta / RS silently falls back to its neutral default.
+    Returns (None, None) when the SPY cache is missing or there's no overlap.
+    """
+    spy_cls = _spy_cache.get("closes")
+    if spy_cls is None or len(spy_cls) == 0:
+        return None, None
+    def _norm(s):
+        idx = pd.DatetimeIndex(s.index)
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+        return pd.Series(s.values, index=idx.normalize())
+    stk = _norm(stock_closes)
+    spy = _norm(spy_cls)
+    common = stk.index.intersection(spy.index)
+    if len(common) == 0:
+        return None, None
+    return stk.loc[common], spy.loc[common]
+
+
+def calc_beta(stock_closes, window=60):
+    """
+    Rolling beta of the stock vs SPY over `window` trading days.
+    beta = cov(stock_ret, spy_ret) / var(spy_ret) on daily returns.
+    Uses cached SPY closes from get_market_trend(). Clamped to [-3, 3];
+    returns 1.0 (market-neutral fallback) when data is thin or SPY is flat.
+    """
+    try:
+        stk, spy = _spy_aligned(stock_closes)
+        if stk is None or len(stk) < window + 1:
+            return 1.0
+        stk = stk.iloc[-(window + 1):]
+        spy = spy.iloc[-(window + 1):]
+        sr  = stk.pct_change().dropna()
+        mr  = spy.pct_change().dropna()
+        var = float(mr.var())
+        if var == 0:
+            return 1.0
+        beta = float(sr.cov(mr) / var)
+        return round(max(-3.0, min(3.0, beta)), 2)
+    except Exception:
+        return 1.0
+
+
 def calc_rs_vs_spy(stock_closes, window=20):
     """
-    Compare stock's rolling return vs SPY over `window` trading days.
-    Returns (rs_ratio, rs_strong, rs_weak):
-      rs_ratio  : stock_return / spy_return (NaN → 1.0)
-      rs_strong : stock outperforming SPY by > 10%  → bullish filter
-      rs_weak   : stock underperforming SPY by > 10% → bearish filter
+    Beta-adjusted relative strength vs SPY over `window` trading days.
+    Instead of the (unstable) stock_return / spy_return ratio, this measures
+    the residual return the stock made beyond what its beta + the market move
+    would predict:  resid = stock_ret - beta * spy_ret.
+    Returns (rs_value, rs_strong, rs_weak, beta):
+      rs_value  : residual (alpha) over the window, in %  (0.0 = moved exactly as beta predicts)
+      rs_strong : residual > +3%  → genuine outperformance  → bullish filter
+      rs_weak   : residual < -3%  → genuine underperformance → bearish filter
+      beta      : rolling beta vs SPY (see calc_beta)
     Uses cached SPY closes from get_market_trend().
     """
     try:
-        spy_cls = _spy_cache.get("closes")
-        if spy_cls is None or len(spy_cls) < window + 1:
-            return 1.0, False, False
-        common = stock_closes.index.intersection(spy_cls.index)
-        if len(common) < window + 1:
-            return 1.0, False, False
-        stk  = stock_closes.loc[common]
-        spy  = spy_cls.loc[common]
+        stk, spy = _spy_aligned(stock_closes)
+        if stk is None or len(stk) < window + 1:
+            return 0.0, False, False, 1.0
         stk_ret = float(stk.iloc[-1] / stk.iloc[-window] - 1)
         spy_ret = float(spy.iloc[-1] / spy.iloc[-window] - 1)
-        if spy_ret == 0:
-            return 1.0, False, False
-        ratio    = stk_ret / spy_ret
-        rs_strong = ratio > 1.1    # outperforming by > 10%
-        rs_weak   = ratio < 0.9    # underperforming by > 10%
-        return round(ratio, 2), rs_strong, rs_weak
+        beta    = calc_beta(stock_closes)
+        resid   = stk_ret - beta * spy_ret      # market-neutral excess return
+        rs_strong = resid >  0.03               # +3% beta-adjusted outperformance
+        rs_weak   = resid < -0.03               # -3% beta-adjusted underperformance
+        return round(resid * 100, 2), rs_strong, rs_weak, beta
     except Exception:
-        return 1.0, False, False
+        return 0.0, False, False, 1.0
 
 
 def calc_mfi(hist, period=14):
@@ -1117,6 +1249,7 @@ def pick_option(tkr_obj, stock_price, option_type="put",
 
         if require_oi:
             opts = opts[opts["openInterest"].fillna(0) >= MIN_OPEN_INTEREST].copy()
+            opts = opts[opts["volume"].fillna(0) >= MIN_VOLUME].copy()
         if opts.empty:
             return None
 
@@ -1132,6 +1265,12 @@ def pick_option(tkr_obj, stock_price, option_type="put",
         if mid < 0.01 or iv < 1:
             return None
 
+        vol = int(row.get("volume",        0) or 0)
+        oi  = int(row.get("openInterest",  0) or 0)
+        # Unusual Options Activity (UOA): high volume vs open interest suggests
+        # informed/institutional positioning. Ratio > 1.0 = today's volume
+        # exceeds existing positions; > 2.0 = strongly unusual.
+        vol_oi_ratio = round(vol / max(oi, 1), 2)
         return {
             "type":          option_type,
             "expiration":    exp,
@@ -1141,8 +1280,9 @@ def pick_option(tkr_obj, stock_price, option_type="put",
             "ask":           round(ask, 3),
             "mid":           round(mid, 3),
             "iv":            round(iv, 1),
-            "volume":        int(row.get("volume",        0) or 0),
-            "open_interest": int(row.get("openInterest",  0) or 0),
+            "volume":        vol,
+            "open_interest": oi,
+            "vol_oi_ratio":  vol_oi_ratio,
             "premium_pct":   round(mid / stock_price * 100, 2),
         }
     except Exception:
@@ -1278,6 +1418,72 @@ def _yf_history_with_retry(sym, period="1y", retries=3, base_delay=5):
     return tkr, tkr.history(period=period)
 
 
+# Prefetch cache: info / calendar with 24h TTL.
+# These two yfinance calls barely change day-to-day but they're 2 of the 4
+# network calls per ticker per scan. Caching them skips ~50% of repeat
+# prefetch round-trips. Pickle is used because tkr.calendar may be a
+# pandas DataFrame in some yfinance versions.
+_prefetch_cache      = {}
+_prefetch_cache_lock = threading.Lock()
+
+
+def _load_prefetch_cache():
+    """Best-effort load of cache from disk. Called once at startup."""
+    if not os.path.exists(PREFETCH_CACHE_FILE):
+        return
+    try:
+        with open(PREFETCH_CACHE_FILE, "rb") as f:
+            data = pickle.load(f)
+        with _prefetch_cache_lock:
+            _prefetch_cache.update(data)
+        print(f"  [Cache] Loaded {len(data)} prefetch entries from {PREFETCH_CACHE_FILE}")
+    except Exception as e:
+        print(f"  [Cache] Could not load {PREFETCH_CACHE_FILE}: {e}")
+
+
+def _save_prefetch_cache():
+    """Atomic snapshot save (write to .tmp, then os.replace)."""
+    try:
+        with _prefetch_cache_lock:
+            snapshot = dict(_prefetch_cache)
+        tmp = PREFETCH_CACHE_FILE + ".tmp"
+        with open(tmp, "wb") as f:
+            pickle.dump(snapshot, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, PREFETCH_CACHE_FILE)
+    except Exception as e:
+        print(f"  [Cache] Could not save: {e}")
+
+
+def _cache_get_field(sym, field):
+    """Return cached value for sym[field] if entry is fresh; None otherwise."""
+    with _prefetch_cache_lock:
+        entry = _prefetch_cache.get(sym)
+    if not entry or field not in entry:
+        return None
+    fetched_at = entry.get("fetched_at")
+    if not fetched_at:
+        return None
+    try:
+        ts = datetime.fromisoformat(fetched_at)
+        age_h = (datetime.now() - ts).total_seconds() / 3600
+        if age_h < PREFETCH_CACHE_TTL_HOURS:
+            return entry[field]
+    except Exception:
+        pass
+    return None
+
+
+def _cache_set_field(sym, field, value):
+    """Store value for sym[field] with current timestamp. Safe to call concurrently."""
+    if value is None:
+        return
+    with _prefetch_cache_lock:
+        entry = _prefetch_cache.get(sym, {})
+        entry[field] = value
+        entry["fetched_at"] = datetime.now().isoformat()
+        _prefetch_cache[sym] = entry
+
+
 def _prefetch_ticker(sym):
     """
     Fetch all per-ticker network data for one symbol in one shot.
@@ -1293,12 +1499,22 @@ def _prefetch_ticker(sym):
         cal_box  = [None]
         def _get_info():
             try:
+                cached = _cache_get_field(sym, "info")
+                if cached is not None:
+                    info_box[0] = cached
+                    return
                 info_box[0] = _yf_call(lambda: tkr.info)
+                _cache_set_field(sym, "info", info_box[0])
             except Exception:
                 pass
         def _get_cal():
             try:
+                cached = _cache_get_field(sym, "calendar")
+                if cached is not None:
+                    cal_box[0] = cached
+                    return
                 cal_box[0] = _yf_call(lambda: tkr.calendar)
+                _cache_set_field(sym, "calendar", cal_box[0])
             except Exception:
                 pass
         t1 = threading.Thread(target=_get_info, daemon=True)
@@ -1389,7 +1605,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         trend_bear = ma200 is not None and price < ma200   # stock below 200 MA
 
         # ── Relative strength vs SPY (20-day return ratio) ───
-        rs_ratio, rs_strong, rs_weak = calc_rs_vs_spy(closes)
+        rs_ratio, rs_strong, rs_weak, beta = calc_rs_vs_spy(closes)
 
         # ── HV Rank (options cheapness / expensiveness) ──────
         _rets    = closes.pct_change()
@@ -1439,6 +1655,22 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         cur_macd     = round(float(macd_line.iloc[-1]),   4)
         cur_macd_sig = round(float(macd_sig_line.iloc[-1]), 4)
         cur_macd_h   = round(float(macd_hist_ser.iloc[-1]), 4)
+
+        # ── EMA 9 / 21 crossover (short-term momentum) ──
+        # ema9 > ema21 = short-term momentum bullish
+        # ema9 < ema21 = short-term momentum bearish
+        # Cross within last 3 bars = fresh signal
+        ema9      = closes.ewm(span=9,  adjust=False).mean()
+        ema21     = closes.ewm(span=21, adjust=False).mean()
+        ema_bull  = bool(ema9.iloc[-1] > ema21.iloc[-1]) if len(closes) >= 21 else False
+        ema_bear  = bool(ema9.iloc[-1] < ema21.iloc[-1]) if len(closes) >= 21 else False
+        # Fresh cross within last 3 bars (stronger signal)
+        try:
+            ema_diff      = (ema9 - ema21).iloc[-3:].values
+            ema_cross_bull = bool((ema_diff[0] <= 0) and (ema_diff[-1] > 0))
+            ema_cross_bear = bool((ema_diff[0] >= 0) and (ema_diff[-1] < 0))
+        except Exception:
+            ema_cross_bull = ema_cross_bear = False
 
         # ── VIX regime ────────────────────────────────────────
         cur_vix    = get_vix()
@@ -1506,6 +1738,8 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
             near_52w_low,                   # near annual floor = strong support
             vix_backw,                      # panic spike → reversal signal
             sig_mfi_os,                     # MFI oversold = volume confirms selling exhaustion
+            ema_bull,                       # EMA9 above EMA21 = short-term momentum aligned
+            ema_cross_bull,                 # Fresh EMA9/21 bullish cross
         ])
         # Buy Put needs 2+ bearish signals to avoid shorting a roaring bull
         bear_signals = sum([
@@ -1521,6 +1755,8 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
             rs_weak,
             near_52w_high,                  # near annual ceiling = strong resistance
             sig_mfi_ob,                     # MFI overbought = volume confirms buying exhaustion
+            ema_bear,                       # EMA9 below EMA21 = short-term momentum aligned bearish
+            ema_cross_bear,                 # Fresh EMA9/21 bearish cross
         ])
 
         # ── WFO param overrides (applied via /api/optimizer/apply) ──
@@ -1557,15 +1793,34 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         red_candle = float(closes.iloc[-1]) < float(closes.iloc[-2]) if len(closes) >= 2 else True
         red_ok     = (not REQUIRE_RED_CANDLE) or red_candle
 
+        # ── Gap analysis ── (filter out entries on adverse opening gaps)
+        # gap_pct = (today's open vs yesterday's close).
+        # Stocks that gap >3% AGAINST the direction we want to bet usually keep
+        # going — don't try to catch a knife or fade a runaway move.
+        try:
+            opens = hist["Open"]
+            if len(opens) >= 2 and len(closes) >= 2:
+                gap_pct = (float(opens.iloc[-1]) - float(closes.iloc[-2])) / float(closes.iloc[-2]) * 100
+            else:
+                gap_pct = 0.0
+        except Exception:
+            gap_pct = 0.0
+        # Buy Call: avoid if gapped DOWN > 3% (continuation risk)
+        # Buy Put:  avoid if gapped UP > 3% (continuation risk)
+        gap_ok_buy_call = gap_pct >= -3.0
+        gap_ok_buy_put  = gap_pct <=  3.0
+
         # Early exit — skip meta + options fetch if no strategy can trigger
         # MA50 trend gate: only buy calls if above 50-day MA OR deeply oversold (RSI < 25)
         trend_ok_buy     = above_ma50 or cur_rsi < 25
-        has_sell_put     = (oversold or macd_bear) and price <= MAX_PRICE_SELL and not falling_knife
-        has_buy_call     = oversold and bull_signals >= _bull_min and not falling_knife and green_ok and trend_ok_buy
-        has_buy_put      = (overbought or macd_bear) and bear_signals >= _bear_min and not melt_up and red_ok
-        has_covered_call = price <= MAX_PRICE_SELL
+        # Macro regime gate — disables strategies that don't fit current regime
+        macro            = get_macro_regime()
+        has_sell_put     = macro["sell_put"]     and (oversold or macd_bear) and price <= MAX_PRICE_SELL and not falling_knife and gap_ok_buy_call
+        has_buy_call     = macro["buy_call"]     and oversold and bull_signals >= _bull_min and not falling_knife and green_ok and trend_ok_buy and gap_ok_buy_call
+        has_buy_put      = macro["buy_put"]      and (overbought or macd_bear) and bear_signals >= _bear_min and not melt_up and red_ok and gap_ok_buy_put
+        has_covered_call = macro["covered_call"] and price <= MAX_PRICE_SELL
         # Iron condors are skipped during main scan (slow); run separately on demand
-        has_iron_condor  = (not oversold) and (not overbought) and (35 <= cur_rsi <= 65) and scan_condors
+        has_iron_condor  = macro["iron_condor"]  and (not oversold) and (not overbought) and (35 <= cur_rsi <= 65) and scan_condors
         if not any([has_sell_put, has_buy_call, has_buy_put, has_covered_call, has_iron_condor]):
             return None
 
@@ -1662,6 +1917,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
             "above_ma50":    above_ma50,
             # Relative strength vs SPY
             "rs_ratio":      rs_ratio,
+            "beta":          beta,
             "rs_strong":     rs_strong,
             "rs_weak":       rs_weak,
             # HV Rank (options cheapness indicator)
@@ -2174,6 +2430,351 @@ def _option_price_detail(row_series):
     return mid, bid, ask, last_price, quality
 
 
+def compute_volume_profile(hist, lookback_days=60, n_bins=20):
+    """
+    Compute volume profile over the last `lookback_days` of daily bars.
+    Returns dict: {poc, value_area_high, value_area_low, current_position,
+                   bins, current_price}
+
+    POC (Point of Control) = price bin with the most accumulated volume.
+    Value Area = price range containing 70% of total volume (top of profile).
+
+    Use POC as a dynamic support/resistance level. Price above POC = "value
+    in this range is bullish-accepted." Below = bearish-accepted.
+    """
+    if hist is None or hist.empty:
+        return None
+    h = hist.copy()
+    if h.index.tz is not None:
+        h.index = h.index.tz_localize(None)
+    h = h.tail(lookback_days)
+    if len(h) < 10:
+        return None
+    typical_price = (h["High"] + h["Low"] + h["Close"]) / 3.0
+    volume        = h["Volume"].astype(float)
+    pmin, pmax    = float(typical_price.min()), float(typical_price.max())
+    if pmax <= pmin:
+        return None
+    bin_width = (pmax - pmin) / n_bins
+    bins = []
+    for i in range(n_bins):
+        lo = pmin + i * bin_width
+        hi = lo + bin_width
+        in_bin = ((typical_price >= lo) & (typical_price < hi)) if i < n_bins - 1 \
+                 else ((typical_price >= lo) & (typical_price <= hi))
+        bins.append({"low": round(lo, 2), "high": round(hi, 2),
+                     "mid": round((lo + hi) / 2, 2),
+                     "volume": float(volume[in_bin].sum())})
+    total_vol  = sum(b["volume"] for b in bins)
+    if total_vol <= 0:
+        return None
+    poc_bin    = max(bins, key=lambda b: b["volume"])
+    poc        = poc_bin["mid"]
+    # Value area: expand around POC until cumulative volume >= 70%
+    poc_idx    = bins.index(poc_bin)
+    target_vol = total_vol * 0.70
+    accum      = poc_bin["volume"]
+    lo_i, hi_i = poc_idx, poc_idx
+    while accum < target_vol and (lo_i > 0 or hi_i < len(bins) - 1):
+        lo_next = bins[lo_i - 1]["volume"] if lo_i > 0 else 0
+        hi_next = bins[hi_i + 1]["volume"] if hi_i < len(bins) - 1 else 0
+        if lo_next >= hi_next and lo_i > 0:
+            lo_i -= 1
+            accum += bins[lo_i]["volume"]
+        elif hi_i < len(bins) - 1:
+            hi_i += 1
+            accum += bins[hi_i]["volume"]
+        else:
+            break
+    val          = bins[lo_i]["low"]
+    vah          = bins[hi_i]["high"]
+    current_price = float(h["Close"].iloc[-1])
+    if current_price > vah:
+        position = "above_value"
+    elif current_price < val:
+        position = "below_value"
+    else:
+        position = "in_value"
+    return {
+        "poc":              round(poc, 2),
+        "value_area_high":  round(vah, 2),
+        "value_area_low":   round(val, 2),
+        "current_price":    round(current_price, 2),
+        "current_position": position,
+        "deviation_from_poc_pct": round((current_price - poc) / poc * 100, 2) if poc > 0 else 0.0,
+    }
+
+
+def compute_anchored_vwap(hist, anchor_date_str):
+    """
+    Compute Anchored VWAP from anchor_date forward using daily bars.
+    AVWAP = sum(typical_price * volume) / sum(volume) since the anchor.
+
+    Returns dict: {avwap, anchor_date, n_bars, current_price, deviation_pct}
+    or None if not enough data.
+
+    Typical use: anchor from a tracked position's signal_date to see if price
+    is above/below the cohort's average cost basis since entry.
+    """
+    try:
+        anchor_dt = datetime.strptime(anchor_date_str[:10], "%Y-%m-%d").date()
+    except Exception:
+        return None
+    if hist is None or hist.empty:
+        return None
+    h = hist.copy()
+    if h.index.tz is not None:
+        h.index = h.index.tz_localize(None)
+    h = h[h.index.date >= anchor_dt]
+    if len(h) < 1:
+        return None
+    typical_price = (h["High"] + h["Low"] + h["Close"]) / 3.0
+    pv            = typical_price * h["Volume"]
+    total_vol     = h["Volume"].sum()
+    if total_vol <= 0:
+        return None
+    avwap         = float(pv.sum() / total_vol)
+    current_price = float(h["Close"].iloc[-1])
+    deviation_pct = (current_price - avwap) / avwap * 100 if avwap > 0 else 0.0
+    return {
+        "avwap":          round(avwap, 2),
+        "anchor_date":    anchor_date_str[:10],
+        "n_bars":         int(len(h)),
+        "current_price":  round(current_price, 2),
+        "deviation_pct":  round(deviation_pct, 2),
+    }
+
+
+def get_portfolio_greeks():
+    """
+    Compute net portfolio delta across all tracked positions.
+    Returns dict: {net_delta, by_position, n_positions, warning}.
+    Delta is in 'shares-equivalent' terms (1 contract = 100 shares).
+
+    Positive net delta = portfolio gains when SPY rises (long market exposure).
+    Negative net delta = portfolio gains when SPY falls (short market exposure).
+
+    On a 'bad day' (sharp SPY drop), a portfolio with high positive net delta
+    loses big. Tracking this helps spot concentration before it bites.
+    """
+    try:
+        positions = load_tracked()
+    except Exception:
+        return {"net_delta": 0.0, "by_position": [], "n_positions": 0, "warning": None}
+    if not positions:
+        return {"net_delta": 0.0, "by_position": [], "n_positions": 0, "warning": None}
+
+    today        = datetime.now()
+    by_pos       = []
+    net_delta    = 0.0
+    for p in positions:
+        try:
+            opt        = p.get("option") or {}
+            strat      = p.get("strategy", "")
+            strike     = float(opt.get("strike") or 0)
+            exp_str    = opt.get("expiration") or ""
+            opt_type   = opt.get("type", "").lower()        # "call" or "put"
+            iv         = float(opt.get("iv") or 0) / 100.0  # iv stored as % (e.g., 33.1 -> 0.331)
+            if iv < 0.05:
+                iv = 0.30  # fallback for missing IV
+            cur_price  = float((p.get("last_signal") or {}).get("current_price") or p.get("price") or 0)
+            if not (strike > 0 and exp_str and opt_type and cur_price > 0):
+                continue
+            exp_dt     = datetime.strptime(exp_str[:10], "%Y-%m-%d")
+            T          = max((exp_dt - today).days / 365.0, 0.001)
+            bs         = black_scholes(cur_price, strike, T, RISK_FREE_RATE, iv, opt_type)
+            if not bs:
+                continue
+            delta      = float(bs.get("delta") or 0)
+            # Long buy_call/buy_put: delta as-is.
+            # Short sell_put/covered_call: flip sign.
+            if strat in ("sell_put", "covered_call"):
+                delta = -delta
+            # 1 contract = 100 shares of underlying exposure
+            shares_eq  = delta * 100
+            net_delta += shares_eq
+            by_pos.append({
+                "id":         p.get("id"),
+                "ticker":     p.get("ticker"),
+                "strategy":   strat,
+                "delta":      round(delta, 3),
+                "shares_eq":  round(shares_eq, 1),
+            })
+        except Exception:
+            continue
+
+    warning = None
+    if abs(net_delta) > 500:
+        side = "long" if net_delta > 0 else "short"
+        warning = f"Net delta {net_delta:+.0f} ({side}-biased) — heavy directional exposure"
+
+    return {
+        "net_delta":   round(net_delta, 1),
+        "by_position": by_pos,
+        "n_positions": len(by_pos),
+        "warning":     warning,
+    }
+
+
+def get_performance_stats():
+    """
+    Closed-trade analytics. Skips Sharpe (poor fit for asymmetric option returns)
+    and uses better metrics: expectancy, profit factor, Sortino, max drawdown.
+
+    Returns dict with:
+      n_trades, n_wins, n_losses, win_rate_pct
+      total_pnl, avg_win, avg_loss
+      expectancy: avg $ made per trade (the killer metric — if negative, you lose money on average)
+      profit_factor: total_wins / abs(total_losses)  (>1.5 = decent; >2.5 = strong edge)
+      sortino: mean_return / downside_stdev  (Sharpe but downside-only — proper for options)
+      max_drawdown: worst peak-to-trough $ loss across the equity curve
+      max_drawdown_pct: same as % of peak equity
+    """
+    try:
+        if not os.path.exists(PERFORMANCE_FILE):
+            return {"n_trades": 0, "note": "No closed trades yet"}
+        with open(PERFORMANCE_FILE) as f:
+            perf = json.load(f)
+    except Exception as e:
+        return {"n_trades": 0, "error": str(e)}
+
+    if not perf:
+        return {"n_trades": 0, "note": "No closed trades yet"}
+
+    pnls   = [float(t.get("pnl_total") or 0) for t in perf]
+    wins   = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p <= 0]
+    n      = len(pnls)
+    n_w    = len(wins)
+    n_l    = len(losses)
+
+    total_wins   = sum(wins)
+    total_losses = sum(losses)
+    total_pnl    = total_wins + total_losses
+    avg_win      = total_wins / n_w if n_w else 0.0
+    avg_loss     = total_losses / n_l if n_l else 0.0   # negative
+    win_rate     = n_w / n if n else 0.0
+
+    # Expectancy per trade ($)
+    expectancy = (win_rate * avg_win) + ((1 - win_rate) * avg_loss)
+
+    # Profit factor (ratio of wins to losses by magnitude)
+    profit_factor = total_wins / abs(total_losses) if total_losses < 0 else float("inf") if total_wins > 0 else 0.0
+
+    # Sortino — downside-only deviation (replaces Sharpe for asymmetric returns)
+    mean_pnl = total_pnl / n if n else 0.0
+    downside = [p - 0 for p in pnls if p < 0]   # only negative returns count toward downside vol
+    if len(downside) >= 2:
+        d_var = sum((d - 0) ** 2 for d in downside) / len(downside)
+        d_std = d_var ** 0.5
+        sortino = mean_pnl / d_std if d_std > 0 else 0.0
+    else:
+        sortino = 0.0
+
+    # Max drawdown — walk the equity curve, track peak and max distance from peak
+    eq = 0.0
+    peak = 0.0
+    max_dd = 0.0
+    max_dd_pct = 0.0
+    for p in pnls:
+        eq += p
+        if eq > peak:
+            peak = eq
+        dd = peak - eq
+        if dd > max_dd:
+            max_dd = dd
+            max_dd_pct = (dd / peak * 100) if peak > 0 else 0.0
+
+    return {
+        "n_trades":          n,
+        "n_wins":            n_w,
+        "n_losses":          n_l,
+        "win_rate_pct":      round(win_rate * 100, 1),
+        "total_pnl":         round(total_pnl, 2),
+        "avg_win":           round(avg_win, 2),
+        "avg_loss":          round(avg_loss, 2),
+        "expectancy":        round(expectancy, 2),
+        "profit_factor":     round(profit_factor, 2) if profit_factor != float("inf") else None,
+        "sortino":           round(sortino, 3),
+        "max_drawdown":      round(max_dd, 2),
+        "max_drawdown_pct":  round(max_dd_pct, 1),
+    }
+
+
+def get_portfolio_risk():
+    """
+    Open-position risk metrics. Tells you 'how bad could it get today?'
+
+    Returns dict with:
+      n_positions
+      total_max_loss: $ lost if every long-premium position went to $0
+      stop_loss_exposure: $ lost if every position hit -15% (SELL_STOP_LOSS)
+      largest_position_$ / largest_position_ticker: concentration check
+      largest_concentration_pct: % of total exposure in the largest single position
+      pnl_stdev: dispersion of current P&L% across positions (high = mixed bag)
+      pnl_min / pnl_max: worst and best current P&L%
+    """
+    try:
+        positions = load_tracked()
+    except Exception:
+        return {"n_positions": 0}
+    if not positions:
+        return {"n_positions": 0}
+
+    total_exposure = 0.0
+    by_ticker     = []
+    pnl_pcts      = []
+    for p in positions:
+        entry      = float(p.get("entry_price") or 0)
+        contracts  = int(p.get("contracts") or 1)
+        strategy   = p.get("strategy", "")
+        # Long-premium positions: max loss = entry × 100 × contracts
+        # Short-premium positions (sell_put cash-secured): max loss = strike × 100 × contracts
+        if strategy in ("buy_call", "buy_put"):
+            max_loss = entry * 100 * contracts
+        elif strategy == "sell_put":
+            strike   = float((p.get("option") or {}).get("strike") or 0)
+            max_loss = strike * 100 * contracts
+        elif strategy == "covered_call":
+            max_loss = 0.0   # capped — you already own the shares
+        else:
+            max_loss = entry * 100 * contracts
+
+        total_exposure += max_loss
+        by_ticker.append({
+            "ticker":   p.get("ticker", "?"),
+            "strategy": strategy,
+            "max_loss": round(max_loss, 2),
+        })
+        sig = p.get("last_signal") or {}
+        pct = sig.get("pct_change")
+        if pct is not None:
+            pnl_pcts.append(float(pct))
+
+    largest = max(by_ticker, key=lambda x: x["max_loss"]) if by_ticker else None
+
+    # Stdev of current P&L%
+    if len(pnl_pcts) >= 2:
+        mean_pnl = sum(pnl_pcts) / len(pnl_pcts)
+        var      = sum((x - mean_pnl) ** 2 for x in pnl_pcts) / len(pnl_pcts)
+        pnl_std  = var ** 0.5
+    else:
+        pnl_std  = 0.0
+
+    return {
+        "n_positions":              len(positions),
+        "total_max_loss":           round(total_exposure, 2),
+        "stop_loss_exposure":       round(total_exposure * (SELL_STOP_LOSS / 100.0), 2),
+        "largest_position_ticker":  largest["ticker"]   if largest else None,
+        "largest_position":         largest["max_loss"] if largest else 0,
+        "largest_concentration_pct": round(largest["max_loss"] / total_exposure * 100, 1) if largest and total_exposure > 0 else 0,
+        "pnl_stdev":                round(pnl_std, 2),
+        "pnl_min":                  round(min(pnl_pcts), 2) if pnl_pcts else 0,
+        "pnl_max":                  round(max(pnl_pcts), 2) if pnl_pcts else 0,
+        "by_ticker":                by_ticker,
+    }
+
+
 def load_tracked():
     if os.path.exists(TRACK_FILE):
         try:
@@ -2456,6 +3057,33 @@ def get_sell_signal(position: dict) -> dict:
                     f"🛑 Stop loss hit: {pct_change:.1f}% (limit -{SELL_STOP_LOSS}%)"
                 )
 
+            # ── Trailing stop — protects gains once profit is meaningful ──
+            prev_peak = (position.get("last_signal") or {}).get("peak_pct_change", -999.0)
+            peak_pct  = max(prev_peak, pct_change)
+            result["peak_pct_change"] = round(peak_pct, 2)
+            if peak_pct >= TRAIL_ACTIVATE_PCT and not result["triggered"]:
+                trailing_stop = peak_pct - TRAIL_LOCK_PCT
+                if pct_change <= trailing_stop:
+                    result["triggered"] = True
+                    result["reasons"].append(
+                        f"📉 Trailing stop: dropped to {pct_change:+.1f}% from peak +{peak_pct:.1f}% "
+                        f"(trail lock at {trailing_stop:+.1f}%)"
+                    )
+
+            # ── Stagnation exit — close positions bleeding theta with no move ──
+            try:
+                tracked_at = position.get("tracked_at")
+                if tracked_at and not result["triggered"]:
+                    days_held = (datetime.now() - datetime.fromisoformat(tracked_at)).days
+                    if days_held >= STAGNANT_DAYS and abs(pct_change) <= STAGNANT_RANGE:
+                        result["triggered"] = True
+                        result["reasons"].append(
+                            f"⏳ Stagnation exit: held {days_held}d with P&L {pct_change:+.1f}% "
+                            f"(within ±{STAGNANT_RANGE}%) — theta bleed, exit and redeploy"
+                        )
+            except Exception:
+                pass
+
         # ── RSI / BB reversal checks ───────────────────────────
         if strategy == "buy_call":
             # Entered on oversold bounce — exit when RSI reaches neutral or price hits upper BB
@@ -2548,6 +3176,13 @@ def _run_tracked_check():
     if not snapshot:
         return
     print(f"\n[Track] Checking {len(snapshot)} tracked position(s)…")
+    try:
+        greeks = get_portfolio_greeks()
+        if greeks.get("n_positions"):
+            warn = f"  ⚠ {greeks['warning']}" if greeks.get("warning") else ""
+            print(f"[Portfolio] Net delta: {greeks['net_delta']:+.1f} shares-equivalent across {greeks['n_positions']} positions{warn}")
+    except Exception:
+        pass
     for pos in snapshot:
         try:
             sig = get_sell_signal(pos)
@@ -2665,7 +3300,11 @@ def _refresh_tracked_prices():
                             pct = (mid - entry) / entry * 100
                             sig["pct_change"]    = round(pct, 1)
                             sig["dollar_change"] = round((mid - entry) * 100, 2)
-                        p["last_signal"] = sig
+                        p["last_signal"]  = sig
+                        # Update last_checked so the UI timestamp reflects the refresh
+                        # (full sell-signal eval still runs only every TRACK_CHECK_MINS;
+                        # this just tells the user the bot is alive and prices are fresh)
+                        p["last_checked"] = datetime.now().isoformat()
                         break
                     save_tracked(positions_now)
 
@@ -2989,18 +3628,83 @@ def _bt_signals_fast(pc, idx, params=None):
     }
 
 
+def _bt_walk_exit(closes_arr, idx, K, iv_est, hold_days, strategy, entry_opt):
+    """
+    Walk day-by-day from the entry index and close the position at the FIRST
+    sell-signal trigger — matching how the live bot manages an open trade:
+      stop loss     : option P&L <= -SELL_STOP_LOSS
+      trailing stop : peak P&L >= TRAIL_ACTIVATE_PCT, then gives back TRAIL_LOCK_PCT
+      take profit   : option P&L >= SELL_PROFIT_TARGET
+      stagnation    : flat (|P&L| <= STAGNANT_RANGE) after STAGNANT_DAYS days
+    Falls back to an end-of-hold exit when nothing triggers.
+
+    Runs on the precomputed close array (fast path, no DataFrame). IV is held
+    constant across the hold, matching the live signal-log simulator.
+    Returns dict: pnl_pct, exit_reason, exit_offset, exit_price, exit_opt.
+    """
+    opt_type = "call" if strategy == "buy_call" else "put"
+    is_short = (strategy == "sell_put")
+
+    def _pnl(curr_opt):
+        # long profits when premium rises; short profits when premium decays
+        if is_short:
+            return (entry_opt - curr_opt) / entry_opt * 100.0
+        return (curr_opt - entry_opt) / entry_opt * 100.0
+
+    peak = -999.0
+    for i in range(1, hold_days + 1):
+        close   = float(closes_arr[idx + i])
+        T_rem   = max((hold_days - i) / 365.0, 0.001)
+        cur_opt = _bt_option_price(close, K, T_rem, iv_est, opt_type)
+        pnl     = _pnl(cur_opt)
+        peak    = max(peak, pnl)
+        # Stop loss takes precedence over take-profit on the same day.
+        # Recorded P&L is the TRIGGER level (not the gapped-through close) —
+        # in real trading a GTC stop/limit at the broker fires intraday at the
+        # trigger price, so the realised fill is ~ -15% or +30%, not the next
+        # daily close that may have gapped far past it. Trailing/stagnation
+        # don't have GTC orders behind them, so record the actual close pnl.
+        if pnl <= -SELL_STOP_LOSS:
+            reason  = "stop_loss"
+            rec_pnl = -float(SELL_STOP_LOSS)
+        elif peak >= TRAIL_ACTIVATE_PCT and pnl <= peak - TRAIL_LOCK_PCT:
+            reason  = "trailing_stop"
+            rec_pnl = pnl
+        elif pnl >= SELL_PROFIT_TARGET:
+            reason  = "take_profit"
+            rec_pnl = float(SELL_PROFIT_TARGET)
+        elif i >= STAGNANT_DAYS and abs(pnl) <= STAGNANT_RANGE:
+            reason  = "stagnation"
+            rec_pnl = pnl
+        else:
+            continue
+        return {"pnl_pct": round(rec_pnl, 1), "exit_reason": reason,
+                "exit_offset": i, "exit_price": round(close, 2),
+                "exit_opt": round(cur_opt, 3)}
+
+    # No trigger fired — settle at end of hold (option near expiry)
+    close   = float(closes_arr[idx + hold_days])
+    cur_opt = _bt_option_price(close, K, max(1 / 365.0, 0.001), iv_est, opt_type)
+    return {"pnl_pct": round(_pnl(cur_opt), 1), "exit_reason": "end_of_hold",
+            "exit_offset": hold_days, "exit_price": round(close, 2),
+            "exit_opt": round(cur_opt, 3)}
+
+
 def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                         idx_start=60, idx_end=None, precomp=None,
-                        record_path=False):
+                        record_path=False, use_exits=True):
     """
     Walk history for `ticker`.
-    hold_days   : days to hold the option
+    hold_days   : max days to hold the option (the exit cap)
     params      : optional parameter overrides for _bt_signals (WFO use)
     hist        : pre-downloaded DataFrame (skip yfinance fetch if provided)
     idx_start / idx_end : window slice for walk-forward splits
     precomp     : pre-computed indicator dict from _precompute_indicators (WFO fast path)
     record_path : if True, also record option P&L at every HOLD_SWEEP_INTERVALS checkpoint
                   (used by the Hold Horizon Analysis tool)
+    use_exits   : if True (default) each trade is managed day-by-day and closed at
+                  the first stop-loss / take-profit / trailing / stagnation trigger,
+                  matching live trading. If False, holds to expiry (legacy behaviour).
     """
     if hist is None:
         try:
@@ -3037,26 +3741,32 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                                 ("sell_put", sigs["has_sell_put"])]:
             if not flag:
                 continue
-            K = round(price)
+            K        = round(price)
+            opt_type = "call" if strategy == "buy_call" else "put"
+            entry_opt = _bt_option_price(price, K, T_entry, iv_est, opt_type)
+            if entry_opt <= 0.01:
+                continue
 
-            if strategy == "sell_put":
-                entry_opt = _bt_option_price(price,      K, T_entry, iv_est, "put")
-                exit_opt  = _bt_option_price(exit_price, K, T_exit,  iv_est, "put")
-                if entry_opt <= 0.01:
-                    continue
-                pnl_pct = round((entry_opt - exit_opt) / entry_opt * 100, 1)
-            elif strategy == "buy_call":
-                entry_opt = _bt_option_price(price,      K, T_entry, iv_est, "call")
-                exit_opt  = _bt_option_price(exit_price, K, T_exit,  iv_est, "call")
-                if entry_opt <= 0.01:
-                    continue
-                pnl_pct = round((exit_opt - entry_opt) / entry_opt * 100, 1)
-            else:  # buy_put
-                entry_opt = _bt_option_price(price,      K, T_entry, iv_est, "put")
-                exit_opt  = _bt_option_price(exit_price, K, T_exit,  iv_est, "put")
-                if entry_opt <= 0.01:
-                    continue
-                pnl_pct = round((exit_opt - entry_opt) / entry_opt * 100, 1)
+            if use_exits:
+                # Manage the trade like the live bot — close at the first
+                # stop-loss / take-profit / trailing / stagnation trigger.
+                _ex           = _bt_walk_exit(precomp["closes"], idx, K, iv_est,
+                                              hold_days, strategy, entry_opt)
+                pnl_pct       = _ex["pnl_pct"]
+                exit_opt      = _ex["exit_opt"]
+                t_exit_price  = _ex["exit_price"]
+                t_exit_date   = precomp["dates"][idx + _ex["exit_offset"]]
+                t_exit_reason = _ex["exit_reason"]
+            else:
+                # Legacy: hold the full period, settle at expiry.
+                exit_opt = _bt_option_price(exit_price, K, T_exit, iv_est, opt_type)
+                if strategy == "sell_put":
+                    pnl_pct = round((entry_opt - exit_opt) / entry_opt * 100, 1)
+                else:
+                    pnl_pct = round((exit_opt - entry_opt) / entry_opt * 100, 1)
+                t_exit_price  = round(exit_price, 2)
+                t_exit_date   = exit_date
+                t_exit_reason = "end_of_hold"
 
             # ── Hold-path recording (for Hold Horizon Analysis) ──────────
             # For each checkpoint d, compute option P&L if closed at day d
@@ -3082,13 +3792,14 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                 "ticker":      ticker,
                 "strategy":    strategy,
                 "entry_date":  entry_date,
-                "exit_date":   exit_date,
+                "exit_date":   t_exit_date,
                 "entry_price": round(price, 2),
-                "exit_price":  round(exit_price, 2),
+                "exit_price":  t_exit_price,
                 "entry_opt":   round(entry_opt, 3),
                 "exit_opt":    round(exit_opt, 3),
                 "pnl_pct":     pnl_pct,
                 "win":         pnl_pct > 0,
+                "exit_reason": t_exit_reason,
                 "iv_est":      round(iv_est * 100, 1),
                 "pnl_path":    pnl_path,
                 # Individual signal flags for quality analysis
@@ -3111,49 +3822,95 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
     return trades
 
 
+def _bt_metrics(trades):
+    """
+    Full risk/return metric suite for a list of trade dicts.
+    All P&L figures are in PERCENT (simulated trades have no $ size).
+      expectancy    — mean P&L% per trade (positive = edge)
+      profit_factor — gross winning % / gross losing % (>1.5 is healthy)
+      sortino       — mean P&L% / downside deviation (penalises losses only)
+      max_drawdown  — deepest peak-to-trough dip on the cumulative %-curve
+    """
+    wins   = [t for t in trades if t["win"]]
+    losses = [t for t in trades if not t["win"]]
+    pnls   = [t["pnl_pct"] for t in trades]
+    n      = len(trades)
+    win_rate = round(len(wins) / n * 100, 1)
+    avg_pnl  = round(sum(pnls) / n, 1)
+    avg_win  = round(sum(t["pnl_pct"] for t in wins)   / len(wins),   1) if wins   else 0
+    avg_loss = round(sum(t["pnl_pct"] for t in losses) / len(losses), 1) if losses else 0
+    # Sharpe-like: mean / std of all P&L
+    std    = float(np.std(pnls)) if n > 1 else 0.0
+    sharpe = round(avg_pnl / std, 2) if std > 0 else 0
+    # Sortino: mean / downside deviation (std of sub-zero returns only)
+    downside = [p for p in pnls if p < 0]
+    dd_std   = float(np.std(downside)) if len(downside) > 1 else 0.0
+    sortino  = round(avg_pnl / dd_std, 2) if dd_std > 0 else 0
+    # Profit factor: gross winning % / gross losing %
+    gross_win  = sum(t["pnl_pct"] for t in wins)
+    gross_loss = abs(sum(t["pnl_pct"] for t in losses))
+    if gross_loss > 0:
+        profit_factor = round(gross_win / gross_loss, 2)
+    else:
+        profit_factor = 99.0 if gross_win > 0 else 0.0
+    # Max drawdown — walk the cumulative %-curve in CHRONOLOGICAL order
+    # (sorting matters: trades are appended ticker-by-ticker, which would
+    # otherwise interleave per-ticker histories instead of a real time-series).
+    # Reported three ways for interpretability:
+    #   max_drawdown      — raw cum-% dip (the "absolute" number, big units)
+    #   max_drawdown_pct  — drawdown as a % of the peak at the time (digestible:
+    #                       "20% off peak" instead of raw "-7253%")
+    #   recovery_factor   — total gain / |max drawdown| (>3 healthy, >5 strong)
+    pnls_chrono  = [t["pnl_pct"] for t in sorted(trades, key=lambda t: str(t.get("entry_date", "")))]
+    equity = peak = max_dd = peak_at_dd = 0.0
+    for p in pnls_chrono:
+        equity += p
+        if equity > peak:
+            peak = equity
+        dd = equity - peak
+        if dd < max_dd:
+            max_dd     = dd
+            peak_at_dd = peak
+    total_pnl_v     = sum(pnls)
+    mdd_pct_of_peak = round(abs(max_dd) / peak_at_dd * 100, 1) if peak_at_dd > 0 else 0.0
+    recovery_factor = round(total_pnl_v / abs(max_dd), 2) if max_dd < 0 else 0.0
+    return {
+        "count":            n,
+        "total_trades":     n,
+        "win_rate":         win_rate,
+        "avg_pnl":          avg_pnl,
+        "expectancy":       avg_pnl,
+        "avg_win":          avg_win,
+        "avg_loss":         avg_loss,
+        "sharpe":           sharpe,
+        "sortino":          sortino,
+        "profit_factor":    profit_factor,
+        "max_drawdown":     round(max_dd, 1),
+        "max_drawdown_pct": mdd_pct_of_peak,
+        "recovery_factor":  recovery_factor,
+        "total_pnl":        round(total_pnl_v, 1),
+        "best":             max(pnls),
+        "worst":            min(pnls),
+    }
+
+
 def _bt_summary(trades):
-    """Aggregate stats over a list of trade dicts."""
+    """Aggregate stats over a list of trade dicts (overall + per-strategy)."""
     if not trades:
         return {
             "total_trades": 0, "win_rate": 0, "avg_pnl": 0,
-            "avg_win": 0, "avg_loss": 0, "sharpe": 0,
-            "best": 0, "worst": 0, "by_strategy": {},
+            "avg_win": 0, "avg_loss": 0, "sharpe": 0, "sortino": 0,
+            "profit_factor": 0, "expectancy": 0, "max_drawdown": 0,
+            "max_drawdown_pct": 0, "recovery_factor": 0,
+            "total_pnl": 0, "best": 0, "worst": 0, "by_strategy": {},
         }
-    wins    = [t for t in trades if t["win"]]
-    losses  = [t for t in trades if not t["win"]]
-    pnls    = [t["pnl_pct"] for t in trades]
-    win_rate = round(len(wins) / len(trades) * 100, 1)
-    avg_pnl  = round(sum(pnls) / len(pnls), 1)
-    avg_win  = round(sum(t["pnl_pct"] for t in wins)  / len(wins),   1) if wins   else 0
-    avg_loss = round(sum(t["pnl_pct"] for t in losses) / len(losses), 1) if losses else 0
-    # Sharpe-like: mean / std of P&L
-    if len(pnls) > 1:
-        std = float(np.std(pnls))
-        sharpe = round(avg_pnl / std, 2) if std > 0 else 0
-    else:
-        sharpe = 0
-    # Per-strategy breakdown
+    overall = _bt_metrics(trades)
     by_strat = {}
     for strat in ("buy_call", "buy_put", "sell_put"):
         st = [t for t in trades if t["strategy"] == strat]
         if st:
-            w = [t for t in st if t["win"]]
-            by_strat[strat] = {
-                "count": len(st),
-                "win_rate": round(len(w)/len(st)*100, 1),
-                "avg_pnl": round(sum(t["pnl_pct"] for t in st)/len(st), 1),
-            }
-    return {
-        "total_trades": len(trades),
-        "win_rate":     win_rate,
-        "avg_pnl":      avg_pnl,
-        "avg_win":      avg_win,
-        "avg_loss":     avg_loss,
-        "sharpe":       sharpe,
-        "best":         max(pnls),
-        "worst":        min(pnls),
-        "by_strategy":  by_strat,
-    }
+            by_strat[strat] = _bt_metrics(st)
+    return {**overall, "by_strategy": by_strat}
 
 
 def _run_backtest_job(tickers, hold_days):
@@ -3298,6 +4055,91 @@ def _save_wfo_results(results: dict):
         print(f"  [WFO] Results saved to {WFO_FILE}")
     except Exception as e:
         print(f"  [WFO] Could not save results: {e}")
+
+
+def _save_hs_results(results: dict):
+    """Persist Hold Horizon Analysis results to disk so they survive restarts."""
+    try:
+        payload = {"saved_at": datetime.now().isoformat(), "results": results}
+        with open(HS_RESULTS_FILE, "w") as f:
+            json.dump(payload, f, indent=2)
+        print(f"  [HoldSweep] Results saved to {HS_RESULTS_FILE}")
+    except Exception as e:
+        print(f"  [HoldSweep] Could not save results: {e}")
+
+
+def _load_hs_results():
+    """Load persisted Hold Horizon results on startup. Restores _hs_state['results']."""
+    if not os.path.exists(HS_RESULTS_FILE):
+        return
+    try:
+        with open(HS_RESULTS_FILE) as f:
+            payload = json.load(f)
+        results = payload.get("results")
+        if not results:
+            return
+        with _hs_lock:
+            _hs_state["results"] = results
+            _hs_state["stage"]   = f"Loaded from disk (saved {payload.get('saved_at','')[:10]})"
+        n = results.get("n_trades", 0)
+        print(f"  [HoldSweep] Restored {n:,} trades from {HS_RESULTS_FILE}")
+    except Exception as e:
+        print(f"  [HoldSweep] Could not load saved results: {e}")
+
+
+def _hs_targets_for_position(strategy, days_held):
+    """
+    Look up Hold Horizon Analysis data for a tracked position.
+    Returns dict with optimal_day, optimal_pnl, current_avg_pnl, win_rate_now,
+    n_trades, and a short text 'verdict' — or None if no HH data exists.
+    """
+    with _hs_lock:
+        results = _hs_state.get("results")
+    if not results:
+        return None
+    by_strategy = results.get("by_strategy", {})
+    sd = by_strategy.get(strategy)
+    if not sd:
+        return None
+    intervals = results.get("intervals") or HOLD_SWEEP_INTERVALS
+    by_day = sd.get("by_day", {})
+    if not by_day:
+        return None
+    # Find the interval closest to days_held (snap to nearest checkpoint)
+    try:
+        days_int = max(0, int(days_held))
+    except Exception:
+        days_int = 0
+    nearest = min(intervals, key=lambda d: abs(d - days_int))
+    cur = by_day.get(str(nearest)) or {}
+    optimal_day = sd.get("optimal_day")
+    opt = by_day.get(str(optimal_day)) or {}
+    current_avg = cur.get("avg_pnl")
+    optimal_avg = opt.get("avg_pnl")
+    # Build a short verdict to surface in the UI
+    verdict = ""
+    if optimal_day is not None and current_avg is not None and optimal_avg is not None:
+        if days_int >= optimal_day:
+            verdict = f"At/past optimal hold day ({optimal_day}d). Data suggests considering exit."
+        elif optimal_avg > current_avg + 1.0:
+            verdict = (f"Avg gains compound: avg at {nearest}d = {current_avg:+.1f}%, "
+                       f"avg at optimal {optimal_day}d = {optimal_avg:+.1f}%. Data favours holding longer.")
+        elif current_avg > optimal_avg - 0.5:
+            verdict = f"Near peak avg P&L for this strategy ({nearest}d ≈ optimal {optimal_day}d)."
+        else:
+            verdict = f"Current avg ({current_avg:+.1f}% at {nearest}d) below optimal ({optimal_avg:+.1f}% at {optimal_day}d)."
+    return {
+        "strategy":         strategy,
+        "days_held":        days_int,
+        "nearest_day":      nearest,
+        "current_avg_pnl":  current_avg,
+        "current_win_rate": cur.get("win_rate"),
+        "current_n":        cur.get("n"),
+        "optimal_day":      optimal_day,
+        "optimal_avg_pnl":  optimal_avg,
+        "optimal_win_rate": opt.get("win_rate"),
+        "verdict":          verdict,
+    }
 
 
 def _load_wfo_results():
@@ -4155,6 +4997,15 @@ def _run_hold_sweep_job(months=12, universe="focus"):
 
         cutoff = pd.Timestamp.today() - pd.DateOffset(months=months)
 
+        # Use the live bot's calibrated entry params (from WFO) so HH tests the
+        # SAME setups the live scanner would actually trade — not the loosest
+        # possible defaults (bull_min=1, bear_min=1).
+        live_params = dict(scan_state.get("wfo_params", {}))
+        if live_params:
+            print(f"  [HoldSweep] Using live calibration params: {live_params}")
+        else:
+            print(f"  [HoldSweep] No WFO params set — using global defaults (bull_min=1, bear_min=1)")
+
         with _hs_lock:
             _hs_state["stage"] = f"Analysing {len(tickers)} tickers…"
 
@@ -4175,7 +5026,8 @@ def _run_hold_sweep_job(months=12, universe="focus"):
                     return []
                 pc = _precompute_indicators(h)
                 return run_backtest_ticker(
-                    tkr, hold_days=21, hist=h, precomp=pc, record_path=True
+                    tkr, hold_days=21, hist=h, precomp=pc,
+                    params=live_params, record_path=True
                 )
             except Exception as _e:
                 print(f"  [HoldSweep] {tkr} skipped: {_e}")
@@ -4213,6 +5065,7 @@ def _run_hold_sweep_job(months=12, universe="focus"):
             _hs_state.update(running=False,
                              stage=f"Done — {len(all_trades):,} trades analysed",
                              results=result)
+        _save_hs_results(result)
 
     except Exception as e:
         with _hs_lock:
@@ -4395,12 +5248,158 @@ def _log_new_signals(totals: dict):
         print(f"  [SigLog] Logging failed: {e}")
 
 
+def _simulate_signal_exit(entry, hist):
+    """
+    Walk daily through the hold period and find the first sell-signal trigger
+    based on simulated OPTION premium P&L (matches the live bot's
+    SELL_PROFIT_TARGET=+30% and SELL_STOP_LOSS=-15% thresholds).
+
+    Option premium is estimated daily via Black-Scholes using:
+      - K = round(price_at_signal)              (ATM at entry)
+      - IV = GARCH estimate on history through signal_date
+      - T = remaining hold days / 365
+
+    Returns dict with exit_day, exit_reason, exit_option_pct (the option P&L
+    that triggered exit), stock_return_pct (actual stock move), exit_price,
+    and win. Falls back to end-of-hold resolution if no trigger hits.
+    """
+    strat       = entry.get("strategy", "")
+    entry_price = entry.get("price_at_signal")
+    signal_date = (entry.get("signal_date") or "")[:10]
+    hold_days   = entry.get("hold_days", 7)
+
+    if not entry_price or entry_price <= 0 or not signal_date:
+        return None
+
+    # Map strategy -> option type + position direction
+    if strat == "buy_call":
+        opt_type, position = "call", "long"
+    elif strat == "buy_put":
+        opt_type, position = "put",  "long"
+    elif strat == "sell_put":
+        opt_type, position = "put",  "short"
+    elif strat == "covered_call":
+        opt_type, position = "call", "short"
+    else:
+        return None
+
+    # Strip tz from hist index if present
+    if hist.index.tz is not None:
+        hist = hist.copy()
+        hist.index = hist.index.tz_localize(None)
+
+    try:
+        entry_dt = datetime.strptime(signal_date, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+    bars_after  = hist[hist.index.date >= entry_dt].head(hold_days + 1)
+    if len(bars_after) < 2:
+        return None  # not enough days to walk
+
+    # GARCH IV estimate on closes through signal_date (fallback 40%)
+    bars_before = hist[hist.index.date < entry_dt]
+    iv_closes   = pd.concat([bars_before["Close"], bars_after["Close"].head(1)])
+    try:
+        sigma = float(calc_garch_vol(iv_closes)) if len(iv_closes) >= 30 else 0.40
+    except Exception:
+        sigma = 0.40
+    sigma = max(0.05, min(2.0, sigma))
+
+    # Entry option premium
+    K = round(entry_price)
+    T_entry   = hold_days / 365.0
+    entry_opt = _bt_option_price(entry_price, K, T_entry, sigma, opt_type)
+    if entry_opt < 0.01:
+        return None  # entry premium too small to evaluate meaningfully
+
+    def _opt_pnl(curr_opt):
+        if position == "long":
+            return (curr_opt - entry_opt) / entry_opt * 100
+        else:  # short — profit when premium decays
+            return (entry_opt - curr_opt) / entry_opt * 100
+
+    # Walk forward day by day, tracking peak option P&L for trailing stop
+    peak_pnl = -999.0
+    for i in range(1, len(bars_after)):
+        date_idx    = bars_after.index[i]
+        close       = float(bars_after["Close"].iloc[i])
+        T_remain    = max((hold_days - i) / 365.0, 0.001)
+        current_opt = _bt_option_price(close, K, T_remain, sigma, opt_type)
+        opt_pnl     = _opt_pnl(current_opt)
+        stock_ret   = (close - entry_price) / entry_price * 100
+        peak_pnl    = max(peak_pnl, opt_pnl)
+
+        # Stop loss takes precedence over take-profit on the same day
+        if opt_pnl <= -SELL_STOP_LOSS:
+            return {
+                "exit_day":         date_idx.strftime("%Y-%m-%d"),
+                "exit_day_idx":     i,
+                "exit_reason":      "stop_loss",
+                "exit_option_pct":  round(opt_pnl, 2),
+                "stock_return_pct": round(stock_ret, 2),
+                "exit_price":       round(close, 2),
+                "win":              False,
+            }
+        # Trailing stop — lock in gains once peak crossed activation
+        if peak_pnl >= TRAIL_ACTIVATE_PCT:
+            trailing_stop = peak_pnl - TRAIL_LOCK_PCT
+            if opt_pnl <= trailing_stop:
+                return {
+                    "exit_day":         date_idx.strftime("%Y-%m-%d"),
+                    "exit_day_idx":     i,
+                    "exit_reason":      "trailing_stop",
+                    "exit_option_pct":  round(opt_pnl, 2),
+                    "stock_return_pct": round(stock_ret, 2),
+                    "exit_price":       round(close, 2),
+                    "win":              opt_pnl > 0,
+                }
+        if opt_pnl >= SELL_PROFIT_TARGET:
+            return {
+                "exit_day":         date_idx.strftime("%Y-%m-%d"),
+                "exit_day_idx":     i,
+                "exit_reason":      "take_profit",
+                "exit_option_pct":  round(opt_pnl, 2),
+                "stock_return_pct": round(stock_ret, 2),
+                "exit_price":       round(close, 2),
+                "win":              True,
+            }
+        # Stagnation — close positions sitting near flat after N days
+        if i >= STAGNANT_DAYS and abs(opt_pnl) <= STAGNANT_RANGE:
+            return {
+                "exit_day":         date_idx.strftime("%Y-%m-%d"),
+                "exit_day_idx":     i,
+                "exit_reason":      "stagnation",
+                "exit_option_pct":  round(opt_pnl, 2),
+                "stock_return_pct": round(stock_ret, 2),
+                "exit_price":       round(close, 2),
+                "win":              opt_pnl > 0,
+            }
+
+    # No trigger — resolve at end of hold
+    final_close = float(bars_after["Close"].iloc[-1])
+    T_remain    = max(1 / 365.0, 0.001)
+    final_opt   = _bt_option_price(final_close, K, T_remain, sigma, opt_type)
+    final_pnl   = _opt_pnl(final_opt)
+    final_stock = (final_close - entry_price) / entry_price * 100
+    return {
+        "exit_day":         bars_after.index[-1].strftime("%Y-%m-%d"),
+        "exit_day_idx":     len(bars_after) - 1,
+        "exit_reason":      "end_of_hold",
+        "exit_option_pct":  round(final_pnl, 2),
+        "stock_return_pct": round(final_stock, 2),
+        "exit_price":       round(final_close, 2),
+        "win":              final_pnl > 0,
+    }
+
+
 def _resolve_signal_log():
     """
     Background job (runs every 6 hours):
     - ALL pending entries: refresh live stock price → store current_return_pct
       so the UI can show live unrealized P&L immediately after signal date.
-    - Entries past check_after: also finalize win/loss outcome.
+    - Entries past check_after: simulate daily sell-signal exit (NOT fixed
+      end-of-hold). First take-profit or stop-loss trigger wins.
 
     Safe pattern: snapshot → network work → re-load + merge by UUID.
     """
@@ -4425,7 +5424,20 @@ def _resolve_signal_log():
 
         for sym, group in ticker_groups.items():
             try:
-                hist = _yf_call(yf.Ticker(sym).history, period="5d")
+                # Fetch history from the earliest signal_date in the group through today.
+                # Needed so the simulator can walk each hold period day-by-day.
+                earliest_date = min(
+                    (e.get("signal_date") or "")[:10] for e in group if e.get("signal_date")
+                )
+                if not earliest_date:
+                    continue
+                try:
+                    earliest_dt = datetime.strptime(earliest_date, "%Y-%m-%d").date()
+                except Exception:
+                    continue
+                # Pull a couple of extra trading days of buffer before the earliest entry
+                start_dt = earliest_dt - timedelta(days=3)
+                hist = _yf_call(yf.Ticker(sym).history, start=start_dt.isoformat())
                 if hist is None or hist.empty:
                     continue
                 cur_price = float(hist["Close"].iloc[-1])
@@ -4452,24 +5464,42 @@ def _resolve_signal_log():
                     }
 
                     if past_hold:
-                        # Hold period complete — lock in win/loss
-                        strat = e.get("strategy", "")
-                        if strat == "buy_call":
-                            win = stock_return_pct > 3.0
-                        elif strat == "buy_put":
-                            win = stock_return_pct < -3.0
-                        elif strat in ("sell_put", "covered_call"):
-                            win = stock_return_pct > -5.0
+                        # Simulate day-by-day sell-signal exit instead of fixed end-of-hold.
+                        # Triggers: option +30% (SELL_PROFIT_TARGET) or option -15% (SELL_STOP_LOSS).
+                        sim = _simulate_signal_exit(e, hist)
+                        if sim is not None:
+                            update.update({
+                                "resolved":          True,
+                                "resolved_at":       datetime.now().isoformat(),
+                                "exit_day":          sim["exit_day"],
+                                "exit_day_idx":      sim["exit_day_idx"],
+                                "exit_reason":       sim["exit_reason"],
+                                "option_return_pct": sim["exit_option_pct"],
+                                "stock_return_pct":  sim["stock_return_pct"],
+                                "price_at_resolve":  sim["exit_price"],
+                                "win":               sim["win"],
+                                "outcome":           "win" if sim["win"] else "loss",
+                            })
                         else:
-                            win = stock_return_pct > 0
-                        update.update({
-                            "resolved":         True,
-                            "resolved_at":      datetime.now().isoformat(),
-                            "price_at_resolve": round(cur_price, 2),
-                            "stock_return_pct": stock_return_pct,
-                            "win":              win,
-                            "outcome":          "win" if win else "loss",
-                        })
+                            # Simulator couldn't run (no data) — fall back to fixed-hold logic
+                            strat = e.get("strategy", "")
+                            if strat == "buy_call":
+                                win = stock_return_pct > 3.0
+                            elif strat == "buy_put":
+                                win = stock_return_pct < -3.0
+                            elif strat in ("sell_put", "covered_call"):
+                                win = stock_return_pct > -5.0
+                            else:
+                                win = stock_return_pct > 0
+                            update.update({
+                                "resolved":         True,
+                                "resolved_at":      datetime.now().isoformat(),
+                                "exit_reason":      "no_data_fallback",
+                                "price_at_resolve": round(cur_price, 2),
+                                "stock_return_pct": stock_return_pct,
+                                "win":              win,
+                                "outcome":          "win" if win else "loss",
+                            })
                         resolved_count += 1
                     else:
                         live_count += 1
@@ -4737,6 +5767,7 @@ def _run_scan(mode=None):
             except Exception:
                 prefetch_map[sym] = {}
     print(f"  [Prefetch] Done — {len(prefetch_map)} tickers prefetched")
+    _save_prefetch_cache()
 
     done = 0
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
@@ -5875,11 +6906,51 @@ def api_track_add():
     return jsonify({"ok": True, "position": position})
 
 
+@app.route("/api/portfolio/greeks", methods=["GET"])
+def api_portfolio_greeks():
+    """Return net portfolio delta + per-position breakdown."""
+    return jsonify(get_portfolio_greeks())
+
+
+@app.route("/api/portfolio/risk", methods=["GET"])
+def api_portfolio_risk():
+    """Risk metrics for OPEN positions: max loss exposure, concentration, pnl dispersion."""
+    return jsonify(get_portfolio_risk())
+
+
+@app.route("/api/performance/stats", methods=["GET"])
+def api_performance_stats():
+    """Closed-trade analytics: expectancy, profit factor, Sortino, max drawdown."""
+    return jsonify(get_performance_stats())
+
+
+@app.route("/api/macro/regime", methods=["GET"])
+def api_macro_regime():
+    """Return which strategies are currently enabled by the macro regime gate."""
+    return jsonify(get_macro_regime())
+
+
 @app.route("/api/tracked", methods=["GET"])
 def api_tracked_get():
-    """Return all tracked positions with their latest sell signal."""
+    """Return all tracked positions with their latest sell signal.
+    Each position is enriched with `hold_horizon` data when Hold Horizon
+    Analysis results are available (Level 2 of the HH integration —
+    informational only; does not change sell-signal logic)."""
     with track_lock:
         positions = load_tracked()
+    # Enrich each position with hold-horizon context if HH data exists.
+    now = datetime.now()
+    for pos in positions:
+        try:
+            tracked_at = pos.get("tracked_at")
+            if not tracked_at:
+                continue
+            days_held = max(0, (now - datetime.fromisoformat(tracked_at)).days)
+            hh = _hs_targets_for_position(pos.get("strategy", ""), days_held)
+            if hh is not None:
+                pos["hold_horizon"] = hh
+        except Exception:
+            pass
     return jsonify(positions)
 
 
@@ -6750,6 +7821,35 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
         <div style="font-size:11px;color:var(--muted);margin-bottom:6px">WORST TRADE</div>
         <div id="perf-worst" style="font-size:18px;font-weight:700;color:var(--red)">—</div>
       </div>
+      <!-- Advanced metrics for options trading (replaces Sharpe) -->
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--accent);border-width:1px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px" title="Average $ made per trade. The killer metric.">EXPECTANCY / TRADE</div>
+        <div id="perf-expectancy" style="font-size:22px;font-weight:700;color:var(--text)">—</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">positive = edge</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--accent);border-width:1px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px" title="Total wins / total losses. >1.5 decent, >2.5 strong.">PROFIT FACTOR</div>
+        <div id="perf-profit-factor" style="font-size:22px;font-weight:700;color:var(--text)">—</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">target &gt; 1.5</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--accent);border-width:1px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px" title="Like Sharpe but only counts downside vol. Proper for options.">SORTINO RATIO</div>
+        <div id="perf-sortino" style="font-size:22px;font-weight:700;color:var(--text)">—</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">target &gt; 0.5</div>
+      </div>
+      <div style="background:var(--surface2);border-radius:12px;padding:16px;border:1px solid var(--accent);border-width:1px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px" title="Worst peak-to-trough loss across your equity curve.">MAX DRAWDOWN</div>
+        <div id="perf-max-dd" style="font-size:22px;font-weight:700;color:var(--red)">—</div>
+        <div id="perf-max-dd-pct" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
+      </div>
+    </div>
+
+    <!-- Open portfolio risk -->
+    <div id="portfolio-risk-panel" style="background:var(--surface2);border-radius:12px;padding:16px 20px;border:1px solid var(--border);margin-bottom:28px;display:none">
+      <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px">⚖ Open Portfolio Risk</div>
+      <div id="portfolio-risk-body" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;font-size:12px">
+        <!-- filled by JS -->
+      </div>
     </div>
 
     <!-- Cumulative P&L chart -->
@@ -7067,9 +8167,17 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
       <!-- Per-strategy sim summary -->
       <div style="background:var(--surface2);border-radius:14px;padding:18px 20px;
            border:1px solid var(--border);margin-bottom:20px">
-        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:14px">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:4px">
           📈 Simulated Strategy Performance
         </div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:14px">
+          Full risk/return profile across <span id="cal-sim-n">all</span> simulated trades —
+          every setup the bot would have recommended. Per-trade returns shown as %;
+          cumulative P&amp;L assumes $100 per signal.
+        </div>
+        <div id="cal-sim-overall" style="display:grid;
+             grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:16px"></div>
+        <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px">By strategy</div>
         <div id="cal-strat-rows" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px"></div>
       </div>
 
@@ -7217,6 +8325,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
             <thead>
               <tr style="border-bottom:1px solid var(--border)">
                 <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Strategy</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600" title="Number of backtested trades for this strategy">Trades</th>
                 <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">1d</th>
                 <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">2d</th>
                 <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">3d</th>
@@ -7242,6 +8351,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
             <thead>
               <tr style="border-bottom:1px solid var(--border)">
                 <th style="text-align:left;padding:6px 8px;color:var(--muted);font-weight:600">Strategy</th>
+                <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600" title="Number of backtested trades for this strategy">Trades</th>
                 <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">1d</th>
                 <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">2d</th>
                 <th style="text-align:center;padding:6px 8px;color:var(--muted);font-weight:600">3d</th>
@@ -7618,6 +8728,16 @@ function buildCard(d, strategy) {
     const [mktColor, mktLabel] = mktMap[d.market_trend] || [];
     if(mktColor) sigs += `<span class="sig ${mktColor}">${mktLabel}</span>`;
   }
+  // Beta — how much the stock's move is driven by the broad market (SPY)
+  if(d.beta != null) {
+    const ab = Math.abs(d.beta);
+    let bColor, bLabel;
+    if(d.beta < 0)     { bColor='sig-purple'; bLabel='Inverse'; }
+    else if(ab >= 1.3) { bColor='sig-orange'; bLabel='High Mkt Sensitivity'; }
+    else if(ab >= 0.7) { bColor='sig-blue';   bLabel='Moves w/ Market'; }
+    else               { bColor='sig-green';  bLabel='Low Mkt Sensitivity'; }
+    sigs += `<span class="sig ${bColor}" title="Rolling 60-day beta vs SPY. |β|>1 amplifies market moves, ~1 tracks it, <1 dampens, <0 moves opposite. The higher |β|, the more this stock's trend is just the market scaled.">β ${d.beta.toFixed(2)} ${bLabel}</span>`;
+  }
   // Fed meeting proximity + yield curve
   if(d.days_to_next_fed != null) {
     if(d.pre_fed_window) {
@@ -7824,6 +8944,11 @@ function buildCard(d, strategy) {
         <div class="val" style="color:${d.adx>40?'var(--orange)':d.adx>25?'var(--yellow)':'var(--green)'}">
           ${d.adx!=null?d.adx.toFixed(1):'—'}
           ${d.adx>40?' Very Strong':d.adx>25?' Trending':' Sideways'}
+        </div></div>
+      <div class="opt-cell"><div class="key">Beta (vs SPY)</div>
+        <div class="val" style="color:${d.beta==null?'var(--muted)':Math.abs(d.beta)>=1.3?'var(--orange)':Math.abs(d.beta)>=0.7?'var(--text)':'var(--green)'}">
+          ${d.beta!=null?d.beta.toFixed(2):'—'}
+          ${d.beta==null?'':Math.abs(d.beta)>=1.3?' Amplifies Mkt':Math.abs(d.beta)>=0.7?' Tracks Mkt':d.beta<0?' Inverse':' Defensive'}
         </div></div>
     </div>
   </div>`}
@@ -8474,6 +9599,24 @@ async function refreshTracked() {
       }
     }
 
+    // ── Hold Horizon hint (Level 2: informational only) ─────
+    // Surfaces what the latest Hold Horizon Analysis says about this
+    // strategy at the current days-held. Does NOT change sell-signal
+    // logic — it's guidance you decide whether to act on.
+    let hhHtml = '';
+    const hh = p.hold_horizon;
+    if (hh && hh.optimal_day != null && hh.optimal_avg_pnl != null) {
+        const arrow = hh.days_held >= hh.optimal_day ? '🎯' : '📊';
+        const wr  = hh.current_win_rate != null ? ` · ${hh.current_win_rate.toFixed(0)}% wr` : '';
+        hhHtml = `
+          <div style="margin-top:6px;padding:6px 8px;background:var(--surface2);border-left:2px solid var(--border);border-radius:4px;font-size:10px;line-height:1.45;color:var(--muted)">
+            <div style="color:var(--text);font-weight:600">${arrow} Hold Horizon</div>
+            <div>Avg at ${hh.nearest_day}d (held ${hh.days_held}d): <b style="color:${(hh.current_avg_pnl||0)>=0?'var(--green)':'var(--red)'}">${(hh.current_avg_pnl||0).toFixed(1)}%</b>${wr}</div>
+            <div>Optimal: <b>${hh.optimal_day}d</b> (avg <b style="color:${(hh.optimal_avg_pnl||0)>=0?'var(--green)':'var(--red)'}">${(hh.optimal_avg_pnl||0).toFixed(1)}%</b>)</div>
+            ${hh.verdict ? `<div style="margin-top:3px;font-style:italic">${hh.verdict}</div>` : ''}
+          </div>`;
+    }
+
     // ── Tracked-since ───────────────────────────────────────
     const trackedAt = p.tracked_at ? new Date(p.tracked_at).toLocaleDateString() : '—';
 
@@ -8488,7 +9631,7 @@ async function refreshTracked() {
         ${opt.type||''} $${opt.strike?.toFixed(2)||''}<br>
         <span style="color:var(--muted)">${opt.expiration||''}</span>
       </td>
-      <td>${perfHtml}</td>
+      <td>${perfHtml}${hhHtml}</td>
       <td>
         ${cprice}<br>
         <span style="font-size:11px;color:var(--muted)">RSI: ${rsi}</span>
@@ -9159,6 +10302,70 @@ async function refreshPerformance() {
     document.getElementById('perf-avg-loss').textContent       = s.losers  > 0 ? `${s.avg_loss_pct.toFixed(1)}%` : '—';
     document.getElementById('perf-best').textContent           = s.best_trade  != null ? `+${s.best_trade.toFixed(1)}%`  : '—';
     document.getElementById('perf-worst').textContent          = s.worst_trade != null ? `${s.worst_trade.toFixed(1)}%` : '—';
+
+    // Advanced options-trader metrics (expectancy/PF/Sortino/MaxDD)
+    try {
+      const stats = await fetch('/api/performance/stats').then(r => r.json());
+      if (stats && stats.n_trades > 0) {
+        const expSign  = stats.expectancy >= 0 ? '+' : '';
+        const expColor = stats.expectancy >= 0 ? 'var(--green)' : 'var(--red)';
+        document.getElementById('perf-expectancy').textContent = `${expSign}$${stats.expectancy.toFixed(2)}`;
+        document.getElementById('perf-expectancy').style.color = expColor;
+
+        const pf = stats.profit_factor;
+        const pfStr = pf == null ? '∞' : pf.toFixed(2);
+        const pfColor = pf == null ? 'var(--green)' : pf >= 2 ? 'var(--green)' : pf >= 1.5 ? 'var(--text)' : 'var(--red)';
+        document.getElementById('perf-profit-factor').textContent = pfStr;
+        document.getElementById('perf-profit-factor').style.color = pfColor;
+
+        const sor = stats.sortino;
+        const sorColor = sor >= 1 ? 'var(--green)' : sor >= 0.5 ? 'var(--text)' : 'var(--red)';
+        document.getElementById('perf-sortino').textContent = sor.toFixed(2);
+        document.getElementById('perf-sortino').style.color = sorColor;
+
+        document.getElementById('perf-max-dd').textContent = `-$${stats.max_drawdown.toFixed(2)}`;
+        document.getElementById('perf-max-dd-pct').textContent = stats.max_drawdown_pct > 0 ? `${stats.max_drawdown_pct.toFixed(0)}% of peak` : '';
+      }
+    } catch (e) { /* ignore */ }
+
+    // Open portfolio risk panel
+    try {
+      const risk = await fetch('/api/portfolio/risk').then(r => r.json());
+      const panel = document.getElementById('portfolio-risk-panel');
+      const body  = document.getElementById('portfolio-risk-body');
+      if (risk.n_positions > 0) {
+        panel.style.display = 'block';
+        const concColor = risk.largest_concentration_pct > 40 ? 'var(--red)' : 'var(--text)';
+        body.innerHTML = `
+          <div>
+            <div style="color:var(--muted);font-size:11px">POSITIONS</div>
+            <div style="font-weight:700;font-size:16px;color:var(--text)">${risk.n_positions}</div>
+          </div>
+          <div>
+            <div style="color:var(--muted);font-size:11px">TOTAL MAX LOSS</div>
+            <div style="font-weight:700;font-size:16px;color:var(--red)">$${risk.total_max_loss.toFixed(0)}</div>
+            <div style="color:var(--muted);font-size:10px">if all → $0</div>
+          </div>
+          <div>
+            <div style="color:var(--muted);font-size:11px">STOP-LOSS EXPOSURE</div>
+            <div style="font-weight:700;font-size:16px;color:var(--text)">$${risk.stop_loss_exposure.toFixed(0)}</div>
+            <div style="color:var(--muted);font-size:10px">if all hit -15%</div>
+          </div>
+          <div>
+            <div style="color:var(--muted);font-size:11px">LARGEST POSITION</div>
+            <div style="font-weight:700;font-size:16px;color:${concColor}">${risk.largest_position_ticker || '—'}</div>
+            <div style="color:var(--muted);font-size:10px">${risk.largest_concentration_pct.toFixed(0)}% of book ($${risk.largest_position.toFixed(0)})</div>
+          </div>
+          <div>
+            <div style="color:var(--muted);font-size:11px">CURRENT P&L STDEV</div>
+            <div style="font-weight:700;font-size:16px;color:var(--text)">${risk.pnl_stdev.toFixed(1)}%</div>
+            <div style="color:var(--muted);font-size:10px">min ${risk.pnl_min.toFixed(1)}% / max ${risk.pnl_max.toFixed(1)}%</div>
+          </div>
+        `;
+      } else {
+        panel.style.display = 'none';
+      }
+    } catch (e) { /* ignore */ }
 
     // Cumulative P&L chart
     const sorted = [...trades].sort((a,b) => new Date(a.exit_date||0) - new Date(b.exit_date||0));
@@ -9927,19 +11134,84 @@ function renderCalResults(d) {
   document.getElementById('cal-signal-rows').innerHTML = sigRows ||
     '<div style="color:var(--muted);font-size:13px">Not enough signal data yet.</div>';
 
+  // ── Simulated Strategy Performance — overall stat cards ─────────────
+  const ss  = d.sim_summary || {};
+  // Safe formatters — old calibration files predate the newer metrics,
+  // so any missing field renders as "—" instead of the string "undefined".
+  const has = v => v !== undefined && v !== null && !(typeof v === 'number' && Number.isNaN(v));
+  const pct = v => has(v) ? (v > 0 ? '+' : '') + v + '%' : '—';   // signed %
+  const npc = v => has(v) ? v + '%' : '—';                         // unsigned %
+  const raw = v => has(v) ? v : '—';                               // bare number
+  // $-formatter: each percentage point of pnl == $1 on a $100 bet,
+  // so total_pnl (sum of pct returns) directly converts to dollars.
+  const dollar = v => has(v) ? (v >= 0 ? '+' : '−') + '$' + Math.abs(Math.round(v)).toLocaleString() : '—';
+  const pos = v => v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'var(--muted)';
+  const nLabel = document.getElementById('cal-sim-n');
+  if (nLabel) nLabel.textContent = (ss.total_trades || 0) + ' ';
+  const statCard = (label, value, sub, col) =>
+    `<div style="background:var(--surface);border-radius:10px;padding:12px 14px;border:1px solid var(--border)">
+       <div style="font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.4px;margin-bottom:6px">${label}</div>
+       <div style="font-size:20px;font-weight:800;color:${col||'var(--text)'}">${value}</div>
+       <div style="font-size:10px;color:var(--muted);margin-top:2px">${sub||''}</div>
+     </div>`;
+  const overallEl = document.getElementById('cal-sim-overall');
+  if (overallEl) {
+    if (ss.total_trades) {
+      const sExp = ss.expectancy ?? ss.avg_pnl;   // expectancy == mean P&L%; fall back for old files
+      overallEl.innerHTML = [
+        statCard('P&L @ $100/TRADE', dollar(ss.total_pnl), 'if you bet $100 on every signal', pos(ss.total_pnl)),
+        statCard('WIN RATE',      npc(ss.win_rate),    (ss.total_trades||0)+' trades',
+                 ss.win_rate>=55?'var(--green)':ss.win_rate>=45?'#f59e0b':'var(--red)'),
+        statCard('EXPECTANCY',    pct(sExp),           'avg per trade · +ve = edge', pos(sExp)),
+        statCard('AVG WIN',       pct(ss.avg_win),     '', 'var(--green)'),
+        statCard('AVG LOSS',      npc(ss.avg_loss),    '', 'var(--red)'),
+        statCard('PROFIT FACTOR', raw(ss.profit_factor),   'target > 1.5',
+                 ss.profit_factor>=1.5?'var(--green)':ss.profit_factor>=1?'#f59e0b':'var(--red)'),
+        statCard('SORTINO RATIO', raw(ss.sortino),     'target > 0.5',
+                 ss.sortino>=0.5?'var(--green)':ss.sortino>=0?'#f59e0b':'var(--red)'),
+        statCard('SHARPE RATIO',  raw(ss.sharpe),      'mean / stdev',
+                 ss.sharpe>=0.5?'var(--green)':ss.sharpe>=0?'#f59e0b':'var(--red)'),
+        statCard('MAX DRAWDOWN',
+                 has(ss.max_drawdown_pct) ? ss.max_drawdown_pct + '% off peak' : npc(ss.max_drawdown),
+                 has(ss.max_drawdown_pct) ? 'worst dip from running peak' : 'deepest equity dip', 'var(--red)'),
+        statCard('RECOVERY FACTOR',
+                 has(ss.recovery_factor) ? ss.recovery_factor + '×' : '—',
+                 'total gain / worst dip · >3 healthy',
+                 ss.recovery_factor>=3?'var(--green)':ss.recovery_factor>=1.5?'#f59e0b':'var(--red)'),
+        statCard('BEST TRADE',    pct(ss.best),        '', 'var(--green)'),
+        statCard('WORST TRADE',   npc(ss.worst),       '', 'var(--red)'),
+      ].join('');
+    } else {
+      overallEl.innerHTML =
+        '<div style="color:var(--muted);font-size:13px">No simulated trades yet — run a calibration.</div>';
+    }
+  }
+
   // Per-strategy simulated summary
-  const byStrat = (d.sim_summary || {}).by_strategy || {};
+  const byStrat = ss.by_strategy || {};
   const stratLabels = {buy_call:'📈 Buy Calls', buy_put:'📉 Buy Puts', sell_put:'💰 Sell Puts'};
+  const miniRow = (lbl, val, c) =>
+    `<div style="display:flex;justify-content:space-between;font-size:11px;margin-top:3px">
+       <span style="color:var(--muted)">${lbl}</span>
+       <span style="font-weight:700;color:${c||'var(--text)'}">${val}</span></div>`;
   document.getElementById('cal-strat-rows').innerHTML =
     Object.entries(byStrat).map(([s, v]) => {
       const col = v.win_rate >= 55 ? 'var(--green)' : v.win_rate >= 45 ? '#f59e0b' : 'var(--red)';
       return `<div style="background:var(--surface);border-radius:10px;padding:14px;border:1px solid var(--border)">
         <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px">${stratLabels[s]||s}</div>
         <div style="font-size:11px;color:var(--muted);margin-bottom:4px">${v.count} trades</div>
-        <div style="font-size:18px;font-weight:800;color:${col}">${v.win_rate}%</div>
-        <div style="font-size:11px;color:var(--muted)">win rate</div>
-        <div style="font-size:13px;font-weight:700;margin-top:4px;
-             color:${v.avg_pnl>0?'var(--green)':'var(--red)'}">${v.avg_pnl>0?'+':''}${v.avg_pnl}% avg</div>
+        <div style="font-size:18px;font-weight:800;color:${col}">${npc(v.win_rate)}</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:6px">win rate</div>
+        ${miniRow('Expectancy',   pct(v.expectancy ?? v.avg_pnl), pos(v.expectancy ?? v.avg_pnl))}
+        ${miniRow('P&L @ $100/tr', dollar(v.total_pnl), pos(v.total_pnl))}
+        ${miniRow('Profit factor',raw(v.profit_factor),
+                  v.profit_factor>=1.5?'var(--green)':v.profit_factor>=1?'#f59e0b':'var(--red)')}
+        ${miniRow('Sortino',      raw(v.sortino),
+                  v.sortino>=0.5?'var(--green)':v.sortino>=0?'#f59e0b':'var(--red)')}
+        ${miniRow('Max drawdown', has(v.max_drawdown_pct) ? v.max_drawdown_pct + '% off peak' : npc(v.max_drawdown), 'var(--red)')}
+        ${miniRow('Recovery', has(v.recovery_factor) ? v.recovery_factor + '×' : '—',
+                  v.recovery_factor>=3?'var(--green)':v.recovery_factor>=1.5?'#f59e0b':'var(--red)')}
+        ${miniRow('Avg win / loss', pct(v.avg_win)+' / '+npc(v.avg_loss))}
       </div>`;
     }).join('') || '<div style="color:var(--muted);font-size:13px">No strategy data.</div>';
 
@@ -10103,8 +11375,13 @@ function renderHoldSweepResults(r) {
       </td>`;
     }).join('');
     const optLabel = `${sd.optimal_day}d`;
+    // Per-strategy trade count — small N is a sample-size warning sign
+    const nTrades = sd.n_trades || 0;
+    const nColor  = nTrades < 30 ? 'var(--red)' : nTrades < 100 ? 'var(--yellow)' : 'var(--muted)';
+    const nLabel  = `<span style="color:${nColor};font-weight:600" title="${nTrades < 30 ? 'Small sample — averages may not generalise' : ''}">${nTrades.toLocaleString()}</span>`;
     pnlRows += `<tr style="border-bottom:1px solid var(--border)">
       <td style="padding:5px 8px;font-weight:600;color:var(--text)">${NAMES[strat]}</td>
+      <td style="text-align:center;padding:5px 8px;font-size:11px">${nLabel}</td>
       ${cells}
       <td style="text-align:center;padding:5px 8px;font-weight:800;color:var(--accent)">${optLabel}</td>
     </tr>`;
@@ -10125,8 +11402,12 @@ function renderHoldSweepResults(r) {
         <span style="color:${color}">${wr}%</span>
       </td>`;
     }).join('');
+    const nTrades = sd.n_trades || 0;
+    const nColor  = nTrades < 30 ? 'var(--red)' : nTrades < 100 ? 'var(--yellow)' : 'var(--muted)';
+    const nLabel  = `<span style="color:${nColor};font-weight:600">${nTrades.toLocaleString()}</span>`;
     wrRows += `<tr style="border-bottom:1px solid var(--border)">
       <td style="padding:5px 8px;font-weight:600;color:var(--text)">${NAMES[strat]}</td>
+      <td style="text-align:center;padding:5px 8px;font-size:11px">${nLabel}</td>
       ${cells}
     </tr>`;
   }
@@ -10161,6 +11442,12 @@ def main():
     # Restore last calibration weights from disk (adjusts live scores immediately)
     _load_calibration_on_startup()
     _load_lr_calibration_on_startup()   # overlay LR weights on top (more precise)
+
+    # Restore Hold Horizon Analysis results from disk (used by tracked-position UI)
+    _load_hs_results()
+
+    # Restore prefetch cache (info/calendar 24h TTL — saves ~50% of repeat scan calls)
+    _load_prefetch_cache()
 
     # Fetch live 6-month T-bill rate from FRED before first scan
     threading.Thread(target=fetch_risk_free_rate, daemon=True).start()

@@ -1,179 +1,242 @@
 {
   "months": 12,
-  "universe": "snp500",
-  "tickers_used": 493,
-  "total_trades": 118006,
+  "universe": "focus",
+  "tickers_used": 98,
+  "total_trades": 23100,
   "sim_summary": {
-    "total_trades": 118006,
-    "win_rate": 35.2,
-    "avg_pnl": 12.8,
-    "avg_win": 195.2,
-    "avg_loss": -86.3,
-    "sharpe": 0.07,
-    "best": 3954.0,
-    "worst": -150.6,
+    "count": 23100,
+    "total_trades": 23100,
+    "win_rate": 37.7,
+    "avg_pnl": 1.3,
+    "expectancy": 1.3,
+    "avg_win": 27.2,
+    "avg_loss": -14.4,
+    "sharpe": 0.06,
+    "sortino": 0.52,
+    "profit_factor": 1.14,
+    "max_drawdown": -2757.9,
+    "max_drawdown_pct": 68.8,
+    "recovery_factor": 10.68,
+    "total_pnl": 29454.0,
+    "best": 30.0,
+    "worst": -15.0,
     "by_strategy": {
       "buy_call": {
-        "count": 61928,
-        "win_rate": 39.2,
-        "avg_pnl": 26.8
+        "count": 12637,
+        "total_trades": 12637,
+        "win_rate": 40.4,
+        "avg_pnl": 2.5,
+        "expectancy": 2.5,
+        "avg_win": 27.4,
+        "avg_loss": -14.4,
+        "sharpe": 0.12,
+        "sortino": 0.99,
+        "profit_factor": 1.29,
+        "max_drawdown": -2845.3,
+        "max_drawdown_pct": 15.1,
+        "recovery_factor": 11.11,
+        "total_pnl": 31608.7,
+        "best": 30.0,
+        "worst": -15.0
       },
       "buy_put": {
-        "count": 56056,
-        "win_rate": 30.8,
-        "avg_pnl": -2.6
+        "count": 10294,
+        "total_trades": 10294,
+        "win_rate": 34.0,
+        "avg_pnl": -0.3,
+        "expectancy": -0.3,
+        "avg_win": 27.1,
+        "avg_loss": -14.4,
+        "sharpe": -0.01,
+        "sortino": -0.12,
+        "profit_factor": 0.97,
+        "max_drawdown": -11328.6,
+        "max_drawdown_pct": 6865.8,
+        "recovery_factor": -0.26,
+        "total_pnl": -2958.4,
+        "best": 30.0,
+        "worst": -15.0
       },
       "sell_put": {
-        "count": 22,
-        "win_rate": 86.4,
-        "avg_pnl": 70.7
+        "count": 169,
+        "total_trades": 169,
+        "win_rate": 49.1,
+        "avg_pnl": 4.8,
+        "expectancy": 4.8,
+        "avg_win": 23.7,
+        "avg_loss": -13.5,
+        "sharpe": 0.24,
+        "sortino": 1.47,
+        "profit_factor": 1.69,
+        "max_drawdown": -203.2,
+        "max_drawdown_pct": 47.4,
+        "recovery_factor": 3.96,
+        "total_pnl": 803.7,
+        "best": 30.0,
+        "worst": -15.0
       }
     }
   },
   "sim_quality": [
     {
+      "signal": "MFI Oversold (<20)",
+      "count": 294,
+      "win_rate": 42.5,
+      "avg_pnl": 3.1,
+      "best": 30.0,
+      "worst": -15.0
+    },
+    {
       "signal": "RSI Oversold",
-      "count": 5344,
-      "win_rate": 40.6,
-      "avg_pnl": 36.5,
-      "best": 3267.3,
-      "worst": -100.0
+      "count": 1140,
+      "win_rate": 41.5,
+      "avg_pnl": 2.9,
+      "best": 30.0,
+      "worst": -15.0
     },
     {
       "signal": "Volume Confirmed",
-      "count": 27307,
-      "win_rate": 36.3,
-      "avg_pnl": 18.6,
-      "best": 2776.7,
-      "worst": -100.0
-    },
-    {
-      "signal": "HV Rank High (\u226560)",
-      "count": 30067,
-      "win_rate": 36.3,
-      "avg_pnl": 21.9,
-      "best": 1967.0,
-      "worst": -150.6
+      "count": 5637,
+      "win_rate": 40.1,
+      "avg_pnl": 2.4,
+      "best": 30.0,
+      "worst": -15.0
     },
     {
       "signal": "Near 52-Week Low",
-      "count": 3460,
-      "win_rate": 36.2,
-      "avg_pnl": 19.8,
-      "best": 1525.3,
-      "worst": -150.6
+      "count": 524,
+      "win_rate": 39.1,
+      "avg_pnl": 1.9,
+      "best": 30.0,
+      "worst": -15.0
     },
     {
       "signal": "Below BB Lower",
-      "count": 2779,
-      "win_rate": 35.9,
-      "avg_pnl": 17.8,
-      "best": 1525.3,
-      "worst": -100.0
-    },
-    {
-      "signal": "HV Rank Low (\u226440)",
-      "count": 50616,
-      "win_rate": 35.9,
-      "avg_pnl": 13.0,
-      "best": 1882.6,
-      "worst": -100.0
-    },
-    {
-      "signal": "MACD Bull Cross",
-      "count": 15226,
-      "win_rate": 35.6,
-      "avg_pnl": 15.2,
-      "best": 2696.1,
-      "worst": -100.0
-    },
-    {
-      "signal": "Above 50-day MA",
-      "count": 104137,
-      "win_rate": 35.3,
-      "avg_pnl": 13.0,
-      "best": 3954.0,
-      "worst": -100.0
-    },
-    {
-      "signal": "RSI Turning Up",
-      "count": 86270,
-      "win_rate": 35.2,
-      "avg_pnl": 12.5,
-      "best": 3954.0,
-      "worst": -100.0
-    },
-    {
-      "signal": "Near 52-Week High",
-      "count": 56346,
-      "win_rate": 34.4,
-      "avg_pnl": 8.7,
-      "best": 1435.2,
-      "worst": -100.0
-    },
-    {
-      "signal": "MACD Bear Cross",
-      "count": 20756,
-      "win_rate": 34.0,
-      "avg_pnl": 10.6,
-      "best": 1435.2,
-      "worst": -150.6
+      "count": 578,
+      "win_rate": 38.9,
+      "avg_pnl": 2.1,
+      "best": 30.0,
+      "worst": -15.0
     },
     {
       "signal": "Above BB Upper",
-      "count": 14365,
-      "win_rate": 33.6,
-      "avg_pnl": 5.2,
-      "best": 2776.7,
-      "worst": -100.0
+      "count": 3140,
+      "win_rate": 38.4,
+      "avg_pnl": 1.6,
+      "best": 30.0,
+      "worst": -15.0
+    },
+    {
+      "signal": "HV Rank High (\u226560)",
+      "count": 6509,
+      "win_rate": 38.3,
+      "avg_pnl": 1.6,
+      "best": 30.0,
+      "worst": -15.0
+    },
+    {
+      "signal": "MFI Overbought (>80)",
+      "count": 1740,
+      "win_rate": 38.1,
+      "avg_pnl": 1.4,
+      "best": 30.0,
+      "worst": -15.0
+    },
+    {
+      "signal": "RSI Turning Up",
+      "count": 16761,
+      "win_rate": 37.9,
+      "avg_pnl": 1.3,
+      "best": 30.0,
+      "worst": -15.0
+    },
+    {
+      "signal": "MACD Bull Cross",
+      "count": 3330,
+      "win_rate": 37.8,
+      "avg_pnl": 1.4,
+      "best": 30.0,
+      "worst": -15.0
+    },
+    {
+      "signal": "HV Rank Low (\u226440)",
+      "count": 9405,
+      "win_rate": 37.5,
+      "avg_pnl": 1.2,
+      "best": 30.0,
+      "worst": -15.0
+    },
+    {
+      "signal": "MACD Bear Cross",
+      "count": 4463,
+      "win_rate": 37.4,
+      "avg_pnl": 1.1,
+      "best": 30.0,
+      "worst": -15.0
+    },
+    {
+      "signal": "Above 50-day MA",
+      "count": 20548,
+      "win_rate": 37.3,
+      "avg_pnl": 1.1,
+      "best": 30.0,
+      "worst": -15.0
     },
     {
       "signal": "RSI Overbought",
-      "count": 51841,
-      "win_rate": 33.4,
-      "avg_pnl": 4.7,
-      "best": 3179.1,
-      "worst": -100.0
+      "count": 4214,
+      "win_rate": 37.1,
+      "avg_pnl": 1.0,
+      "best": 30.0,
+      "worst": -15.0
+    },
+    {
+      "signal": "Near 52-Week High",
+      "count": 12655,
+      "win_rate": 37.0,
+      "avg_pnl": 1.0,
+      "best": 30.0,
+      "worst": -15.0
     }
   ],
   "sig_log_resolved": 0,
-  "sig_log_pending": 0,
+  "sig_log_pending": 23,
   "sig_log_quality": [],
   "actual_trades": {
     "buy_call": {
-      "count": 2,
-      "win_rate": 50.0,
-      "avg_pnl": -5.3
+      "count": 7,
+      "win_rate": 57.1,
+      "avg_pnl": 10.3
     },
     "buy_put": {
-      "count": 1,
-      "win_rate": 0.0,
-      "avg_pnl": -28.8
+      "count": 2,
+      "win_rate": 50.0,
+      "avg_pnl": -7.4
     }
   },
-  "real_trade_count": 9,
+  "real_trade_count": 28,
   "weights": {
     "buy_call": {
       "sig_rsi_os": 0.75,
-      "sig_vol_ok": 0.5,
+      "sig_vol_ok": 0.75,
       "sig_bb_low": 0.5,
-      "sig_macd_bull": 0.5,
-      "sig_reversal": 0.5
+      "sig_reversal": 0.5,
+      "sig_macd_bull": 0.5
     },
     "buy_put": {
-      "sig_macd_bear": 0.5,
       "sig_bb_high": 0.5,
+      "sig_macd_bear": 0.5,
       "sig_rsi_ob": 0.5
     },
     "sell_put": {
       "sig_rsi_os": 0.75,
-      "sig_vol_ok": 0.5,
+      "sig_vol_ok": 0.75,
       "sig_bb_low": 0.5,
-      "sig_macd_bull": 0.5,
-      "sig_reversal": 0.5
+      "sig_reversal": 0.5,
+      "sig_macd_bull": 0.5
     }
   },
-  "vix_at_run": 17.83,
+  "vix_at_run": 16.85,
   "regime_at_run": "normal",
-  "completed_at": "2026-04-28T21:53:56.244964"
+  "completed_at": "2026-05-27T12:35:57.211639"
 }
