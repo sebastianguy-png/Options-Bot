@@ -23,10 +23,11 @@ APPLIED = {**ob.BT_DEFAULT_PARAMS, "entry_mode": "escape", "escape_normal": "ski
            "max_spread_pct": 15, "otm_factor_call": 0.97, "dte_target": 30, "stop_loss_pct": 0, "profit_target_pct": 0,
            "trail_activate_pct": 0, "stagnant_days": 0, "hold_days": 21, "stock_stop_pct": 0, "stock_trail_pct": 7}
 VARIANTS = {
-    "applied (breakouts any trend)":      APPLIED,
-    "breakouts only in SPY uptrend":      {**APPLIED, "escape_breakout_trend": "bull_only"},
-    "reversion only (no breakouts)":      {**APPLIED, "escape_breakout_vol": 99.0},
-    "applied + GARCH gate":               {**APPLIED, "garch_mode": "gate"},
+    "applied":                                   APPLIED,
+    "applied, SPY-uptrend only":                 {**APPLIED, "escape_require_uptrend": True},
+    "applied + GARCH gate":                      {**APPLIED, "garch_mode": "gate"},
+    "applied + GARCH gate, SPY-uptrend only":    {**APPLIED, "garch_mode": "gate", "escape_require_uptrend": True},
+    "reversion only + GARCH gate, uptrend only": {**APPLIED, "garch_mode": "gate", "escape_require_uptrend": True, "escape_breakout_vol": 99.0},
 }
 CASES = ("sig_escape_reversion", "sig_escape_breakout", "sig_escape_momentum")
 
