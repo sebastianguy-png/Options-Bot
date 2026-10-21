@@ -1033,7 +1033,7 @@ def _submit_candidate(br, cfg, c: dict, account: dict | None, by_sector: dict, s
 _MANUAL_LABEL = {"buy_call": "Buy Call", "buy_put": "Buy Put", "sell_put": "Sell Put"}
 
 
-def manual_entry(ticker: str, strategy: str = "buy_call", note: str = "") -> dict:
+def manual_entry(ticker: str, strategy: str = "buy_call", note: str = "", force: bool = False) -> dict:
     """
     Operator entry (dashboard / API): one position now, through the normal order
     pipeline — the live parameters pick the contract from the live chain, then the
@@ -1111,6 +1111,20 @@ def manual_entry(ticker: str, strategy: str = "buy_call", note: str = "") -> dic
                 "price": round(price, 3), "option": opt, "bar_date": str(hist.index[-1].date()),
                 "sector": info.get("sector") or "N/A", "earnings_dte": None, "hv30": None, "vix_regime": None,
                 "flags": {"manual": True}, "escape_case": None, "manual": True, "note": note}
+        # The tracker's exit rule must not already be true at entry (the PFE demo: RSI 72 at entry →
+        # "RSI recovered, take profit" fired on the next cycle and the round trip was pure spread).
+        probe = {"id": "probe", "ticker": ticker, "strategy": strategy, "option": opt, "entry_price": round(mid, 3),
+                 "price": cand["price"], "contracts": 1, "legs": None, "auto": True}
+        try:
+            sig = _ob.get_sell_signal(probe) or {}
+        except Exception as e:
+            sig = {"triggered": False, "reasons": [], "error": str(e)}
+        if sig.get("triggered") and not force:
+            why = "; ".join(sig.get("reasons") or ["exit rule already true"])
+            _log("manual_entry", ticker=ticker, strategy=strategy, ok=False, strike=opt.get("strike"), exp=exp,
+                 detail=f"refused — the exit rule is already true at entry: {why}")
+            return {"ok": False, "message": f"{ticker} {strategy}: the exit rule is already true at entry — {why}. "
+                                            f"Pass force=true to enter anyway.", "signal": sig}
         account = _account_info(br)
         if account is None and _account["error"]:
             return {"ok": False, "message": f"broker account unavailable: {_account['error']}"}

@@ -8132,7 +8132,8 @@ def api_autotrade_manual():
     if not sym:
         return jsonify({"ok": False, "message": "ticker required"}), 400
     try:
-        res = autotrader.manual_entry(sym, data.get("strategy") or "buy_call", str(data.get("note") or ""))
+        res = autotrader.manual_entry(sym, data.get("strategy") or "buy_call", str(data.get("note") or ""),
+                                      force=bool(data.get("force")))
     except Exception as e:
         return jsonify({"ok": False, "message": str(e)}), 500
     return jsonify(res), (200 if res.get("ok") else 409)
