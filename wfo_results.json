@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-10-21T09:51:43.551642",
+  "saved_at": "2026-10-21T10:12:09.473244",
   "results": {
     "leaderboard": [],
     "best": {
@@ -68,120 +68,121 @@
     "tickers_used": [],
     "completed_at": "2026-10-21T09:51:43.551603",
     "force_apply": true,
-    "note": "band-escape classifier, calls only, GARCH gate ON, BREADTH GATE ON (breadth_chg5_min -0.15: no escape entry while the share of focus tickers above their 50-day MA fell >15 points in 5 sessions \u2014 handoff 7i: 6y PF 1.18 \u2192 1.70, every year \u2265 1.26, 2022 0.74 \u2192 1.26); ITM 0.97, 21-day max hold, 7% stock trailing exit, no premium stop/target, spread cap 15",
+    "note": "band-escape classifier, calls only, GARCH gate ON, BREADTH GATE ON (breadth_chg5_min -0.15: no escape entry while the share of focus tickers above their 50-day MA fell >15 points in 5 sessions \u2014 handoff 7i: 6y PF 1.17 \u2192 1.94 net of MEASURED spreads (205 trades; fallback costs: 1.18 \u2192 1.70), 2022 0.79 \u2192 1.80); ITM 0.97, 21-day max hold, 7% stock trailing exit, no premium stop/target, spread cap 15",
     "six_year_evidence": {
       "all": {
-        "n": 341,
-        "net": 12.67,
-        "win": 52.2,
-        "pf": 1.7,
-        "bars": 4.2,
+        "n": 205,
+        "net": 16.16,
+        "win": 50.7,
+        "pf": 1.94,
+        "bars": 3.8,
         "pf_ci90": [
-          1.33,
-          2.15
+          1.43,
+          2.62
         ]
       },
       "by_year": {
         "2024": {
-          "n": 76,
-          "net": 3.33,
-          "win": 55.3,
-          "pf": 1.31,
+          "n": 40,
+          "net": -0.27,
+          "win": 50.0,
+          "pf": 0.98,
           "bars": 1.0
         },
         "2026": {
-          "n": 39,
-          "net": 32.14,
-          "win": 69.2,
-          "pf": 2.97,
+          "n": 26,
+          "net": 41.79,
+          "win": 65.4,
+          "pf": 3.61,
           "bars": 4.2
         },
         "2022": {
-          "n": 92,
-          "net": 7.97,
-          "win": 42.4,
-          "pf": 1.26,
-          "bars": 7.5
+          "n": 59,
+          "net": 20.72,
+          "win": 49.2,
+          "pf": 1.8,
+          "bars": 7.2
         },
         "2025": {
-          "n": 52,
-          "net": 9.64,
-          "win": 51.9,
-          "pf": 1.71,
-          "bars": 3.3
+          "n": 33,
+          "net": 6.86,
+          "win": 36.4,
+          "pf": 1.53,
+          "bars": 2.3
         },
         "2023": {
-          "n": 80,
-          "net": 19.32,
-          "win": 52.5,
-          "pf": 2.3,
-          "bars": 3.6
+          "n": 46,
+          "net": 16.27,
+          "win": 54.3,
+          "pf": 2.07,
+          "bars": 2.6
         },
         "2021": {
-          "n": 2,
-          "net": 17.0,
-          "win": 50.0,
-          "pf": 6.96,
-          "bars": 9.5
+          "n": 1,
+          "net": 41.2,
+          "win": 100.0,
+          "pf": 99.0,
+          "bars": 13.0
         }
       },
       "by_case": {
         "momentum": {
-          "n": 91,
-          "net": 2.68,
-          "win": 54.9,
-          "pf": 1.25,
+          "n": 49,
+          "net": 0.65,
+          "win": 53.1,
+          "pf": 1.06,
           "bars": 1.0
         },
         "reversion": {
-          "n": 142,
-          "net": 27.22,
-          "win": 55.6,
-          "pf": 2.0,
-          "bars": 8.6
+          "n": 81,
+          "net": 40.49,
+          "win": 60.5,
+          "pf": 2.65,
+          "bars": 8.1
         },
         "breakout": {
-          "n": 108,
-          "net": 1.96,
-          "win": 45.4,
-          "pf": 1.15,
+          "n": 75,
+          "net": 0.03,
+          "win": 38.7,
+          "pf": 1.0,
           "bars": 1.0
         }
       },
       "without_breadth_gate": {
-        "n": 449,
-        "net": 4.15,
-        "win": 47.2,
-        "pf": 1.18,
-        "bars": 5.4,
+        "n": 269,
+        "net": 4.01,
+        "win": 43.9,
+        "pf": 1.17,
+        "bars": 5.2,
         "pf_ci90": [
-          0.96,
-          1.45
+          0.9,
+          1.49
         ]
       },
       "walk_forward_union": {
         "off": {
-          "n": 180,
-          "net": 17.0,
-          "win": 53.9,
-          "pf": 2.27,
-          "bars": 3.0
+          "n": 106,
+          "net": 16.14,
+          "win": 50.0,
+          "pf": 2.16,
+          "bars": 2.7
         },
         "gate_-0.15": {
-          "n": 169,
-          "net": 17.09,
-          "win": 53.3,
-          "pf": 2.23,
-          "bars": 2.9
+          "n": 102,
+          "net": 16.51,
+          "win": 49.0,
+          "pf": 2.16,
+          "bars": 2.6
         },
         "chosen": {
-          "n": 100,
-          "net": 25.39,
-          "win": 58.0,
-          "pf": 2.7,
-          "bars": 4.2
+          "n": 81,
+          "net": 16.91,
+          "win": 48.1,
+          "pf": 2.09,
+          "bars": 3.0
         }
       },
+      "costs": "measured spreads (spread_model.json, 09:56 ET)",
       "source": "tests/breadth_gate_report.json"
     }
   }
