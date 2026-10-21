@@ -78,6 +78,7 @@ DEFAULT_CONFIG = {
     "entry_window_et":        "",               # "HH:MM-HH:MM" ET: open new positions only inside this window ("" = any time the market is open)
     "work_orders":            True,             # start at the mid (+1 tick) and step toward the ask/bid instead of crossing the spread
     "order_step_mins":        2,                # minutes an unfilled rung waits before the next one (checked each cycle)
+    "exit_patient_step_mins": 15,               # a take-profit exit (RSI / band target, no urgency) starts at the mid and waits this long per rung
     "skip_earnings_days":     1,                # no entry when earnings are within this many days (0 = off)
     "skip_fomc_day":          True,             # no entry on an FOMC decision day
     "max_per_sector":         2,                # open auto positions per sector (0 = no cap)
@@ -199,6 +200,7 @@ def _coerce(cfg: dict) -> dict:
         cfg["premarket_scan_time"] = ""
     cfg["work_orders"]        = bool(cfg.get("work_orders", True))
     cfg["order_step_mins"]    = i("order_step_mins", 1, 60)
+    cfg["exit_patient_step_mins"] = i("exit_patient_step_mins", 1, 120)
     cfg["skip_earnings_days"] = i("skip_earnings_days", 0, 10)
     cfg["skip_fomc_day"]      = bool(cfg.get("skip_fomc_day", True))
     cfg["max_per_sector"]     = i("max_per_sector", 0, 50)
@@ -349,25 +351,27 @@ def _tick(price: float) -> float:
     return 0.01 if price < 3 else 0.05
 
 
-def _ladder(side: str, bid: float, ask: float) -> list:
+def _ladder(side: str, bid: float, ask: float, patient: bool = False) -> list:
     """
     Limit prices to try in order instead of crossing the spread at once:
     buy  → mid + 1 tick, halfway to the ask, the ask
     sell → mid − 1 tick, halfway to the bid, the bid
+    patient=True (a no-urgency exit): the first rung is the mid itself.
     Falls back to the touch when the quote is one-sided.
     """
     if not (bid > 0 and ask > bid):
         p = ask if side == "buy" else bid
         return [round(p, 2)] if p > 0 else []
     mid, t = (bid + ask) / 2, _tick((bid + ask) / 2)
+    first = round(round(mid / t) * t, 2) if patient else None      # the mid on the option's tick grid
     out = []
     if side == "buy":
-        for r in (mid + t, mid + (ask - mid) / 2, ask):
+        for r in (first if patient else mid + t, mid + (ask - mid) / 2, ask):
             r = round(min(ask, r), 2)
             if r > 0 and (not out or r > out[-1]):       # strictly worse each rung; a 2-tick spread collapses to the ask
                 out.append(r)
     else:
-        for r in (mid - t, mid - (mid - bid) / 2, bid):
+        for r in (first if patient else mid - t, mid - (mid - bid) / 2, bid):
             r = round(max(bid, r), 2)
             if r > 0 and (not out or r < out[-1]):
                 out.append(r)
@@ -574,7 +578,8 @@ def _settle_pending(br, cfg) -> int:
         age = datetime.now() - datetime.fromisoformat(pc["submitted_at"])
         o, state, info = _order_state(br, pc["order_id"])
         ladder, attempt = pc.get("ladder") or [], int(pc.get("attempt", 0))
-        if state == "open" and ladder and attempt < len(ladder) - 1 and age > step:
+        step_c = timedelta(minutes=int(pc.get("step_mins") or cfg["order_step_mins"]))   # patient exits wait longer per rung
+        if state == "open" and ladder and attempt < len(ladder) - 1 and age > step_c:
             # unfilled at this rung: cancel; what filled is booked, the rest goes out again one rung worse
             o, state, info = _cancel_then_refetch(br, pc["order_id"])
             if state in ("failed", "missing"):
@@ -660,7 +665,11 @@ def _manage_exits(br, cfg) -> int:
         side = "buy" if is_short else "sell"             # buy to close a short, sell to close a long
         if not (bid > 0 and ask > 0) and mid > 0:        # one-sided quote: synthesise a touch around the mid
             bid, ask = (bid or mid * 0.97), (ask or mid * 1.03)
-        ladder  = _ladder(side, bid, ask) if cfg["work_orders"] else ([ask] if side == "buy" else [bid])
+        # A take-profit exit (RSI / band target) has no urgency: start at the mid and wait longer per rung.
+        # A breach, a manual close or an expiry keeps the fast ladder.
+        patient = (not forced) and (not expiring) and any("take profit" in str(r) for r in (sig.get("reasons") or []))
+        ladder  = _ladder(side, bid, ask, patient=patient) if cfg["work_orders"] else ([ask] if side == "buy" else [bid])
+        step_mins = int(cfg["exit_patient_step_mins"] if patient else cfg["order_step_mins"])
         attempt = min(int(pos.get("close_attempt", 0)), max(len(ladder) - 1, 0))
         limit   = ladder[attempt] if ladder else 0
         if limit <= 0:
@@ -680,9 +689,10 @@ def _manage_exits(br, cfg) -> int:
         else:
             _set_position_field(pos["id"], "pending_close",
                                 {"order_id": o.id, "submitted_at": _now(), "side": side, "qty": qty,
-                                 "limit": round(limit, 2), "reason": reason, "ladder": ladder, "attempt": attempt})
+                                 "limit": round(limit, 2), "reason": reason, "ladder": ladder, "attempt": attempt,
+                                 "step_mins": step_mins, "patient": patient})
             _log("close_submitted", ticker=pos["ticker"], strategy=pos["strategy"], qty=qty, limit=round(limit, 2),
-                 order=o.id, status=st)
+                 order=o.id, status=st, patient=patient, step_mins=step_mins)
     return closed
 
 
