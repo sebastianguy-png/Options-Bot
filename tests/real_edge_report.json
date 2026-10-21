@@ -1,0 +1,1263 @@
+{
+  "universe": "focus",
+  "tickers": 99,
+  "split_date": "2026-01-22",
+  "grid": {
+    "rsi_oversold": [
+      25,
+      30,
+      35
+    ],
+    "rsi_overbought": [
+      65,
+      70,
+      75
+    ],
+    "bull_min": [
+      1,
+      2
+    ],
+    "bear_min": [
+      1,
+      2
+    ],
+    "adx_threshold": [
+      25,
+      30,
+      35
+    ],
+    "hold_days": [
+      7,
+      14,
+      21
+    ],
+    "garch_mode": [
+      "off",
+      "confluence",
+      "gate"
+    ]
+  },
+  "leaderboard": [
+    {
+      "params": {
+        "rsi_oversold": 35,
+        "rsi_overbought": 65,
+        "bull_min": 2,
+        "bear_min": 2,
+        "adx_threshold": 35,
+        "hold_days": 21,
+        "garch_mode": "gate"
+      },
+      "train_sharpe": -0.002,
+      "train_trades": 1599,
+      "val_sharpe": 0.031,
+      "val_trades": 733,
+      "val_win_rate": 41.5,
+      "val_avg_pnl": 1.5,
+      "val_avg_pnl_trigger_fill": 1.7,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 192,
+          "win_rate": 35.4,
+          "avg_pnl": -2.0
+        },
+        "buy_put": {
+          "n": 526,
+          "win_rate": 43.3,
+          "avg_pnl": 2.7
+        },
+        "sell_put": {
+          "n": 15,
+          "win_rate": 53.3,
+          "avg_pnl": 5.8
+        }
+      }
+    },
+    {
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 70,
+        "bull_min": 1,
+        "bear_min": 2,
+        "adx_threshold": 30,
+        "hold_days": 21,
+        "garch_mode": "gate"
+      },
+      "train_sharpe": -0.003,
+      "train_trades": 1269,
+      "val_sharpe": 0.026,
+      "val_trades": 636,
+      "val_win_rate": 41.4,
+      "val_avg_pnl": 1.3,
+      "val_avg_pnl_trigger_fill": 1.4,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 175,
+          "win_rate": 34.3,
+          "avg_pnl": -2.3
+        },
+        "buy_put": {
+          "n": 448,
+          "win_rate": 43.8,
+          "avg_pnl": 2.5
+        },
+        "sell_put": {
+          "n": 13,
+          "win_rate": 53.8,
+          "avg_pnl": 7.3
+        }
+      }
+    },
+    {
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 70,
+        "bull_min": 2,
+        "bear_min": 2,
+        "adx_threshold": 30,
+        "hold_days": 21,
+        "garch_mode": "gate"
+      },
+      "train_sharpe": -0.002,
+      "train_trades": 1268,
+      "val_sharpe": 0.024,
+      "val_trades": 633,
+      "val_win_rate": 41.2,
+      "val_avg_pnl": 1.2,
+      "val_avg_pnl_trigger_fill": 1.4,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 172,
+          "win_rate": 33.7,
+          "avg_pnl": -2.8
+        },
+        "buy_put": {
+          "n": 448,
+          "win_rate": 43.8,
+          "avg_pnl": 2.5
+        },
+        "sell_put": {
+          "n": 13,
+          "win_rate": 53.8,
+          "avg_pnl": 7.3
+        }
+      }
+    },
+    {
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 65,
+        "bull_min": 1,
+        "bear_min": 2,
+        "adx_threshold": 35,
+        "hold_days": 21,
+        "garch_mode": "gate"
+      },
+      "train_sharpe": -0.002,
+      "train_trades": 1585,
+      "val_sharpe": 0.024,
+      "val_trades": 728,
+      "val_win_rate": 41.2,
+      "val_avg_pnl": 1.1,
+      "val_avg_pnl_trigger_fill": 1.6,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 189,
+          "win_rate": 34.4,
+          "avg_pnl": -3.6
+        },
+        "buy_put": {
+          "n": 526,
+          "win_rate": 43.3,
+          "avg_pnl": 2.7
+        },
+        "sell_put": {
+          "n": 13,
+          "win_rate": 53.8,
+          "avg_pnl": 7.3
+        }
+      }
+    },
+    {
+      "params": {
+        "rsi_oversold": 30,
+        "rsi_overbought": 65,
+        "bull_min": 2,
+        "bear_min": 2,
+        "adx_threshold": 35,
+        "hold_days": 21,
+        "garch_mode": "gate"
+      },
+      "train_sharpe": -0.002,
+      "train_trades": 1587,
+      "val_sharpe": 0.024,
+      "val_trades": 727,
+      "val_win_rate": 41.0,
+      "val_avg_pnl": 1.2,
+      "val_avg_pnl_trigger_fill": 1.6,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 187,
+          "win_rate": 33.7,
+          "avg_pnl": -3.5
+        },
+        "buy_put": {
+          "n": 526,
+          "win_rate": 43.3,
+          "avg_pnl": 2.7
+        },
+        "sell_put": {
+          "n": 14,
+          "win_rate": 50.0,
+          "avg_pnl": 6.7
+        }
+      }
+    },
+    {
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 65,
+        "bull_min": 2,
+        "bear_min": 2,
+        "adx_threshold": 35,
+        "hold_days": 21,
+        "garch_mode": "gate"
+      },
+      "train_sharpe": -0.001,
+      "train_trades": 1584,
+      "val_sharpe": 0.022,
+      "val_trades": 725,
+      "val_win_rate": 41.0,
+      "val_avg_pnl": 1.0,
+      "val_avg_pnl_trigger_fill": 1.5,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 186,
+          "win_rate": 33.3,
+          "avg_pnl": -4.1
+        },
+        "buy_put": {
+          "n": 526,
+          "win_rate": 43.3,
+          "avg_pnl": 2.7
+        },
+        "sell_put": {
+          "n": 13,
+          "win_rate": 53.8,
+          "avg_pnl": 7.3
+        }
+      }
+    },
+    {
+      "params": {
+        "rsi_oversold": 35,
+        "rsi_overbought": 70,
+        "bull_min": 2,
+        "bear_min": 2,
+        "adx_threshold": 35,
+        "hold_days": 21,
+        "garch_mode": "gate"
+      },
+      "train_sharpe": -0.002,
+      "train_trades": 1423,
+      "val_sharpe": 0.017,
+      "val_trades": 690,
+      "val_win_rate": 40.9,
+      "val_avg_pnl": 0.8,
+      "val_avg_pnl_trigger_fill": 1.4,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 192,
+          "win_rate": 35.4,
+          "avg_pnl": -2.0
+        },
+        "buy_put": {
+          "n": 483,
+          "win_rate": 42.7,
+          "avg_pnl": 1.8
+        },
+        "sell_put": {
+          "n": 15,
+          "win_rate": 53.3,
+          "avg_pnl": 5.8
+        }
+      }
+    },
+    {
+      "params": {
+        "rsi_oversold": 30,
+        "rsi_overbought": 70,
+        "bull_min": 2,
+        "bear_min": 2,
+        "adx_threshold": 35,
+        "hold_days": 21,
+        "garch_mode": "gate"
+      },
+      "train_sharpe": -0.002,
+      "train_trades": 1411,
+      "val_sharpe": 0.009,
+      "val_trades": 684,
+      "val_win_rate": 40.4,
+      "val_avg_pnl": 0.4,
+      "val_avg_pnl_trigger_fill": 1.2,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 187,
+          "win_rate": 33.7,
+          "avg_pnl": -3.5
+        },
+        "buy_put": {
+          "n": 483,
+          "win_rate": 42.7,
+          "avg_pnl": 1.8
+        },
+        "sell_put": {
+          "n": 14,
+          "win_rate": 50.0,
+          "avg_pnl": 6.7
+        }
+      }
+    },
+    {
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 70,
+        "bull_min": 1,
+        "bear_min": 2,
+        "adx_threshold": 35,
+        "hold_days": 21,
+        "garch_mode": "gate"
+      },
+      "train_sharpe": -0.002,
+      "train_trades": 1409,
+      "val_sharpe": 0.008,
+      "val_trades": 685,
+      "val_win_rate": 40.6,
+      "val_avg_pnl": 0.4,
+      "val_avg_pnl_trigger_fill": 1.2,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 189,
+          "win_rate": 34.4,
+          "avg_pnl": -3.6
+        },
+        "buy_put": {
+          "n": 483,
+          "win_rate": 42.7,
+          "avg_pnl": 1.8
+        },
+        "sell_put": {
+          "n": 13,
+          "win_rate": 53.8,
+          "avg_pnl": 7.3
+        }
+      }
+    },
+    {
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 70,
+        "bull_min": 2,
+        "bear_min": 2,
+        "adx_threshold": 35,
+        "hold_days": 21,
+        "garch_mode": "gate"
+      },
+      "train_sharpe": -0.001,
+      "train_trades": 1408,
+      "val_sharpe": 0.006,
+      "val_trades": 682,
+      "val_win_rate": 40.3,
+      "val_avg_pnl": 0.3,
+      "val_avg_pnl_trigger_fill": 1.2,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 186,
+          "win_rate": 33.3,
+          "avg_pnl": -4.1
+        },
+        "buy_put": {
+          "n": 483,
+          "win_rate": 42.7,
+          "avg_pnl": 1.8
+        },
+        "sell_put": {
+          "n": 13,
+          "win_rate": 53.8,
+          "avg_pnl": 7.3
+        }
+      }
+    }
+  ],
+  "best": {
+    "params": {
+      "rsi_oversold": 35,
+      "rsi_overbought": 65,
+      "bull_min": 2,
+      "bear_min": 2,
+      "adx_threshold": 35,
+      "hold_days": 21,
+      "garch_mode": "gate"
+    },
+    "train_sharpe": -0.002,
+    "train_trades": 1599,
+    "val_sharpe": 0.031,
+    "val_trades": 733,
+    "val_win_rate": 41.5,
+    "val_avg_pnl": 1.5,
+    "val_avg_pnl_trigger_fill": 1.7,
+    "val_by_strategy": {
+      "buy_call": {
+        "n": 192,
+        "win_rate": 35.4,
+        "avg_pnl": -2.0
+      },
+      "buy_put": {
+        "n": 526,
+        "win_rate": 43.3,
+        "avg_pnl": 2.7
+      },
+      "sell_put": {
+        "n": 15,
+        "win_rate": 53.3,
+        "avg_pnl": 5.8
+      }
+    }
+  },
+  "baselines": [
+    {
+      "label": "default rules (live defaults), garch off [train]",
+      "n": 3942,
+      "win_rate": 37.8,
+      "avg_pnl": -0.9,
+      "avg_pnl_trigger_fill": -0.4,
+      "profit_factor": 0.94,
+      "sharpe": -0.02,
+      "sortino": -0.04,
+      "max_drawdown_pct": 233.0,
+      "avg_bars_held": 2.0,
+      "exit_mix": {
+        "stop_loss": 1966,
+        "take_profit": 807,
+        "rsi_target": 605,
+        "stagnation": 261,
+        "trailing_stop": 294,
+        "bb_breach": 9
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 302,
+          "win_rate": 37.7,
+          "avg_pnl": -3.1,
+          "avg_pnl_trigger_fill": 0.5,
+          "profit_factor": 0.81,
+          "sharpe": -0.09,
+          "avg_bars_held": 2.2,
+          "exit_mix": {
+            "stop_loss": 161,
+            "take_profit": 82,
+            "trailing_stop": 29,
+            "stagnation": 29,
+            "rsi_target": 1
+          }
+        },
+        "buy_put": {
+          "count": 3487,
+          "win_rate": 37.3,
+          "avg_pnl": -0.9,
+          "avg_pnl_trigger_fill": -0.7,
+          "profit_factor": 0.94,
+          "sharpe": -0.02,
+          "avg_bars_held": 2.0,
+          "exit_mix": {
+            "stop_loss": 1752,
+            "take_profit": 682,
+            "rsi_target": 604,
+            "stagnation": 210,
+            "trailing_stop": 239
+          }
+        },
+        "sell_put": {
+          "count": 153,
+          "win_rate": 50.3,
+          "avg_pnl": 2.0,
+          "avg_pnl_trigger_fill": 3.8,
+          "profit_factor": 1.18,
+          "sharpe": 0.07,
+          "avg_bars_held": 2.5,
+          "exit_mix": {
+            "trailing_stop": 26,
+            "bb_breach": 9,
+            "stop_loss": 53,
+            "take_profit": 43,
+            "stagnation": 22
+          }
+        }
+      }
+    },
+    {
+      "label": "default rules (live defaults), garch off [val]",
+      "n": 2824,
+      "win_rate": 40.6,
+      "avg_pnl": -0.8,
+      "avg_pnl_trigger_fill": 0.9,
+      "profit_factor": 0.95,
+      "sharpe": -0.02,
+      "sortino": -0.04,
+      "max_drawdown_pct": 476.5,
+      "avg_bars_held": 1.9,
+      "exit_mix": {
+        "take_profit": 669,
+        "stop_loss": 1374,
+        "trailing_stop": 203,
+        "stagnation": 124,
+        "rsi_target": 448,
+        "bb_breach": 6
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 591,
+          "win_rate": 40.4,
+          "avg_pnl": 0.3,
+          "avg_pnl_trigger_fill": 1.0,
+          "profit_factor": 1.02,
+          "sharpe": 0.01,
+          "avg_bars_held": 2.1,
+          "exit_mix": {
+            "take_profit": 167,
+            "stop_loss": 324,
+            "trailing_stop": 52,
+            "stagnation": 35,
+            "rsi_target": 13
+          }
+        },
+        "buy_put": {
+          "count": 2114,
+          "win_rate": 40.4,
+          "avg_pnl": -1.0,
+          "avg_pnl_trigger_fill": 0.7,
+          "profit_factor": 0.93,
+          "sharpe": -0.03,
+          "avg_bars_held": 1.8,
+          "exit_mix": {
+            "stop_loss": 998,
+            "trailing_stop": 137,
+            "take_profit": 465,
+            "stagnation": 79,
+            "rsi_target": 435
+          }
+        },
+        "sell_put": {
+          "count": 119,
+          "win_rate": 44.5,
+          "avg_pnl": -1.6,
+          "avg_pnl_trigger_fill": 3.2,
+          "profit_factor": 0.9,
+          "sharpe": -0.04,
+          "avg_bars_held": 2.3,
+          "exit_mix": {
+            "stop_loss": 52,
+            "bb_breach": 6,
+            "trailing_stop": 14,
+            "take_profit": 37,
+            "stagnation": 10
+          }
+        }
+      }
+    },
+    {
+      "label": "default rules (live defaults), garch off [all]",
+      "n": 7260,
+      "win_rate": 38.9,
+      "avg_pnl": -1.0,
+      "avg_pnl_trigger_fill": 0.1,
+      "profit_factor": 0.93,
+      "sharpe": -0.03,
+      "sortino": -0.05,
+      "max_drawdown_pct": 268.3,
+      "avg_bars_held": 1.9,
+      "exit_mix": {
+        "stop_loss": 3604,
+        "take_profit": 1593,
+        "rsi_target": 1120,
+        "stagnation": 405,
+        "trailing_stop": 521,
+        "bb_breach": 17
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 953,
+          "win_rate": 40.0,
+          "avg_pnl": -0.3,
+          "avg_pnl_trigger_fill": 1.1,
+          "profit_factor": 0.98,
+          "sharpe": -0.01,
+          "avg_bars_held": 2.2,
+          "exit_mix": {
+            "stop_loss": 512,
+            "take_profit": 271,
+            "trailing_stop": 86,
+            "stagnation": 67,
+            "rsi_target": 17
+          }
+        },
+        "buy_put": {
+          "count": 6016,
+          "win_rate": 38.3,
+          "avg_pnl": -1.2,
+          "avg_pnl_trigger_fill": -0.2,
+          "profit_factor": 0.92,
+          "sharpe": -0.03,
+          "avg_bars_held": 1.9,
+          "exit_mix": {
+            "stop_loss": 2981,
+            "take_profit": 1234,
+            "rsi_target": 1103,
+            "stagnation": 304,
+            "trailing_stop": 394
+          }
+        },
+        "sell_put": {
+          "count": 291,
+          "win_rate": 48.5,
+          "avg_pnl": 1.0,
+          "avg_pnl_trigger_fill": 3.8,
+          "profit_factor": 1.08,
+          "sharpe": 0.03,
+          "avg_bars_held": 2.4,
+          "exit_mix": {
+            "trailing_stop": 41,
+            "bb_breach": 17,
+            "stop_loss": 111,
+            "take_profit": 88,
+            "stagnation": 34
+          }
+        }
+      }
+    },
+    {
+      "label": "default rules, garch confluence [train]",
+      "n": 4273,
+      "win_rate": 37.5,
+      "avg_pnl": -0.9,
+      "avg_pnl_trigger_fill": -0.4,
+      "profit_factor": 0.94,
+      "sharpe": -0.02,
+      "sortino": -0.04,
+      "max_drawdown_pct": 238.7,
+      "avg_bars_held": 2.0,
+      "exit_mix": {
+        "stop_loss": 2148,
+        "rsi_target": 656,
+        "take_profit": 875,
+        "stagnation": 276,
+        "trailing_stop": 309,
+        "bb_breach": 9
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 302,
+          "win_rate": 37.7,
+          "avg_pnl": -3.1,
+          "avg_pnl_trigger_fill": 0.5,
+          "profit_factor": 0.81,
+          "sharpe": -0.09,
+          "avg_bars_held": 2.2,
+          "exit_mix": {
+            "stop_loss": 161,
+            "take_profit": 82,
+            "trailing_stop": 29,
+            "stagnation": 29,
+            "rsi_target": 1
+          }
+        },
+        "buy_put": {
+          "count": 3818,
+          "win_rate": 37.0,
+          "avg_pnl": -0.9,
+          "avg_pnl_trigger_fill": -0.7,
+          "profit_factor": 0.94,
+          "sharpe": -0.02,
+          "avg_bars_held": 1.9,
+          "exit_mix": {
+            "stop_loss": 1934,
+            "rsi_target": 655,
+            "take_profit": 750,
+            "stagnation": 225,
+            "trailing_stop": 254
+          }
+        },
+        "sell_put": {
+          "count": 153,
+          "win_rate": 50.3,
+          "avg_pnl": 2.0,
+          "avg_pnl_trigger_fill": 3.8,
+          "profit_factor": 1.18,
+          "sharpe": 0.07,
+          "avg_bars_held": 2.5,
+          "exit_mix": {
+            "trailing_stop": 26,
+            "bb_breach": 9,
+            "stop_loss": 53,
+            "take_profit": 43,
+            "stagnation": 22
+          }
+        }
+      }
+    },
+    {
+      "label": "default rules, garch confluence [val]",
+      "n": 2912,
+      "win_rate": 40.5,
+      "avg_pnl": -0.7,
+      "avg_pnl_trigger_fill": 0.9,
+      "profit_factor": 0.95,
+      "sharpe": -0.02,
+      "sortino": -0.03,
+      "max_drawdown_pct": 437.2,
+      "avg_bars_held": 1.9,
+      "exit_mix": {
+        "take_profit": 694,
+        "stop_loss": 1421,
+        "trailing_stop": 206,
+        "stagnation": 125,
+        "rsi_target": 460,
+        "bb_breach": 6
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 591,
+          "win_rate": 40.4,
+          "avg_pnl": 0.3,
+          "avg_pnl_trigger_fill": 1.0,
+          "profit_factor": 1.02,
+          "sharpe": 0.01,
+          "avg_bars_held": 2.1,
+          "exit_mix": {
+            "take_profit": 167,
+            "stop_loss": 324,
+            "trailing_stop": 52,
+            "stagnation": 35,
+            "rsi_target": 13
+          }
+        },
+        "buy_put": {
+          "count": 2202,
+          "win_rate": 40.3,
+          "avg_pnl": -0.9,
+          "avg_pnl_trigger_fill": 0.7,
+          "profit_factor": 0.94,
+          "sharpe": -0.02,
+          "avg_bars_held": 1.8,
+          "exit_mix": {
+            "stop_loss": 1045,
+            "trailing_stop": 140,
+            "take_profit": 490,
+            "stagnation": 80,
+            "rsi_target": 447
+          }
+        },
+        "sell_put": {
+          "count": 119,
+          "win_rate": 44.5,
+          "avg_pnl": -1.6,
+          "avg_pnl_trigger_fill": 3.2,
+          "profit_factor": 0.9,
+          "sharpe": -0.04,
+          "avg_bars_held": 2.3,
+          "exit_mix": {
+            "stop_loss": 52,
+            "bb_breach": 6,
+            "trailing_stop": 14,
+            "take_profit": 37,
+            "stagnation": 10
+          }
+        }
+      }
+    },
+    {
+      "label": "default rules, garch confluence [all]",
+      "n": 7700,
+      "win_rate": 38.7,
+      "avg_pnl": -0.9,
+      "avg_pnl_trigger_fill": 0.1,
+      "profit_factor": 0.94,
+      "sharpe": -0.02,
+      "sortino": -0.04,
+      "max_drawdown_pct": 264.6,
+      "avg_bars_held": 1.9,
+      "exit_mix": {
+        "stop_loss": 3840,
+        "rsi_target": 1191,
+        "take_profit": 1692,
+        "stagnation": 420,
+        "trailing_stop": 540,
+        "bb_breach": 17
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 953,
+          "win_rate": 40.0,
+          "avg_pnl": -0.3,
+          "avg_pnl_trigger_fill": 1.1,
+          "profit_factor": 0.98,
+          "sharpe": -0.01,
+          "avg_bars_held": 2.2,
+          "exit_mix": {
+            "stop_loss": 512,
+            "take_profit": 271,
+            "trailing_stop": 86,
+            "stagnation": 67,
+            "rsi_target": 17
+          }
+        },
+        "buy_put": {
+          "count": 6456,
+          "win_rate": 38.1,
+          "avg_pnl": -1.1,
+          "avg_pnl_trigger_fill": -0.2,
+          "profit_factor": 0.92,
+          "sharpe": -0.03,
+          "avg_bars_held": 1.9,
+          "exit_mix": {
+            "stop_loss": 3217,
+            "rsi_target": 1174,
+            "take_profit": 1333,
+            "stagnation": 319,
+            "trailing_stop": 413
+          }
+        },
+        "sell_put": {
+          "count": 291,
+          "win_rate": 48.5,
+          "avg_pnl": 1.0,
+          "avg_pnl_trigger_fill": 3.8,
+          "profit_factor": 1.08,
+          "sharpe": 0.03,
+          "avg_bars_held": 2.4,
+          "exit_mix": {
+            "trailing_stop": 41,
+            "bb_breach": 17,
+            "stop_loss": 111,
+            "take_profit": 88,
+            "stagnation": 34
+          }
+        }
+      }
+    },
+    {
+      "label": "default rules, garch gate [train]",
+      "n": 1453,
+      "win_rate": 38.3,
+      "avg_pnl": -0.4,
+      "avg_pnl_trigger_fill": -0.1,
+      "profit_factor": 0.98,
+      "sharpe": -0.01,
+      "sortino": -0.02,
+      "max_drawdown_pct": 683.0,
+      "avg_bars_held": 1.9,
+      "exit_mix": {
+        "stop_loss": 756,
+        "take_profit": 329,
+        "stagnation": 70,
+        "rsi_target": 186,
+        "trailing_stop": 112
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 89,
+          "win_rate": 48.3,
+          "avg_pnl": 2.0,
+          "avg_pnl_trigger_fill": 5.2,
+          "profit_factor": 1.13,
+          "sharpe": 0.05,
+          "avg_bars_held": 2.2,
+          "exit_mix": {
+            "stop_loss": 42,
+            "take_profit": 35,
+            "trailing_stop": 6,
+            "stagnation": 6
+          }
+        },
+        "buy_put": {
+          "count": 1329,
+          "win_rate": 37.2,
+          "avg_pnl": -0.5,
+          "avg_pnl_trigger_fill": -0.5,
+          "profit_factor": 0.97,
+          "sharpe": -0.01,
+          "avg_bars_held": 1.8,
+          "exit_mix": {
+            "stop_loss": 704,
+            "stagnation": 54,
+            "take_profit": 288,
+            "rsi_target": 186,
+            "trailing_stop": 97
+          }
+        },
+        "sell_put": {
+          "count": 35,
+          "win_rate": 51.4,
+          "avg_pnl": -0.7,
+          "avg_pnl_trigger_fill": 2.2,
+          "profit_factor": 0.93,
+          "sharpe": -0.03,
+          "avg_bars_held": 2.9,
+          "exit_mix": {
+            "stop_loss": 10,
+            "take_profit": 6,
+            "stagnation": 10,
+            "trailing_stop": 9
+          }
+        }
+      }
+    },
+    {
+      "label": "default rules, garch gate [val]",
+      "n": 687,
+      "win_rate": 42.6,
+      "avg_pnl": 2.5,
+      "avg_pnl_trigger_fill": 2.1,
+      "profit_factor": 1.16,
+      "sharpe": 0.05,
+      "sortino": 0.1,
+      "max_drawdown_pct": 109.3,
+      "avg_bars_held": 1.7,
+      "exit_mix": {
+        "take_profit": 189,
+        "stop_loss": 327,
+        "trailing_stop": 38,
+        "rsi_target": 116,
+        "stagnation": 16,
+        "bb_breach": 1
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 186,
+          "win_rate": 37.1,
+          "avg_pnl": -0.0,
+          "avg_pnl_trigger_fill": 0.2,
+          "profit_factor": 1.0,
+          "sharpe": -0.0,
+          "avg_bars_held": 1.9,
+          "exit_mix": {
+            "take_profit": 53,
+            "stop_loss": 113,
+            "rsi_target": 4,
+            "trailing_stop": 12,
+            "stagnation": 4
+          }
+        },
+        "buy_put": {
+          "count": 487,
+          "win_rate": 44.4,
+          "avg_pnl": 3.3,
+          "avg_pnl_trigger_fill": 2.7,
+          "profit_factor": 1.23,
+          "sharpe": 0.07,
+          "avg_bars_held": 1.6,
+          "exit_mix": {
+            "stop_loss": 211,
+            "trailing_stop": 21,
+            "take_profit": 132,
+            "rsi_target": 112,
+            "stagnation": 11
+          }
+        },
+        "sell_put": {
+          "count": 14,
+          "win_rate": 57.1,
+          "avg_pnl": 7.5,
+          "avg_pnl_trigger_fill": 6.7,
+          "profit_factor": 2.14,
+          "sharpe": 0.32,
+          "avg_bars_held": 2.7,
+          "exit_mix": {
+            "stop_loss": 3,
+            "take_profit": 4,
+            "trailing_stop": 5,
+            "stagnation": 1,
+            "bb_breach": 1
+          }
+        }
+      }
+    },
+    {
+      "label": "default rules, garch gate [all]",
+      "n": 2367,
+      "win_rate": 39.7,
+      "avg_pnl": 0.4,
+      "avg_pnl_trigger_fill": 0.7,
+      "profit_factor": 1.02,
+      "sharpe": 0.01,
+      "sortino": 0.02,
+      "max_drawdown_pct": 683.0,
+      "avg_bars_held": 1.8,
+      "exit_mix": {
+        "stop_loss": 1197,
+        "take_profit": 576,
+        "stagnation": 101,
+        "trailing_stop": 161,
+        "rsi_target": 330,
+        "bb_breach": 2
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 312,
+          "win_rate": 41.0,
+          "avg_pnl": 1.4,
+          "avg_pnl_trigger_fill": 2.0,
+          "profit_factor": 1.08,
+          "sharpe": 0.03,
+          "avg_bars_held": 2.0,
+          "exit_mix": {
+            "stop_loss": 173,
+            "take_profit": 101,
+            "trailing_stop": 21,
+            "stagnation": 13,
+            "rsi_target": 4
+          }
+        },
+        "buy_put": {
+          "count": 2002,
+          "win_rate": 39.1,
+          "avg_pnl": 0.2,
+          "avg_pnl_trigger_fill": 0.4,
+          "profit_factor": 1.01,
+          "sharpe": 0.0,
+          "avg_bars_held": 1.7,
+          "exit_mix": {
+            "stop_loss": 1010,
+            "stagnation": 76,
+            "trailing_stop": 126,
+            "take_profit": 464,
+            "rsi_target": 326
+          }
+        },
+        "sell_put": {
+          "count": 53,
+          "win_rate": 52.8,
+          "avg_pnl": 1.9,
+          "avg_pnl_trigger_fill": 3.5,
+          "profit_factor": 1.22,
+          "sharpe": 0.08,
+          "avg_bars_held": 2.8,
+          "exit_mix": {
+            "stop_loss": 14,
+            "take_profit": 11,
+            "stagnation": 12,
+            "trailing_stop": 14,
+            "bb_breach": 2
+          }
+        }
+      }
+    },
+    {
+      "label": "WFO best {'rsi_oversold': 35, 'rsi_overbought': 65, 'bull_min': 2, 'bear_min': 2, 'adx_threshold': 35, 'hold_days': 21, 'garch_mode': 'gate'} [train]",
+      "n": 1599,
+      "win_rate": 38.1,
+      "avg_pnl": -0.1,
+      "avg_pnl_trigger_fill": -0.0,
+      "profit_factor": 0.99,
+      "sharpe": -0.0,
+      "sortino": -0.0,
+      "max_drawdown_pct": 464.4,
+      "avg_bars_held": 1.9,
+      "exit_mix": {
+        "stop_loss": 840,
+        "take_profit": 372,
+        "stagnation": 74,
+        "rsi_target": 190,
+        "trailing_stop": 123
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 84,
+          "win_rate": 51.2,
+          "avg_pnl": 4.3,
+          "avg_pnl_trigger_fill": 6.8,
+          "profit_factor": 1.29,
+          "sharpe": 0.12,
+          "avg_bars_held": 2.3,
+          "exit_mix": {
+            "stop_loss": 37,
+            "take_profit": 36,
+            "trailing_stop": 6,
+            "stagnation": 5
+          }
+        },
+        "buy_put": {
+          "count": 1480,
+          "win_rate": 37.1,
+          "avg_pnl": -0.3,
+          "avg_pnl_trigger_fill": -0.5,
+          "profit_factor": 0.98,
+          "sharpe": -0.01,
+          "avg_bars_held": 1.8,
+          "exit_mix": {
+            "stop_loss": 793,
+            "stagnation": 59,
+            "take_profit": 330,
+            "rsi_target": 190,
+            "trailing_stop": 108
+          }
+        },
+        "sell_put": {
+          "count": 35,
+          "win_rate": 51.4,
+          "avg_pnl": -0.5,
+          "avg_pnl_trigger_fill": 2.4,
+          "profit_factor": 0.95,
+          "sharpe": -0.02,
+          "avg_bars_held": 3.0,
+          "exit_mix": {
+            "stop_loss": 10,
+            "take_profit": 6,
+            "stagnation": 10,
+            "trailing_stop": 9
+          }
+        }
+      }
+    },
+    {
+      "label": "WFO best {'rsi_oversold': 35, 'rsi_overbought': 65, 'bull_min': 2, 'bear_min': 2, 'adx_threshold': 35, 'hold_days': 21, 'garch_mode': 'gate'} [val]",
+      "n": 733,
+      "win_rate": 41.5,
+      "avg_pnl": 1.5,
+      "avg_pnl_trigger_fill": 1.7,
+      "profit_factor": 1.09,
+      "sharpe": 0.03,
+      "sortino": 0.06,
+      "max_drawdown_pct": 152.0,
+      "avg_bars_held": 1.7,
+      "exit_mix": {
+        "take_profit": 200,
+        "stop_loss": 359,
+        "trailing_stop": 41,
+        "rsi_target": 116,
+        "stagnation": 16,
+        "bb_breach": 1
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 192,
+          "win_rate": 35.4,
+          "avg_pnl": -2.0,
+          "avg_pnl_trigger_fill": -0.3,
+          "profit_factor": 0.9,
+          "sharpe": -0.04,
+          "avg_bars_held": 1.8,
+          "exit_mix": {
+            "take_profit": 53,
+            "stop_loss": 120,
+            "rsi_target": 4,
+            "trailing_stop": 12,
+            "stagnation": 3
+          }
+        },
+        "buy_put": {
+          "count": 526,
+          "win_rate": 43.3,
+          "avg_pnl": 2.7,
+          "avg_pnl_trigger_fill": 2.4,
+          "profit_factor": 1.18,
+          "sharpe": 0.06,
+          "avg_bars_held": 1.6,
+          "exit_mix": {
+            "stop_loss": 235,
+            "trailing_stop": 24,
+            "take_profit": 143,
+            "rsi_target": 112,
+            "stagnation": 12
+          }
+        },
+        "sell_put": {
+          "count": 15,
+          "win_rate": 53.3,
+          "avg_pnl": 5.8,
+          "avg_pnl_trigger_fill": 5.3,
+          "profit_factor": 1.8,
+          "sharpe": 0.24,
+          "avg_bars_held": 2.7,
+          "exit_mix": {
+            "stop_loss": 4,
+            "take_profit": 4,
+            "trailing_stop": 5,
+            "stagnation": 1,
+            "bb_breach": 1
+          }
+        }
+      }
+    },
+    {
+      "label": "WFO best {'rsi_oversold': 35, 'rsi_overbought': 65, 'bull_min': 2, 'bear_min': 2, 'adx_threshold': 35, 'hold_days': 21, 'garch_mode': 'gate'} [all]",
+      "n": 2579,
+      "win_rate": 39.1,
+      "avg_pnl": 0.1,
+      "avg_pnl_trigger_fill": 0.5,
+      "profit_factor": 1.01,
+      "sharpe": 0.0,
+      "sortino": 0.0,
+      "max_drawdown_pct": 464.4,
+      "avg_bars_held": 1.8,
+      "exit_mix": {
+        "stop_loss": 1329,
+        "take_profit": 633,
+        "stagnation": 105,
+        "rsi_target": 335,
+        "trailing_stop": 175,
+        "bb_breach": 2
+      },
+      "by_strategy": {
+        "buy_call": {
+          "count": 315,
+          "win_rate": 40.3,
+          "avg_pnl": 0.6,
+          "avg_pnl_trigger_fill": 1.9,
+          "profit_factor": 1.03,
+          "sharpe": 0.01,
+          "avg_bars_held": 2.0,
+          "exit_mix": {
+            "stop_loss": 177,
+            "take_profit": 102,
+            "trailing_stop": 21,
+            "stagnation": 11,
+            "rsi_target": 4
+          }
+        },
+        "buy_put": {
+          "count": 2210,
+          "win_rate": 38.6,
+          "avg_pnl": -0.0,
+          "avg_pnl_trigger_fill": 0.3,
+          "profit_factor": 1.0,
+          "sharpe": -0.0,
+          "avg_bars_held": 1.8,
+          "exit_mix": {
+            "stop_loss": 1137,
+            "stagnation": 82,
+            "take_profit": 520,
+            "rsi_target": 331,
+            "trailing_stop": 140
+          }
+        },
+        "sell_put": {
+          "count": 54,
+          "win_rate": 51.9,
+          "avg_pnl": 1.6,
+          "avg_pnl_trigger_fill": 3.3,
+          "profit_factor": 1.19,
+          "sharpe": 0.07,
+          "avg_bars_held": 2.9,
+          "exit_mix": {
+            "stop_loss": 15,
+            "take_profit": 11,
+            "stagnation": 12,
+            "trailing_stop": 14,
+            "bb_breach": 2
+          }
+        }
+      }
+    }
+  ]
+}
