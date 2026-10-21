@@ -35,7 +35,9 @@ def replay(trades, window, threshold, pause_days):
         settled = [p for d, p in closed if d <= ed]           # only exits known at entry time
         if pause_until and ed < pause_until:
             continue
-        pause_until = None
+        if pause_until:                                           # pause over: start the window afresh (else it re-trips forever)
+            closed = [c for c in closed if c[0] >= pause_until]
+            pause_until = None
         if len(settled) >= window and sum(settled[-window:]) <= threshold:
             pause_until = ed + timedelta(days=pause_days); pauses += 1
             continue
