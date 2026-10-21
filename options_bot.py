@@ -1098,7 +1098,7 @@ def _naive_daily_index(s):
 _ctx_hist_cache = {"df": None, "ts": 0.0, "spy_closes": None}
 
 
-def market_context_history(period="3y", force=False):
+def market_context_history(period=None, force=False):
     """
     Per-DATE market context for the backtest — the historical counterpart of
     get_vix / get_vix3m / get_fed_context / get_market_trend / get_macro_regime,
@@ -1110,8 +1110,10 @@ def market_context_history(period="3y", force=False):
       macro_buy_call, macro_buy_put, macro_sell_put, macro_covered_call, macro_iron_condor
     Cached for an hour.  Also stores the SPY close series for beta / RS.
     """
+    period = period or BT_HISTORY_PERIOD                   # always covers the backtest frames (a longer run sets the global)
     now = time.time()
-    if not force and _ctx_hist_cache["df"] is not None and now - _ctx_hist_cache["ts"] < 3600:
+    if not force and _ctx_hist_cache["df"] is not None and now - _ctx_hist_cache["ts"] < 3600 \
+            and _ctx_hist_cache.get("period") == period:
         return _ctx_hist_cache["df"]
 
     _, spy = _fetch_history("SPY", period)
@@ -1178,7 +1180,7 @@ def market_context_history(period="3y", force=False):
             **{f"macro_{k}": macro[k] for k in ("buy_call", "buy_put", "sell_put", "covered_call", "iron_condor")},
         })
     df = pd.DataFrame(rows).set_index("date")
-    _ctx_hist_cache.update(df=df, ts=now, spy_closes=spy["Close"])
+    _ctx_hist_cache.update(df=df, ts=now, spy_closes=spy["Close"], period=period)
     print(f"  [Context] Market-context history built: {len(df)} dates ({df.index.min().date()} → {df.index.max().date()})")
     return df
 
