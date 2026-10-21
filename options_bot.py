@@ -24,76 +24,263 @@ Run:
 # ──────────────────────────────────────────────────────────────
 #  IMPORTS
 # ──────────────────────────────────────────────────────────────
-import os, sys, json, uuid, threading, webbrowser, time, warnings, pickle
-from datetime import datetime, timedelta
+import os, sys, io, re, json, uuid, threading, webbrowser, time, warnings, pickle
+from datetime import datetime, timedelta, date
 from math import log, sqrt, exp
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-import threading as _threading
 
 import yfinance as yf
 import pandas as pd
 import numpy as np
+from scipy.stats import norm
 
+# Silence library chatter but keep deprecation/future warnings visible so
+# pandas/numpy migration problems don't get hidden.
 warnings.filterwarnings("ignore")
+warnings.filterwarnings("default", category=DeprecationWarning, module=__name__)
+warnings.filterwarnings("default", category=FutureWarning,      module=__name__)
+
+# The log output uses box-drawing / emoji characters.  When the bot is started
+# without a console (Task Scheduler, a launcher, redirected output) Windows
+# gives it a cp1252 stdout and the very first banner line raised
+# UnicodeEncodeError and killed the process.  Force UTF-8, never crash on print.
+# line_buffering: with output redirected to a file/pipe, Python block-buffers
+# stdout and the scan log only appears in chunks (or is lost on a crash).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+    except Exception:
+        pass
+
+# All data files (JSON state, pickle cache) are referenced by bare filename.
+# Anchor the working directory to the script's folder so launching from any
+# other directory (Task Scheduler, a shortcut, another terminal) still finds
+# the same tracked positions / performance / calibration files.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+os.chdir(BASE_DIR)
 
 # ── Yahoo Finance rate-limit guard ────────────────────────────
 # All yfinance calls that hit Yahoo's API (options chain, calendar,
-# expiry lists) go through this semaphore so we never fire more
-# than 2 concurrent requests regardless of thread count.
-_YF_SEM = _threading.Semaphore(8)
+# expiry lists, history) go through this semaphore so we never fire
+# more than _YF_MAX_CONCURRENT requests regardless of thread count.
+_YF_MAX_CONCURRENT = 8
+_YF_SEM            = threading.Semaphore(_YF_MAX_CONCURRENT)
+_YF_REFRESH_LOCK   = threading.Lock()
+_yf_last_refresh   = 0.0
+
+try:
+    from yfinance.exceptions import YFRateLimitError as _YFRateLimitError
+except Exception:                       # older/newer yfinance without the class
+    class _YFRateLimitError(Exception):
+        pass
+
 
 def _yf_refresh_session():
     """
     Force yfinance to re-fetch its cookie and crumb from Yahoo Finance.
     Uses the YfData singleton's own _get_cookie_and_crumb() method —
     the correct way to re-authenticate in yfinance 1.x.
+    Debounced: when several threads hit a 401 at once only one refresh runs.
     """
-    try:
-        import yfinance.data as _yfd
-        yd = _yfd.YfData()          # returns the singleton instance
-        yd._crumb  = None           # clear stale crumb so it re-fetches
-        yd._cookie = None           # clear stale cookie
-        yd._get_cookie_and_crumb()  # re-authenticate properly
-        print("  [Auth] yfinance crumb refreshed successfully")
-    except Exception as e:
-        print(f"  [Auth] crumb refresh failed ({e}) — will retry request anyway")
+    global _yf_last_refresh
+    with _YF_REFRESH_LOCK:
+        if time.time() - _yf_last_refresh < 5:
+            return
+        try:
+            import yfinance.data as _yfd
+            yd = _yfd.YfData()          # returns the singleton instance
+            yd._crumb  = None           # clear stale crumb so it re-fetches
+            yd._cookie = None           # clear stale cookie
+            yd._get_cookie_and_crumb()  # re-authenticate properly
+            print("  [Auth] yfinance crumb refreshed successfully")
+        except Exception as e:
+            print(f"  [Auth] crumb refresh failed ({e}) — will retry request anyway")
+        _yf_last_refresh = time.time()
 
 
 def _yf_call(fn, *args, retries=4, base_delay=6, **kwargs):
     """
     Call any yfinance method with rate-limit retry + semaphore.
     Automatically handles Yahoo Finance 401 crumb errors by refreshing
-    the yfinance session and retrying.
+    the yfinance session and retrying.  The semaphore slot is released
+    while sleeping so one throttled call doesn't stall the others.
     Usage:  chain = _yf_call(tkr.option_chain, exp)
     """
-    import time
     for attempt in range(retries + 1):
-        with _YF_SEM:
-            try:
+        try:
+            with _YF_SEM:
                 return fn(*args, **kwargs)
-            except Exception as e:
-                msg = str(e).lower()
-                is_rate = any(x in msg for x in
-                              ("too many requests", "rate limit", "429", "rate limited"))
-                is_crumb = any(x in msg for x in
-                               ("401", "unauthorized", "invalid crumb", "crumb"))
-                if is_crumb and attempt < retries:
-                    print(f"  [Auth] 401 crumb error — refreshing session (attempt {attempt+1}/{retries})")
-                    _yf_refresh_session()
-                    time.sleep(2)
-                elif is_rate and attempt < retries:
-                    wait = base_delay * (2 ** attempt)
-                    print(f"  [Rate limit] retrying in {wait}s (attempt {attempt+1}/{retries})")
-                    time.sleep(wait)
-                else:
-                    raise
+        except Exception as e:
+            msg = str(e).lower()
+            is_rate = isinstance(e, _YFRateLimitError) or any(
+                x in msg for x in ("too many requests", "rate limit", "429", "rate limited"))
+            is_crumb = any(x in msg for x in ("401", "unauthorized", "invalid crumb", "crumb"))
+            if is_crumb and attempt < retries:
+                print(f"  [Auth] 401 crumb error — refreshing session (attempt {attempt+1}/{retries})")
+                _yf_refresh_session()
+                time.sleep(2)
+            elif is_rate and attempt < retries:
+                wait = base_delay * (2 ** attempt)
+                print(f"  [Rate limit] retrying in {wait}s (attempt {attempt+1}/{retries})")
+                time.sleep(wait)
+            else:
+                raise
+
+
+# ── History sanitising ────────────────────────────────────────
+# yfinance frequently appends a row for the current session whose
+# Open/High/Low/Close are NaN (only Volume is filled).  Every indicator
+# that looks at .iloc[-1] then comes back NaN, which silently disables
+# every signal.  dropna(how="all") does NOT remove that row because
+# Volume/Dividends/Stock Splits are populated — hence subset=["Close"].
+def _clean_hist(df):
+    """Return a copy of an OHLCV frame with NaN-Close rows removed (or None)."""
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+    if isinstance(df.columns, pd.MultiIndex):       # single-ticker yf.download
+        df = df.droplevel(0, axis=1) if df.columns.nlevels > 1 else df
+    if "Close" not in df.columns:
+        return None
+    out = df.dropna(subset=["Close"])
+    return out if not out.empty else None
+
+
+def _fetch_history(sym, period="1y", auto_adjust=False):
+    """
+    Fetch one ticker's OHLCV history through the rate-limit guard and
+    sanitise it.  Returns (Ticker, DataFrame-or-None).
+    auto_adjust=False matches the bulk yf.download path so indicators use
+    the same (unadjusted) price basis regardless of which path fetched them.
+    """
+    tkr  = yf.Ticker(sym)
+    hist = _yf_call(tkr.history, period=period, auto_adjust=auto_adjust)
+    return tkr, _clean_hist(hist)
+
+
+def _bulk_download(tickers, period="1y", min_rows=1):
+    """
+    One yf.download call for many tickers → {sym: clean DataFrame}.
+    Handles the yfinance 1.x MultiIndex columns for 1 or N tickers,
+    drops NaN-Close rows and tickers with fewer than `min_rows` bars.
+    Never raises — returns {} on failure (callers fall back per-ticker).
+    """
+    tickers = list(dict.fromkeys(tickers))
+    if not tickers:
+        return {}
+    out = {}
+    try:
+        with _YF_SEM:
+            raw = yf.download(tickers, period=period, group_by="ticker",
+                              auto_adjust=False, threads=True, progress=False)
+        if raw is None or raw.empty:
+            return {}
+        for sym in tickers:
+            try:
+                df = raw[sym] if isinstance(raw.columns, pd.MultiIndex) else raw
+                df = _clean_hist(df)
+                if df is not None and len(df) >= min_rows:
+                    out[sym] = df
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"  [Bulk download] Failed ({e})")
+    return out
+
+
+# ── Robust JSON persistence ───────────────────────────────────
+# All state files were written with open(path, "w") which truncates first:
+# a crash mid-write leaves a corrupt file, the loader then returns [] and
+# the next save wipes the user's data.  Write to a temp file and os.replace.
+def _atomic_json_write(path, obj):
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        # _json_clean: NaN → null.  The old files contained bare NaN tokens,
+        # which Python reads back but every strict JSON parser rejects.
+        json.dump(_json_clean(obj), f, indent=2, default=_json_default)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _load_json(path, default, label=""):
+    """Load a JSON file; on corruption keep a .corrupt backup and log it."""
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, encoding="utf-8-sig") as f:     # -sig: tolerate a BOM from editors
+            return json.load(f)
+    except Exception as e:
+        bad = f"{path}.corrupt"
+        try:
+            os.replace(path, bad)
+        except Exception:
+            pass
+        print(f"  [{label or 'State'}] Could not read {path}: {e} — moved to {bad}")
+        return default
+
+
+def _json_default(o):
+    """json.dump fallback: numpy scalars/arrays, pandas timestamps, NaN."""
+    if isinstance(o, (np.integer,)):
+        return int(o)
+    if isinstance(o, (np.floating,)):
+        v = float(o)
+        return None if (v != v or v in (float("inf"), float("-inf"))) else v
+    if isinstance(o, (np.bool_,)):
+        return bool(o)
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    if isinstance(o, (pd.Timestamp, datetime, date)):
+        return o.isoformat()
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
+def _json_clean(o):
+    """Recursively replace NaN/inf with None and numpy scalars with Python ones."""
+    if isinstance(o, dict):
+        return {k: _json_clean(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_json_clean(v) for v in o]
+    if isinstance(o, float):
+        return None if (o != o or o in (float("inf"), float("-inf"))) else o
+    if isinstance(o, (np.integer, np.floating, np.bool_, np.ndarray)):
+        return _json_clean(_json_default(o))
+    return o
+
+
+def _as_float(v, default=0.0):
+    """float() that treats None/NaN/'' as `default` (NaN is truthy, so `or 0` misses it)."""
+    try:
+        f = float(v)
+        return default if f != f else f
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_int(v, default=0):
+    f = _as_float(v, None)
+    return default if f is None else int(f)
+
 
 # Flask — install with: pip install flask
 try:
     from flask import Flask, jsonify, request, render_template_string
+    from flask.json.provider import DefaultJSONProvider as _FlaskJSONProvider
 except ImportError:
     print("Flask not found. Run:  pip install flask")
     sys.exit(1)
+
+
+class _SafeJSONProvider(_FlaskJSONProvider):
+    """
+    jsonify() with numpy scalars converted and NaN/inf emitted as null.
+    Browsers reject bare NaN in JSON.parse, which used to break the
+    Tracked tab whenever an option quote came back without a price.
+    """
+    def dumps(self, obj, **kwargs):
+        kwargs.setdefault("default", _json_default)
+        kwargs.setdefault("allow_nan", False)
+        return super().dumps(_json_clean(obj), **kwargs)
 
 # ──────────────────────────────────────────────────────────────
 #  CONFIGURATION  ← all user-tunable knobs
@@ -115,10 +302,8 @@ MIN_OPEN_INTEREST    = 10      # Min OI on selected option
 MIN_VOLUME           = 10      # Min daily volume on selected option (avoid getting stuck in illiquid contracts)
 MAX_WORKERS          = 8       # Parallel scan threads (I/O-bound; Yahoo latency is the bottleneck)
 WFO_CPU_WORKERS      = (os.cpu_count() or 8)   # Parallel WFO threads (CPU-bound; use all logical cores)
-SCAN_PREFETCH_WORKERS = 16     # Prefetch phase only — more aggressive (4 calls × N tickers)
 PREFETCH_CACHE_FILE      = "prefetch_cache.pkl"   # Disk cache for tkr.info / tkr.calendar
 PREFETCH_CACHE_TTL_HOURS = 24                     # Info/calendar barely change day-to-day
-SCAN_DELAY_S         = 0.15    # Seconds to sleep between ticker fetches (throttle)
 HOLD_SWEEP_INTERVALS = [1, 2, 3, 5, 7, 10, 14, 21]  # Trading days for hold-horizon analysis
 SERVER_PORT          = 5000    # Web dashboard port
 LIVE_REFRESH_MINS    = 5       # How often to re-check current signal tickers (minutes)
@@ -160,7 +345,7 @@ FOCUS_LIST = [
     # Energy
     "XOM","CVX","COP","SLB","OXY","HAL","MPC","VLO",
     # Consumer / Retail
-    "WMT","COST","TGT","HD","MCD","SBUX","NKE","AMZN","BKNG","CMG",
+    "WMT","COST","TGT","HD","MCD","SBUX","NKE","BKNG","CMG",
     # Communication / Media
     "NFLX","DIS","CMCSA","T","VZ","TMUS","SNAP","SPOT","RBLX","TTD",
     # Industrial / Defence
@@ -168,7 +353,7 @@ FOCUS_LIST = [
     # EV / Clean energy
     "RIVN","NIO","PLUG","FCEL","BLNK","CHPT",
     # Fintech / Crypto
-    "PYPL","SQ","COIN","HOOD","SOFI","AFRM","UPST",
+    "PYPL","XYZ","COIN","HOOD","SOFI","AFRM","UPST",   # XYZ = Block (formerly SQ)
     # ETFs (very liquid options)
     "SPY","QQQ","IWM","XLF","XLE","XLK","ARKK","GLD","SLV","TLT",
 ]
@@ -226,8 +411,8 @@ FOMC_DATES = [
     # 2025
     "2025-01-29", "2025-03-19", "2025-05-07", "2025-06-18",
     "2025-07-30", "2025-09-17", "2025-10-29", "2025-12-10",
-    # 2026
-    "2026-01-28", "2026-03-19", "2026-04-29", "2026-06-10",
+    # 2026 (decision day = second day of each two-day meeting)
+    "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17",
     "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
 ]
 
@@ -235,6 +420,7 @@ FOMC_DATES = [
 #  FLASK APP
 # ──────────────────────────────────────────────────────────────
 app = Flask(__name__)
+app.json = _SafeJSONProvider(app)
 
 # Shared scan state (written by background thread, read by API)
 scan_state = {
@@ -284,7 +470,9 @@ def calc_rsi(closes, period=14):
     gain  = delta.clip(lower=0).rolling(period).mean()
     loss  = (-delta.clip(upper=0)).rolling(period).mean()
     rs    = gain / loss.replace(0, np.nan)
-    return 100 - 100 / (1 + rs)
+    rsi   = 100 - 100 / (1 + rs)
+    # No down-closes in the window → RS is infinite → RSI is 100, not NaN.
+    return rsi.mask((loss == 0) & (gain > 0), 100.0)
 
 
 def calc_bb(closes, period=20, nstd=2):
@@ -330,9 +518,6 @@ def calc_garch_vol(closes, fallback_window=20):
 
     Returns annualised vol as a decimal (e.g. 0.32 = 32%).
     """
-    import warnings
-    import numpy as np
-
     try:
         log_ret = np.log(closes / closes.shift(1)).dropna() * 100  # % returns
         if len(log_ret) < 60:
@@ -414,6 +599,8 @@ def calc_garch_vol(closes, fallback_window=20):
         try:
             log_ret = np.log(closes / closes.shift(1)).dropna()
             hv = float(log_ret.rolling(fallback_window).std().iloc[-1]) * (252 ** 0.5)
+            if hv != hv:                       # NaN when fewer than `fallback_window` returns
+                return 0.20
             return float(np.clip(hv, 0.05, 2.0))
         except Exception:
             return 0.20   # last-resort default
@@ -430,8 +617,6 @@ def black_scholes(S, K, T, r, sigma, option_type="call"):
     Returns theoretical fair value, delta, and mispricing info.
     """
     try:
-        from scipy.stats import norm
-
         if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
             return None
 
@@ -498,14 +683,16 @@ def fetch_risk_free_rate():
     Falls back to the hardcoded value if fetch fails.
     FRED URL: https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTB6
     """
-    import time as _time
     import urllib.request
     global RISK_FREE_RATE
-    now = _time.time()
+    now = time.time()
     if _rfr_cache["value"] is not None and (now - _rfr_cache["ts"]) < 21600:
         return _rfr_cache["value"]
     try:
-        url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTB6"
+        # cosd= limits the download to the last ~2 weeks instead of the full
+        # series back to 1958 (~17k lines) just to read one value.
+        start = (date.today() - timedelta(days=14)).isoformat()
+        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTB6&cosd={start}"
         with urllib.request.urlopen(url, timeout=6) as resp:
             lines = resp.read().decode().strip().split('\n')
         # CSV: DATE,DTB6 — find last non-missing value
@@ -527,13 +714,12 @@ _vix_cache = {"value": None, "ts": None}
 
 def get_vix():
     """Return current VIX level, cached for 30 min."""
-    import time as _time
-    now = _time.time()
+    now = time.time()
     if _vix_cache["value"] is not None and (now - _vix_cache["ts"]) < 1800:
         return _vix_cache["value"]
     try:
-        v = yf.Ticker("^VIX").history(period="5d")
-        if not v.empty:
+        _, v = _fetch_history("^VIX", "5d")
+        if v is not None:
             val = round(float(v["Close"].iloc[-1]), 2)
             _vix_cache.update(value=val, ts=now)
             return val
@@ -567,13 +753,12 @@ def get_vix3m():
       VIX > VIX3M × 1.05 (backwardation) → acute panic, reversals more likely → favour buying
       VIX < VIX3M × 0.95 (contango)      → calm market → favour selling premium
     """
-    import time as _time
-    now = _time.time()
+    now = time.time()
     if _vix3m_cache["value"] is not None and (now - _vix3m_cache["ts"]) < 1800:
         return _vix3m_cache["value"]
     try:
-        v = yf.Ticker("^VIX3M").history(period="5d")
-        if not v.empty:
+        _, v = _fetch_history("^VIX3M", "5d")
+        if v is not None:
             val = round(float(v["Close"].iloc[-1]), 2)
             _vix3m_cache.update(value=val, ts=now)
             return val
@@ -626,8 +811,7 @@ def get_fed_context():
       yield_inverted  → penalise buy_call (macro headwind); mild bonus for buy_put
       yield_steep     → mild bonus for buy_call (macro tailwind)
     """
-    import time as _time
-    now = _time.time()
+    now = time.time()
     if _fed_cache["value"] is not None and (now - _fed_cache["ts"]) < 21600:  # 6 h
         return _fed_cache["value"]
 
@@ -638,14 +822,17 @@ def get_fed_context():
     past   = [d for d in fomc if d <= today]
     future = [d for d in fomc if d >  today]
 
-    last_fed   = past[-1]   if past   else fomc[0]
-    next_fed   = future[0]  if future else fomc[-1]
+    last_fed   = past[-1]   if past   else None
+    next_fed   = future[0]  if future else None
+    if next_fed is None:
+        print("  [Fed] FOMC_DATES has no future meetings — update the list from federalreserve.gov")
 
-    days_to   = (next_fed - today).days
-    days_since = (today - last_fed).days
+    days_to    = (next_fed - today).days if next_fed else None
+    days_since = (today - last_fed).days if last_fed else None
 
-    pre_fed  = 0 < days_to  <= 5   # ~3 trading days ahead
-    post_fed = days_since <= 2     # within 2 days after
+    pre_fed  = days_to is not None and 0 < days_to <= 5          # ~3 trading days ahead
+    # Decision is announced at 2pm ET on the meeting day; treat the day itself as "pre".
+    post_fed = days_since is not None and 0 < days_since <= 2    # 1-2 days after
 
     # Yield curve from yfinance — ^IRX = 3-month, ^FVX = 5-year
     irx = fvx = None
@@ -669,8 +856,8 @@ def get_fed_context():
     result = {
         "days_to_next_fed":    days_to,
         "days_since_last_fed": days_since,
-        "next_fed_date":       next_fed.isoformat(),
-        "last_fed_date":       last_fed.isoformat(),
+        "next_fed_date":       next_fed.isoformat() if next_fed else None,
+        "last_fed_date":       last_fed.isoformat() if last_fed else None,
         "pre_fed_window":      pre_fed,
         "post_fed_window":     post_fed,
         "irx":                 irx,
@@ -684,7 +871,23 @@ def get_fed_context():
 
 
 # ── SPY market regime cache (refreshed every 30 min) ─────────
-_spy_cache = {"trend": None, "ts": None}
+_spy_cache   = {"trend": None, "ts": None}
+_macro_cache = {"value": None, "ts": 0.0}
+
+
+def _warm_market_caches():
+    """
+    Fetch the shared market-context series once, before a scan's worker
+    pool starts.  Otherwise every worker misses the cold caches at the same
+    moment and all of them fetch ^VIX, ^VIX3M, ^IRX, ^FVX and SPY at once —
+    and the first tickers scanned see beta=1 / RS=0 because the SPY series
+    (filled by get_market_trend) isn't there yet.
+    """
+    for fn in (get_vix, get_vix3m, get_fed_context, get_market_trend, get_macro_regime):
+        try:
+            fn()
+        except Exception as e:
+            print(f"  [Warmup] {fn.__name__} failed: {e}")
 
 def get_macro_regime():
     """
@@ -703,6 +906,12 @@ def get_macro_regime():
     gate. Individual signal confluence still has to pass for any qualified
     strategy. Designed to protect portfolio on systemic bad days.
     """
+    # Cached for 5 minutes: scan_ticker calls this once per ticker, and the
+    # inputs (VIX, VIX3M, Fed context, SPY trend) are themselves cached.
+    now = time.time()
+    if _macro_cache["value"] is not None and now - _macro_cache["ts"] < 300:
+        return dict(_macro_cache["value"])
+
     enabled = {
         "buy_call":     True,
         "buy_put":      True,
@@ -715,7 +924,7 @@ def get_macro_regime():
     try:
         vix      = get_vix() or 18.0
         regime   = vix_regime(vix)        # "low" / "normal" / "high"
-        term     = vix_term_structure()    # "contango" / "backwardation" / "flat"
+        term     = vix_term_structure(vix, get_vix3m())   # "contango" / "backwardation" / "flat"
         fed_ctx  = get_fed_context() or {}
         trend    = get_market_trend()      # "bull_strong" / "bull_weak" / ...
         yi       = fed_ctx.get("yield_inverted", False)
@@ -756,6 +965,7 @@ def get_macro_regime():
 
     enabled["reason"] = "; ".join(reasons) if reasons else "Normal regime — all strategies enabled"
     enabled["label"]  = "+".join(label_parts) if label_parts else "normal"
+    _macro_cache.update(value=dict(enabled), ts=now)
     return enabled
 
 
@@ -772,13 +982,13 @@ def get_market_trend():
 
     Cached for 30 minutes to avoid repeated fetches.
     """
-    import time as _time
-    now = _time.time()
+    now = time.time()
     if _spy_cache["trend"] is not None and (now - _spy_cache["ts"]) < 1800:
         return _spy_cache["trend"]
     try:
-        hist = yf.Ticker("SPY").history(period="12mo")
-        if hist.empty or len(hist) < 200:
+        _, hist = _fetch_history("SPY", "12mo")
+        if hist is None or len(hist) < 200:
+            _spy_cache["ts"] = now            # don't re-fetch on every call when SPY is short
             return _spy_cache["trend"] or "neutral"
         closes = hist["Close"]
         price  = float(closes.iloc[-1])
@@ -870,8 +1080,8 @@ def calc_rs_vs_spy(stock_closes, window=20):
         stk, spy = _spy_aligned(stock_closes)
         if stk is None or len(stk) < window + 1:
             return 0.0, False, False, 1.0
-        stk_ret = float(stk.iloc[-1] / stk.iloc[-window] - 1)
-        spy_ret = float(spy.iloc[-1] / spy.iloc[-window] - 1)
+        stk_ret = float(stk.iloc[-1] / stk.iloc[-(window + 1)] - 1)   # exactly `window` bars of return
+        spy_ret = float(spy.iloc[-1] / spy.iloc[-(window + 1)] - 1)
         beta    = calc_beta(stock_closes)
         resid   = stk_ret - beta * spy_ret      # market-neutral excess return
         rs_strong = resid >  0.03               # +3% beta-adjusted outperformance
@@ -943,8 +1153,8 @@ def get_short_interest(tkr_obj, info=None):
             info = _yf_call(lambda: tkr_obj.info)
         pct  = info.get("shortPercentOfFloat")   # 0.0–1.0
         ratio = info.get("shortRatio")
-        return (round(float(pct) * 100, 1) if pct else None,
-                round(float(ratio), 1) if ratio else None)
+        return (round(float(pct) * 100, 1) if pct   is not None else None,
+                round(float(ratio), 1)     if ratio is not None else None)
     except Exception:
         return None, None
 
@@ -970,11 +1180,12 @@ def analyze_sentiment(text):
         compound = round(scores["compound"], 3)
     else:
         # Simple keyword fallback
-        t = text.lower()
+        # Whole-word matches only ("gain" must not match "against", "cut" not "execute")
+        words = set(re.findall(r"[a-z]+", text.lower()))
         bull = sum(1 for w in ["beat","upgrade","growth","record","raised","surge",
-                                "gain","profit","strong","buy","bullish","positive"] if w in t)
+                                "gain","profit","strong","buy","bullish","positive"] if w in words)
         bear = sum(1 for w in ["miss","downgrade","cut","loss","recall","investigation",
-                                "drop","fall","weak","sell","bearish","negative","layoff"] if w in t)
+                                "drop","fall","weak","sell","bearish","negative","layoff"] if w in words)
         compound = round((bull - bear) * 0.2, 3)
         compound = max(-1.0, min(1.0, compound))
 
@@ -997,15 +1208,15 @@ def fetch_ticker_news(sym, max_articles=5):
             return cached
     try:
         import requests, xml.etree.ElementTree as ET
-        url  = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={sym}&region=US&lang=en-US"
+        from urllib.parse import quote
+        url  = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={quote(sym)}&region=US&lang=en-US"
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=8)
         if resp.status_code != 200:
             _news_cache[sym] = (now, [])
             return []
 
-        # <link> in RSS 2.0 is a text node between tags, not an attribute —
-        # ElementTree struggles with it; use string splitting as a fallback
+        from email.utils import parsedate_to_datetime
         root  = ET.fromstring(resp.text)
         items = root.findall(".//item")
         articles = []
@@ -1015,24 +1226,14 @@ def fetch_ticker_news(sym, max_articles=5):
             source   = (item.findtext("source")  or "Yahoo Finance").strip()
             if not title:
                 continue
-
-            # Extract link — RSS <link> is awkward in ElementTree,
-            # grab it directly from the raw item XML
-            raw_item = ET.tostring(item, encoding="unicode")
-            link = "#"
-            try:
-                # Pattern: <link>URL</link>
-                import re
-                m = re.search(r"<link>(.*?)</link>", raw_item)
-                if m:
-                    link = m.group(1).strip()
-            except Exception:
-                pass
+            link = (item.findtext("link") or "").strip() or "#"
+            # Only allow web links into the dashboard (RSS data goes into an href)
+            if not link.lower().startswith(("http://", "https://")):
+                link = "#"
 
             # Parse pub date to unix timestamp
             pub_ts = 0
             try:
-                from email.utils import parsedate_to_datetime
                 pub_ts = int(parsedate_to_datetime(pub_date).timestamp())
             except Exception:
                 pass
@@ -1090,11 +1291,13 @@ def calc_adx(hist, period=14):
             (low  - pc).abs(),
         ], axis=1).max(axis=1)
 
-        pdm = (high - high.shift(1)).clip(lower=0)
-        ndm = (low.shift(1) - low).clip(lower=0)
-        # Zero out where the other DM dominates
-        pdm = pdm.where(pdm > ndm, 0.0)
-        ndm = ndm.where(ndm > pdm, 0.0)
+        up_move   = (high - high.shift(1)).clip(lower=0)
+        down_move = (low.shift(1) - low).clip(lower=0)
+        # Only the dominant move counts; on a tie both are zero (Wilder).
+        # Both masks are taken from the raw moves — zeroing pdm first and then
+        # comparing ndm against the zeroed pdm biased -DI upward.
+        pdm = up_move.where(up_move > down_move, 0.0)
+        ndm = down_move.where(down_move > up_move, 0.0)
 
         a   = 1.0 / period
         atr = tr.ewm(alpha=a,  adjust=False).mean()
@@ -1127,7 +1330,9 @@ def macd_crossover(macd_line, signal_line, lookback=3):
     s = signal_line.dropna()
     if len(m) < lookback + 1 or len(s) < lookback + 1:
         return None
-    for i in range(-lookback, 0):
+    # Newest bar first: if both a bull and a bear cross fall inside the
+    # lookback, the most recent one is the live signal.
+    for i in range(-1, -lookback - 1, -1):
         prev = float(m.iloc[i - 1]) - float(s.iloc[i - 1])
         curr = float(m.iloc[i])     - float(s.iloc[i])
         if prev < 0 and curr >= 0:
@@ -1218,13 +1423,14 @@ def _best_exp(tkr_obj):
     exps  = _yf_call(lambda: tkr_obj.options)
     if not exps:
         return None, None
-    today = datetime.now()
+    today = date.today()
     best_exp, best_dte = None, None
-    for exp in exps:
-        dte = (datetime.strptime(exp, "%Y-%m-%d") - today).days
+    for exp_str in exps:
+        # Whole calendar days; subtracting datetime.now() truncated a 30-day expiry to 29.
+        dte = (datetime.strptime(exp_str, "%Y-%m-%d").date() - today).days
         if MIN_DTE <= dte <= MAX_DTE:
             if best_dte is None or abs(dte - 30) < abs(best_dte - 30):
-                best_exp, best_dte = exp, dte
+                best_exp, best_dte = exp_str, dte
     return best_exp, best_dte
 
 
@@ -1244,29 +1450,33 @@ def pick_option(tkr_obj, stock_price, option_type="put",
         if chain is None:
             chain = _yf_call(tkr_obj.option_chain, exp)
         opts  = chain.puts if option_type == "put" else chain.calls
-        if opts.empty:
+        if opts is None or opts.empty:
             return None
 
         if require_oi:
-            opts = opts[opts["openInterest"].fillna(0) >= MIN_OPEN_INTEREST].copy()
-            opts = opts[opts["volume"].fillna(0) >= MIN_VOLUME].copy()
+            opts = opts[(opts["openInterest"].fillna(0) >= MIN_OPEN_INTEREST) &
+                        (opts["volume"].fillna(0) >= MIN_VOLUME)]
         if opts.empty:
             return None
 
+        # Nearest strike to target — computed as a local Series so the shared
+        # prefetched chain is never mutated.
         target_strike = stock_price * otm_factor
-        opts["dist"] = abs(opts["strike"] - target_strike)
-        row = opts.loc[opts["dist"].idxmin()]
+        dist = (opts["strike"] - target_strike).abs()
+        row  = opts.loc[dist.idxmin()]
 
-        bid = float(row.get("bid") or 0)
-        ask = float(row.get("ask") or 0)
+        # yfinance leaves bid/ask/IV/volume as NaN for untraded contracts;
+        # NaN is truthy so `x or 0` doesn't catch it — use the NaN-aware helpers.
+        bid = _as_float(row.get("bid"))
+        ask = _as_float(row.get("ask"))
         mid = _option_mid(row)
-        iv  = float(row.get("impliedVolatility") or 0) * 100
+        iv  = _as_float(row.get("impliedVolatility")) * 100
 
-        if mid < 0.01 or iv < 1:
+        if not (mid >= 0.01) or not (iv >= 1):
             return None
 
-        vol = int(row.get("volume",        0) or 0)
-        oi  = int(row.get("openInterest",  0) or 0)
+        vol = _as_int(row.get("volume"))
+        oi  = _as_int(row.get("openInterest"))
         # Unusual Options Activity (UOA): high volume vs open interest suggests
         # informed/institutional positioning. Ratio > 1.0 = today's volume
         # exceeds existing positions; > 2.0 = strongly unusual.
@@ -1313,20 +1523,19 @@ def get_universe(force_mode=None):
                               "Chrome/124.0.0.0 Safari/537.36"}
 
     # ── Source 1: GitHub CSV (maintained S&P 500 list, very reliable) ──
-    if not tickers:
-        try:
-            url = ("https://raw.githubusercontent.com/datasets/s-and-p-500-companies"
-                   "/main/data/constituents.csv")
-            resp = requests.get(url, headers=headers, timeout=10)
-            if resp.status_code == 200:
-                lines = resp.text.strip().split("\n")[1:]   # skip header
-                t = [l.split(",")[0].strip().replace(".", "-")
-                     for l in lines if l.strip()]
-                t = [x for x in t if 1 < len(x) <= 6]
-                tickers.extend(t)
-                print(f"  ✓ S&P 500 (GitHub CSV): {len(t)} tickers")
-        except Exception as e:
-            print(f"  ✗ GitHub CSV: {e}")
+    try:
+        url = ("https://raw.githubusercontent.com/datasets/s-and-p-500-companies"
+               "/main/data/constituents.csv")
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            lines = resp.text.strip().split("\n")[1:]   # skip header
+            t = [l.split(",")[0].strip().replace(".", "-")
+                 for l in lines if l.strip()]
+            t = [x for x in t if 1 <= len(x) <= 6]      # single-letter tickers (C, F, T…) are valid
+            tickers.extend(t)
+            print(f"  ✓ S&P 500 (GitHub CSV): {len(t)} tickers")
+    except Exception as e:
+        print(f"  ✗ GitHub CSV: {e}")
 
     # ── Source 2: Wikipedia (original approach) ──────────────────────
     if not tickers:
@@ -1336,8 +1545,9 @@ def get_universe(force_mode=None):
         ]:
             try:
                 html = requests.get(url, headers=headers, timeout=15).text
-                t = pd.read_html(html)[0][col].tolist()
-                t = [str(x).replace(".", "-") for x in t if isinstance(x, str) and 1 < len(str(x)) <= 6]
+                # pandas 3 treats a bare string as a file path — wrap it
+                t = pd.read_html(io.StringIO(html))[0][col].tolist()
+                t = [str(x).replace(".", "-") for x in t if isinstance(x, str) and 1 <= len(str(x)) <= 6]
                 tickers.extend(t)
                 print(f"  ✓ {label} (Wikipedia): {len(t)} tickers")
             except Exception as e:
@@ -1352,43 +1562,45 @@ def get_universe(force_mode=None):
             "AMD","INTC","QCOM","TXN","MU","AMAT","LRCX","KLAC","MRVL","ADI",
             # Financials
             "JPM","BAC","WFC","GS","MS","C","BLK","SCHW","AXP","COF","USB","PNC",
-            "TFC","BK","STT","ALLY","SYF","DFS","FITB","RF","HBAN","KEY","CFG",
+            "TFC","BK","STT","ALLY","SYF","FITB","RF","HBAN","KEY","CFG",
             # Healthcare
             "UNH","JNJ","LLY","ABBV","MRK","PFE","TMO","ABT","DHR","BMY","AMGN",
             "GILD","VRTX","REGN","ISRG","HUM","CI","CVS","MCK","CAH",
             # Energy
-            "XOM","CVX","COP","SLB","EOG","PXD","MPC","VLO","PSX","OXY","HAL",
-            "DVN","BKR","FANG","APA","MRO","HES","EQT","AR","RRC",
+            "XOM","CVX","COP","SLB","EOG","MPC","VLO","PSX","OXY","HAL",
+            "DVN","BKR","FANG","APA","EQT","AR","RRC",
             # Consumer
             "WMT","COST","TGT","HD","LOW","MCD","SBUX","NKE","YUM","CMG","DRI",
             "AMZN","BKNG","MAR","HLT","MGM","LVS","WYNN","CZR","DKNG","PENN",
             # Communication
-            "META","GOOGL","NFLX","DIS","CMCSA","T","VZ","TMUS","WBD","PARA",
+            "META","GOOGL","NFLX","DIS","CMCSA","T","VZ","TMUS","WBD",
             "SNAP","PINS","SPOT","RBLX","TTD","ZM","MTCH",
             # Industrial
             "GE","HON","CAT","DE","BA","RTX","LMT","NOC","GD","MMM",
             "UPS","FDX","DAL","UAL","AAL","LUV","ALK","JBLU","NCLH","RCL","CCL",
             # Materials
-            "FCX","NEM","AA","X","CLF","MT","NUE","STLD","CMC","HCC",
+            "FCX","NEM","AA","CLF","MT","NUE","STLD","CMC","HCC",
             # EV / Clean energy
             "TSLA","RIVN","LCID","NIO","XPEV","LI","PLUG","FCEL","BLNK","CHPT",
             # Fintech / Crypto
-            "PYPL","SQ","COIN","HOOD","SOFI","AFRM","UPST","LC","NU","MQ",
+            "PYPL","XYZ","COIN","HOOD","SOFI","AFRM","UPST","LC","NU","MQ",   # XYZ = Block (formerly SQ)
             # Retail / E-comm
-            "SHOP","ETSY","EBAY","W","CVNA","KSS","M","JWN","GPS","ANF",
+            "SHOP","ETSY","EBAY","W","CVNA","KSS","M","GAP","ANF",
             # Biotech
-            "MRNA","BNTX","BIIB","ALNY","SGEN","RARE","IONS","ACAD","SAGE","INCY",
+            "MRNA","BNTX","BIIB","ALNY","RARE","IONS","ACAD","SAGE","INCY",
             # REITs / Utilities
             "AMT","PLD","EQIX","CCI","SPG","O","VTR","WELL","EXR","AVB",
             "NEE","DUK","SO","D","AEP","XEL","PCG","EIX","ES","AWK",
             # Small/mid popular
             "PLTR","HOOD","SOFI","MARA","RIOT","SPCE","VALE","BB","NOK","SIRI",
-            "F","GM","FORD","LCID","RIVN","CCL","AAL","NCLH","AMC","GME",
+            "F","GM","LCID","RIVN","CCL","AAL","NCLH","AMC","GME",
         ]
-        tickers = list(dict.fromkeys(tickers))   # dedupe, preserve order
 
-    tickers = list({str(t).replace(".", "-") for t in tickers
-                    if isinstance(t, str) and 1 < len(t) <= 6})
+    # Normalise + dedupe while preserving order (a set here shuffled the
+    # scan order on every run, which made progress logs hard to compare).
+    tickers = list(dict.fromkeys(
+        str(t).replace(".", "-") for t in tickers
+        if isinstance(t, str) and 1 <= len(t) <= 6))
     print(f"  → Universe: {len(tickers)} tickers total")
     return tickers
 
@@ -1397,34 +1609,16 @@ def get_universe(force_mode=None):
 #  PER-TICKER SCAN  (runs four strategies simultaneously)
 # ══════════════════════════════════════════════════════════════
 
-def _yf_history_with_retry(sym, period="1y", retries=3, base_delay=5):
-    """Fetch yfinance history with exponential back-off on rate-limit errors."""
-    import time
-    tkr = yf.Ticker(sym)
-    for attempt in range(retries):
-        try:
-            hist = tkr.history(period=period)
-            return tkr, hist
-        except Exception as e:
-            msg = str(e).lower()
-            if "too many requests" in msg or "rate limit" in msg or "429" in msg:
-                wait = base_delay * (2 ** attempt)
-                print(f"  [Rate limit] {sym} — waiting {wait}s (attempt {attempt+1}/{retries})")
-                time.sleep(wait)
-            else:
-                raise
-    # Final attempt after back-off
-    tkr = yf.Ticker(sym)
-    return tkr, tkr.history(period=period)
-
-
 # Prefetch cache: info / calendar with 24h TTL.
 # These two yfinance calls barely change day-to-day but they're 2 of the 4
 # network calls per ticker per scan. Caching them skips ~50% of repeat
 # prefetch round-trips. Pickle is used because tkr.calendar may be a
 # pandas DataFrame in some yfinance versions.
+# Only the handful of `info` keys the scanner reads are stored — a full
+# tkr.info dict is ~150 keys and was making the cache file several MB.
 _prefetch_cache      = {}
 _prefetch_cache_lock = threading.Lock()
+_INFO_KEYS_USED      = ("shortName", "sector", "shortPercentOfFloat", "shortRatio")
 
 
 def _load_prefetch_cache():
@@ -1455,74 +1649,68 @@ def _save_prefetch_cache():
 
 
 def _cache_get_field(sym, field):
-    """Return cached value for sym[field] if entry is fresh; None otherwise."""
+    """Return cached value for sym[field] if that field is fresh; None otherwise."""
     with _prefetch_cache_lock:
         entry = _prefetch_cache.get(sym)
-    if not entry or field not in entry:
-        return None
-    fetched_at = entry.get("fetched_at")
+        if not entry or field not in entry:
+            return None
+        # Per-field timestamps (a stale `info` must not ride on a fresh `calendar`).
+        fetched_at = (entry.get("fetched_at_by_field") or {}).get(field) or entry.get("fetched_at")
+        value = entry[field]
     if not fetched_at:
         return None
     try:
-        ts = datetime.fromisoformat(fetched_at)
-        age_h = (datetime.now() - ts).total_seconds() / 3600
+        age_h = (datetime.now() - datetime.fromisoformat(fetched_at)).total_seconds() / 3600
         if age_h < PREFETCH_CACHE_TTL_HOURS:
-            return entry[field]
+            return value
     except Exception:
         pass
     return None
 
 
 def _cache_set_field(sym, field, value):
-    """Store value for sym[field] with current timestamp. Safe to call concurrently."""
+    """Store value for sym[field] with a per-field timestamp. Safe to call concurrently."""
     if value is None:
         return
+    if field == "info" and isinstance(value, dict):
+        value = {k: value.get(k) for k in _INFO_KEYS_USED if k in value}
+    now = datetime.now().isoformat()
     with _prefetch_cache_lock:
-        entry = _prefetch_cache.get(sym, {})
+        entry = dict(_prefetch_cache.get(sym, {}))       # copy: never mutate a dict a reader may hold
         entry[field] = value
-        entry["fetched_at"] = datetime.now().isoformat()
+        stamps = dict(entry.get("fetched_at_by_field") or {})
+        stamps[field] = now
+        entry["fetched_at_by_field"] = stamps
+        entry["fetched_at"] = now
         _prefetch_cache[sym] = entry
 
 
-def _prefetch_ticker(sym):
+def _prefetch_ticker(sym, tkr=None):
     """
-    Fetch all per-ticker network data for one symbol in one shot.
-    Fires tkr.info and tkr.calendar concurrently in sub-threads,
-    then fetches the option chain once.
-    Returns dict: {info, calendar, exp, dte, chain} — all may be None on error.
+    Fetch all per-ticker network data for one symbol in one shot:
+    info + calendar (24h disk cache), best expiry and that expiry's option chain.
+    Returns dict: {tkr, info, calendar, exp, dte, chain} — fields may be None on error.
     """
-    result = {"info": None, "calendar": None, "exp": None, "dte": None, "chain": None}
+    result = {"tkr": tkr, "info": None, "calendar": None, "exp": None, "dte": None, "chain": None}
     try:
-        tkr = yf.Ticker(sym)
-        # Fire info and calendar concurrently
-        info_box = [None]
-        cal_box  = [None]
-        def _get_info():
+        tkr = tkr or yf.Ticker(sym)
+        result["tkr"] = tkr
+        info = _cache_get_field(sym, "info")
+        if info is None:
             try:
-                cached = _cache_get_field(sym, "info")
-                if cached is not None:
-                    info_box[0] = cached
-                    return
-                info_box[0] = _yf_call(lambda: tkr.info)
-                _cache_set_field(sym, "info", info_box[0])
-            except Exception:
-                pass
-        def _get_cal():
+                info = _yf_call(lambda: tkr.info) or {}
+                _cache_set_field(sym, "info", info)
+            except Exception as e:
+                print(f"  [Prefetch] {sym} info failed: {e}")
+        result["info"] = info
+        cal = _cache_get_field(sym, "calendar")
+        if cal is None:
             try:
-                cached = _cache_get_field(sym, "calendar")
-                if cached is not None:
-                    cal_box[0] = cached
-                    return
-                cal_box[0] = _yf_call(lambda: tkr.calendar)
-                _cache_set_field(sym, "calendar", cal_box[0])
-            except Exception:
-                pass
-        t1 = threading.Thread(target=_get_info, daemon=True)
-        t2 = threading.Thread(target=_get_cal,  daemon=True)
-        t1.start(); t2.start()
-        t1.join(timeout=15); t2.join(timeout=15)
-        result["info"]     = info_box[0]
-        result["calendar"] = cal_box[0]
+                cal = _yf_call(lambda: tkr.calendar)
+                _cache_set_field(sym, "calendar", cal)
+            except Exception as e:
+                print(f"  [Prefetch] {sym} calendar failed: {e}")
+        result["calendar"] = cal
         # Best expiry + chain
         exp, dte = _best_exp(tkr)
         if exp:
@@ -1530,31 +1718,35 @@ def _prefetch_ticker(sym):
             result["dte"] = dte
             try:
                 result["chain"] = _yf_call(tkr.option_chain, exp)
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as e:
+                print(f"  [Prefetch] {sym} option chain failed: {e}")
+    except Exception as e:
+        print(f"  [Prefetch] {sym} failed: {e}")
     return result
 
 
-def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
+def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch_fn=None):
     """
-    Returns dict with keys: sell_put, buy_call, buy_put, covered_call
-    Each value is either a signal dict or None.
-    pre_hist:      optional pre-fetched DataFrame (from bulk yf.download)
+    Evaluate one ticker for all strategies.
+    Returns {"_signals": {strategy: signal_dict, ...}, "_log": str} when at
+    least one strategy fires, or None (no signal / insufficient data).
+    pre_hist:      optional pre-fetched OHLCV DataFrame (from the bulk download)
     scan_condors:  if True, also evaluate iron condor setups (slow — on demand only)
-    pre_fetch:     optional dict from _prefetch_ticker (avoids extra network calls)
+    pre_fetch:     optional dict from _prefetch_ticker (info/calendar/chain already fetched)
+    prefetch_fn:   optional callable(sym, tkr) → prefetch dict, invoked only AFTER the
+                   indicator gate passes — so network calls happen just for candidates.
     """
-    import time
     try:
-        if pre_hist is not None and not pre_hist.empty and len(pre_hist) >= 60:
+        pf  = pre_fetch or {}
+        tkr = pf.get("tkr")
+        pre_hist = _clean_hist(pre_hist)
+        if pre_hist is not None and len(pre_hist) >= 60:
             hist = pre_hist
-            tkr  = yf.Ticker(sym)   # still needed if pre_fetch not supplied
+            tkr  = tkr or yf.Ticker(sym)
         else:
-            time.sleep(SCAN_DELAY_S)   # throttle only when fetching individually
-            tkr, hist = _yf_history_with_retry(sym)
+            tkr, hist = _fetch_history(sym, "1y")
 
-        if hist.empty or len(hist) < 60:
+        if hist is None or len(hist) < 60:
             return None
 
         price = float(hist["Close"].iloc[-1])
@@ -1609,9 +1801,11 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
 
         # ── HV Rank (options cheapness / expensiveness) ──────
         _rets    = closes.pct_change()
-        _hv30    = _rets.rolling(30).std() * np.sqrt(252) * 100
-        _hv_rank = _hv30.rolling(252).rank(pct=True).iloc[-1] * 100
-        hv_rank  = float(_hv_rank) if not pd.isna(_hv_rank) else 50.0
+        _hv30    = (_rets.rolling(30).std() * np.sqrt(252) * 100).dropna()
+        # Percentile of today's 30-day HV within the available history.
+        # (rolling(252).rank() needed 282 bars; 1y history has ~250, so this
+        # was always NaN and hv_rank was stuck at the neutral 50.)
+        hv_rank  = float((_hv30 < _hv30.iloc[-1]).mean() * 100) if len(_hv30) >= 60 else 50.0
         hv_high  = hv_rank >= 60   # options expensive → favour selling
         hv_low   = hv_rank <= 40   # options cheap → favour buying
 
@@ -1620,7 +1814,10 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         cur_adx = round(float(adx_ser.iloc[-1]), 1) if adx_ser is not None else None
         cur_pdi = round(float(pdi_ser.iloc[-1]), 1) if pdi_ser is not None else None
         cur_ndi = round(float(ndi_ser.iloc[-1]), 1) if ndi_ser is not None else None
-        strong_trend = cur_adx is not None and cur_adx > 30   # raised from 25 → 30
+        # ADX threshold is one of the WFO-optimised parameters; it used to be
+        # hard-coded here so applying an optimizer result changed nothing.
+        _adx_thr     = float(scan_state.get("wfo_params", {}).get("adx_threshold", 30))
+        strong_trend = cur_adx is not None and cur_adx > _adx_thr
 
         # ── ADX mode: ranging vs trending ────────────────────────
         # Ranging (ADX < 20): mean-reversion signals (RSI, BB) are more reliable
@@ -1712,8 +1909,8 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         vol_confirmed, cur_vol, avg_vol = volume_confirmation(hist)
 
         # ── Confluence counters ────────────────────────────────
-        # P/C ratio is fetched after the early-exit gate (options chain call is expensive).
-        # Pre-initialise to False so Python doesn't treat them as unbound locals here.
+        # P/C ratio needs the option chain, which is only fetched after the
+        # early-exit gate — it is added to the counters below once known.
         pc_bullish = False
         pc_bearish = False
 
@@ -1743,8 +1940,8 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         ])
         # Buy Put needs 2+ bearish signals to avoid shorting a roaring bull
         bear_signals = sum([
-            cur_rsi > RSI_OVERBOUGHT,
-            cur_rsi > RSI_OVERBOUGHT and _rng,  # double-weight in ranging
+            cur_rsi > _rsi_ob_thr,              # regime-adjusted (same default as RSI_OVERBOUGHT)
+            cur_rsi > _rsi_ob_thr and _rng,     # double-weight in ranging
             price > cur_bb_u,
             price > cur_bb_u and _rng,
             dc_at_upper,
@@ -1824,14 +2021,20 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         if not any([has_sell_put, has_buy_call, has_buy_put, has_covered_call, has_iron_condor]):
             return None
 
-        # ── Company meta (only fetched when a signal is possible) ─
-        pf = pre_fetch or {}
+        # ── Network data (only fetched when a signal is possible) ─
+        # In the main scan nothing was prefetched: the gate above ran on bulk
+        # OHLCV alone, so info/calendar/option chain are fetched here, only for
+        # the small set of tickers that can actually produce a signal.
+        if not pf and prefetch_fn is not None:
+            pf = prefetch_fn(sym, tkr) or {}
         try:
-            info   = pf.get("info") or _yf_call(lambda: tkr.info)
-            name   = info.get("shortName", sym) if info else sym
-            sector = info.get("sector", "N/A")  if info else "N/A"
+            info = pf.get("info")
+            if info is None:
+                info = _yf_call(lambda: tkr.info) or {}
+            name   = info.get("shortName") or sym
+            sector = info.get("sector") or "N/A"
         except Exception:
-            info, name, sector = None, sym, "N/A"
+            info, name, sector = {}, sym, "N/A"
 
         # ── Short interest ────────────────────────────────────
         short_pct, short_ratio = get_short_interest(tkr, info=info)
@@ -1844,11 +2047,16 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
         pc_ratio = calc_put_call_ratio(tkr, chain=pf_chain, exp=pf_exp)
         pc_bearish = pc_ratio is not None and pc_ratio > 1.2
         pc_bullish = pc_ratio is not None and pc_ratio < 0.7
+        # The P/C ratio was listed in the confluence sums above but was always
+        # False there (not yet fetched); count it now so it reaches the scores.
+        bull_signals += int(pc_bullish)
+        bear_signals += int(pc_bearish)
 
         # ── Next earnings date ────────────────────────────────
+        # "Soon" = the company reports before the option we'd hold expires.
         earnings_dte  = get_next_earnings_dte(tkr, cal=pf.get("calendar"))
         earnings_soon = (earnings_dte is not None and
-                         MIN_DTE <= earnings_dte <= MAX_DTE)
+                         0 <= earnings_dte <= (pf.get("dte") or MAX_DTE))
 
         # ── Chart data (last 60 days) ─────────────────────────
         n = 60
@@ -1967,8 +2175,11 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
 
         results = {}
 
+        # The has_* flags below are the same booleans the early-exit gate used,
+        # so the macro-regime and gap filters can't be skipped by a block that
+        # re-states only part of the condition.
         # ── 1. SELL PUT ───────────────────────────────────────
-        if (oversold or macd_bear) and price <= MAX_PRICE_SELL and not falling_knife:
+        if has_sell_put:
             opt = pick_option(tkr, price, "put", otm_factor=1.0,
                               chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["bid"] >= 0.01:
@@ -1993,8 +2204,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
                                            "mc": mc, "bs": _bs, "bs_misprice": _bs_mp}
 
         # ── 2. BUY CALL ───────────────────────────────────────
-        # green_ok must match the early-exit condition (has_buy_call) exactly
-        if oversold and bull_signals >= _bull_min and not falling_knife and green_ok and trend_ok_buy:
+        if has_buy_call:
             opt = pick_option(tkr, price, "call", otm_factor=1.0,
                               chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["ask"] >= 0.01:
@@ -2018,8 +2228,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
                                         "mc": mc, "bs": _bs, "bs_misprice": _bs_mp}
 
         # ── 3. BUY PUT ────────────────────────────────────────
-        # red_ok must match the early-exit condition (has_buy_put) exactly
-        if (overbought or macd_bear) and bear_signals >= _bear_min and not melt_up and red_ok:
+        if has_buy_put:
             opt = pick_option(tkr, price, "put", otm_factor=1.0,
                               chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["ask"] >= 0.01:
@@ -2041,7 +2250,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
 
         # ── 4. COVERED CALL ───────────────────────────────────
         # Only for cheaper stocks — covered calls require owning 100 shares
-        if price <= MAX_PRICE_SELL:
+        if has_covered_call:
             opt_cc = pick_option(tkr, price, "call", otm_factor=1.05,
                                  chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
         else:
@@ -2065,14 +2274,16 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None):
                                             "mc": mc, "bs": _bs_cc, "bs_misprice": _bs_mp_cc}
 
         # ── 5. IRON CONDOR ────────────────────────────────────
-        # Signal: stock is range-bound, IV is elevated
-        neutral = (not oversold) and (not overbought) and (35 <= cur_rsi <= 65)
+        # Signal: stock is range-bound, IV is elevated.  Only on the dedicated
+        # condor scan (has_iron_condor includes scan_condors) — this block used
+        # to run on every main-scan ticker and cost 5 extra chain downloads each.
         iv_rank_ic = None
-        if neutral:
-            opt_sp = pick_option(tkr, price, "put",  otm_factor=0.95)  # short put
-            opt_lp = pick_option(tkr, price, "put",  otm_factor=0.90)  # long put
-            opt_sc = pick_option(tkr, price, "call", otm_factor=1.05)  # short call
-            opt_lc = pick_option(tkr, price, "call", otm_factor=1.10)  # long call
+        if has_iron_condor:
+            _ic = dict(chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))   # one chain, four legs
+            opt_sp = pick_option(tkr, price, "put",  otm_factor=0.95, **_ic)  # short put
+            opt_lp = pick_option(tkr, price, "put",  otm_factor=0.90, **_ic)  # long put
+            opt_sc = pick_option(tkr, price, "call", otm_factor=1.05, **_ic)  # short call
+            opt_lc = pick_option(tkr, price, "call", otm_factor=1.10, **_ic)  # long call
 
             if opt_sp and opt_lp and opt_sc and opt_lc:
                 net_credit = (opt_sp["bid"] + opt_sc["bid"]) - (opt_lp["ask"] + opt_lc["ask"])
@@ -2390,9 +2601,9 @@ def _option_mid(row_series):
     Never use lastPrice when ask > 0: ask is current, lastPrice can be stale.
     Also returns data_quality flag for the tracker UI.
     """
-    bid        = float(row_series.get("bid")       or 0)
-    ask        = float(row_series.get("ask")       or 0)
-    last_price = float(row_series.get("lastPrice") or 0)
+    bid        = _as_float(row_series.get("bid"))
+    ask        = _as_float(row_series.get("ask"))
+    last_price = _as_float(row_series.get("lastPrice"))
 
     if ask > 0 and bid > 0 and bid >= ask * 0.5:
         # Both quotes fresh — true mid
@@ -2411,9 +2622,9 @@ def _option_mid(row_series):
 
 def _option_price_detail(row_series):
     """Return (mid, bid, ask, last_price, quality_label) for tracker display."""
-    bid        = float(row_series.get("bid")       or 0)
-    ask        = float(row_series.get("ask")       or 0)
-    last_price = float(row_series.get("lastPrice") or 0)
+    bid        = _as_float(row_series.get("bid"))
+    ask        = _as_float(row_series.get("ask"))
+    last_price = _as_float(row_series.get("lastPrice"))
     mid        = _option_mid(row_series)
 
     if ask > 0 and bid > 0 and bid >= ask * 0.5:
@@ -2430,119 +2641,121 @@ def _option_price_detail(row_series):
     return mid, bid, ask, last_price, quality
 
 
-def compute_volume_profile(hist, lookback_days=60, n_bins=20):
-    """
-    Compute volume profile over the last `lookback_days` of daily bars.
-    Returns dict: {poc, value_area_high, value_area_low, current_position,
-                   bins, current_price}
-
-    POC (Point of Control) = price bin with the most accumulated volume.
-    Value Area = price range containing 70% of total volume (top of profile).
-
-    Use POC as a dynamic support/resistance level. Price above POC = "value
-    in this range is bullish-accepted." Below = bearish-accepted.
-    """
-    if hist is None or hist.empty:
-        return None
-    h = hist.copy()
-    if h.index.tz is not None:
-        h.index = h.index.tz_localize(None)
-    h = h.tail(lookback_days)
-    if len(h) < 10:
-        return None
-    typical_price = (h["High"] + h["Low"] + h["Close"]) / 3.0
-    volume        = h["Volume"].astype(float)
-    pmin, pmax    = float(typical_price.min()), float(typical_price.max())
-    if pmax <= pmin:
-        return None
-    bin_width = (pmax - pmin) / n_bins
-    bins = []
-    for i in range(n_bins):
-        lo = pmin + i * bin_width
-        hi = lo + bin_width
-        in_bin = ((typical_price >= lo) & (typical_price < hi)) if i < n_bins - 1 \
-                 else ((typical_price >= lo) & (typical_price <= hi))
-        bins.append({"low": round(lo, 2), "high": round(hi, 2),
-                     "mid": round((lo + hi) / 2, 2),
-                     "volume": float(volume[in_bin].sum())})
-    total_vol  = sum(b["volume"] for b in bins)
-    if total_vol <= 0:
-        return None
-    poc_bin    = max(bins, key=lambda b: b["volume"])
-    poc        = poc_bin["mid"]
-    # Value area: expand around POC until cumulative volume >= 70%
-    poc_idx    = bins.index(poc_bin)
-    target_vol = total_vol * 0.70
-    accum      = poc_bin["volume"]
-    lo_i, hi_i = poc_idx, poc_idx
-    while accum < target_vol and (lo_i > 0 or hi_i < len(bins) - 1):
-        lo_next = bins[lo_i - 1]["volume"] if lo_i > 0 else 0
-        hi_next = bins[hi_i + 1]["volume"] if hi_i < len(bins) - 1 else 0
-        if lo_next >= hi_next and lo_i > 0:
-            lo_i -= 1
-            accum += bins[lo_i]["volume"]
-        elif hi_i < len(bins) - 1:
-            hi_i += 1
-            accum += bins[hi_i]["volume"]
-        else:
-            break
-    val          = bins[lo_i]["low"]
-    vah          = bins[hi_i]["high"]
-    current_price = float(h["Close"].iloc[-1])
-    if current_price > vah:
-        position = "above_value"
-    elif current_price < val:
-        position = "below_value"
-    else:
-        position = "in_value"
-    return {
-        "poc":              round(poc, 2),
-        "value_area_high":  round(vah, 2),
-        "value_area_low":   round(val, 2),
-        "current_price":    round(current_price, 2),
-        "current_position": position,
-        "deviation_from_poc_pct": round((current_price - poc) / poc * 100, 2) if poc > 0 else 0.0,
-    }
+# ── Position P&L helpers (shared by tracker, refresh loop and API) ─────
+# Premium SELLERS profit when the option gets cheaper.  Every P&L site used
+# to compute (current - entry) regardless of strategy, so a short put that
+# decayed from 1.00 → 0.85 (a win) showed -15% and fired the stop loss.
+SHORT_PREMIUM_STRATS = {"sell_put", "covered_call", "iron_condor"}
+PRICE_EXIT_MARKERS   = ("🎯", "🛑", "📉 Trailing", "⏳")   # reasons produced by _price_exit_check
 
 
-def compute_anchored_vwap(hist, anchor_date_str):
-    """
-    Compute Anchored VWAP from anchor_date forward using daily bars.
-    AVWAP = sum(typical_price * volume) / sum(volume) since the anchor.
+def _position_pnl(strategy, entry_price, current_price, contracts=1):
+    """Return (pct_change, dollar_change) for a position, or (None, None)."""
+    entry = _as_float(entry_price)
+    cur   = _as_float(current_price)
+    if entry <= 0 or cur <= 0:
+        return None, None
+    sign = -1.0 if strategy in SHORT_PREMIUM_STRATS else 1.0
+    n    = max(1, _as_int(contracts, 1))
+    pct  = sign * (cur - entry) / entry * 100
+    usd  = sign * (cur - entry) * 100 * n
+    return round(pct, 1), round(usd, 2)
 
-    Returns dict: {avwap, anchor_date, n_bars, current_price, deviation_pct}
-    or None if not enough data.
 
-    Typical use: anchor from a tracked position's signal_date to see if price
-    is above/below the cohort's average cost basis since entry.
-    """
+def _trading_days_since(iso_ts):
+    """Whole NYSE trading days (Mon-Fri) between an ISO timestamp and today."""
     try:
-        anchor_dt = datetime.strptime(anchor_date_str[:10], "%Y-%m-%d").date()
+        start = datetime.fromisoformat(iso_ts).date()
+        return int(np.busday_count(start, date.today()))
     except Exception:
-        return None
-    if hist is None or hist.empty:
-        return None
-    h = hist.copy()
-    if h.index.tz is not None:
-        h.index = h.index.tz_localize(None)
-    h = h[h.index.date >= anchor_dt]
-    if len(h) < 1:
-        return None
-    typical_price = (h["High"] + h["Low"] + h["Close"]) / 3.0
-    pv            = typical_price * h["Volume"]
-    total_vol     = h["Volume"].sum()
-    if total_vol <= 0:
-        return None
-    avwap         = float(pv.sum() / total_vol)
-    current_price = float(h["Close"].iloc[-1])
-    deviation_pct = (current_price - avwap) / avwap * 100 if avwap > 0 else 0.0
-    return {
-        "avwap":          round(avwap, 2),
-        "anchor_date":    anchor_date_str[:10],
-        "n_bars":         int(len(h)),
-        "current_price":  round(current_price, 2),
-        "deviation_pct":  round(deviation_pct, 2),
-    }
+        return 0
+
+
+def _fetch_option_quote(sym, exp, strike, otype, tkr=None, chain=None):
+    """
+    Live quote for one contract → (mid, bid, ask, quality, chain).
+    quality is one of live / stale_bid / ask_only / last_only / unavailable.
+    Iron condors ("condor") have no single contract to quote — the net
+    credit can only be entered manually, so they come back unavailable.
+    Rows with IV > 300% are rejected as misaligned yfinance data.
+    """
+    if not (sym and exp and strike) or otype not in ("call", "put"):
+        return 0.0, 0.0, 0.0, "unavailable", chain
+    try:
+        if chain is None:
+            tkr   = tkr or yf.Ticker(sym)
+            chain = _yf_call(tkr.option_chain, exp)
+        opts = chain.calls if otype == "call" else chain.puts
+        row  = opts[(opts["strike"] - float(strike)).abs() < 0.01]
+        if row.empty:
+            return 0.0, 0.0, 0.0, "unavailable", chain
+        r = row.iloc[0]
+        if _as_float(r.get("impliedVolatility")) > 3.0:
+            print(f"[PriceCheck] {sym} {exp} {strike}{otype[0].upper()} rejected (IV > 300%, misaligned row)")
+            return 0.0, 0.0, 0.0, "unavailable", chain
+        mid, bid, ask, _, quality = _option_price_detail(r)
+        return mid, bid, ask, quality, chain
+    except Exception as e:
+        print(f"[PriceCheck] {sym} {exp} {strike} quote failed: {e}")
+        return 0.0, 0.0, 0.0, "unavailable", chain
+
+
+def _price_exit_check(pct_change, prev_peak, tracked_at):
+    """
+    Evaluate the price-based exits for an open position:
+    profit target, stop loss, trailing stop, stagnation.
+    Returns (triggered, reasons, peak_pct).  Pure function — no I/O.
+    """
+    reasons   = []
+    triggered = False
+    if pct_change >= SELL_PROFIT_TARGET:
+        triggered = True
+        reasons.append(f"🎯 Profit target hit: +{pct_change:.1f}% (target +{SELL_PROFIT_TARGET}%)")
+    elif pct_change <= -SELL_STOP_LOSS:
+        triggered = True
+        reasons.append(f"🛑 Stop loss hit: {pct_change:.1f}% (limit -{SELL_STOP_LOSS}%)")
+
+    # Trailing stop — once P&L has reached TRAIL_ACTIVATE_PCT, lock in (peak − TRAIL_LOCK_PCT)
+    peak_pct = max(_as_float(prev_peak, -999.0), pct_change)
+    if peak_pct >= TRAIL_ACTIVATE_PCT and not triggered:
+        trailing_stop = peak_pct - TRAIL_LOCK_PCT
+        if pct_change <= trailing_stop:
+            triggered = True
+            reasons.append(f"📉 Trailing stop: dropped to {pct_change:+.1f}% from peak +{peak_pct:.1f}% "
+                           f"(trail lock at {trailing_stop:+.1f}%)")
+
+    # Stagnation — theta bleeds long options; flat after N trading days → redeploy
+    if tracked_at and not triggered:
+        days_held = _trading_days_since(tracked_at)
+        if days_held >= STAGNANT_DAYS and abs(pct_change) <= STAGNANT_RANGE:
+            triggered = True
+            reasons.append(f"⏳ Stagnation exit: held {days_held} trading days with P&L {pct_change:+.1f}% "
+                           f"(within ±{STAGNANT_RANGE}%) — theta bleed, exit and redeploy")
+    return triggered, reasons, round(peak_pct, 2)
+
+
+def _apply_price_update(position, sig, mid, bid, ask, quality):
+    """
+    Merge a fresh option quote into a position's last_signal dict IN PLACE:
+    updates quote fields, P&L, peak and the price-based exit reasons while
+    leaving the RSI/BB reasons from the last full check untouched.
+    """
+    sig["current_option_mid"] = round(mid, 3) if mid > 0 else None
+    sig["current_bid"]        = round(bid, 3) if bid > 0 else None
+    sig["current_ask"]        = round(ask, 3) if ask > 0 else None
+    sig["price_quality"]      = quality
+    entry = position.get("entry_price") or (position.get("option") or {}).get("mid")
+    pct, usd = _position_pnl(position.get("strategy", ""), entry, mid, position.get("contracts", 1))
+    if pct is None:
+        return sig
+    sig["pct_change"]    = pct
+    sig["dollar_change"] = usd
+    triggered, reasons, peak = _price_exit_check(pct, sig.get("peak_pct_change"), position.get("tracked_at"))
+    sig["peak_pct_change"] = peak
+    kept = [r for r in (sig.get("reasons") or []) if not r.startswith(PRICE_EXIT_MARKERS)]
+    sig["reasons"]   = kept + reasons
+    sig["triggered"] = bool(kept) and bool(sig.get("triggered")) or triggered
+    return sig
 
 
 def get_portfolio_greeks():
@@ -2557,41 +2770,57 @@ def get_portfolio_greeks():
     On a 'bad day' (sharp SPY drop), a portfolio with high positive net delta
     loses big. Tracking this helps spot concentration before it bites.
     """
-    try:
+    with track_lock:
         positions = load_tracked()
-    except Exception:
-        return {"net_delta": 0.0, "by_position": [], "n_positions": 0, "warning": None}
     if not positions:
         return {"net_delta": 0.0, "by_position": [], "n_positions": 0, "warning": None}
 
-    today        = datetime.now()
+    today        = date.today()
     by_pos       = []
     net_delta    = 0.0
     for p in positions:
         try:
             opt        = p.get("option") or {}
             strat      = p.get("strategy", "")
-            strike     = float(opt.get("strike") or 0)
+            contracts  = max(1, _as_int(p.get("contracts"), 1))
             exp_str    = opt.get("expiration") or ""
-            opt_type   = opt.get("type", "").lower()        # "call" or "put"
-            iv         = float(opt.get("iv") or 0) / 100.0  # iv stored as % (e.g., 33.1 -> 0.331)
+            iv         = _as_float(opt.get("iv")) / 100.0  # iv stored as % (e.g., 33.1 -> 0.331)
             if iv < 0.05:
                 iv = 0.30  # fallback for missing IV
-            cur_price  = float((p.get("last_signal") or {}).get("current_price") or p.get("price") or 0)
-            if not (strike > 0 and exp_str and opt_type and cur_price > 0):
+            cur_price  = _as_float((p.get("last_signal") or {}).get("current_price")) or _as_float(p.get("price"))
+            if not (exp_str and cur_price > 0):
                 continue
-            exp_dt     = datetime.strptime(exp_str[:10], "%Y-%m-%d")
-            T          = max((exp_dt - today).days / 365.0, 0.001)
-            bs         = black_scholes(cur_price, strike, T, RISK_FREE_RATE, iv, opt_type)
-            if not bs:
-                continue
-            delta      = float(bs.get("delta") or 0)
-            # Long buy_call/buy_put: delta as-is.
-            # Short sell_put/covered_call: flip sign.
-            if strat in ("sell_put", "covered_call"):
-                delta = -delta
+            exp_dt = datetime.strptime(exp_str[:10], "%Y-%m-%d").date()
+            # Expiry is at the close of the expiration day → count it as a full day
+            T      = max((exp_dt - today).days + 1, 0.5) / 365.0
+
+            def _delta(strike, otype):
+                bs = black_scholes(cur_price, strike, T, RISK_FREE_RATE, iv, otype)
+                return float(bs.get("delta") or 0) if bs else None
+
+            if strat == "iron_condor":
+                legs = p.get("legs") or {}
+                ds = [(_delta(_as_float(legs.get("short_put",  {}).get("strike")), "put"),  -1),
+                      (_delta(_as_float(legs.get("long_put",   {}).get("strike")), "put"),  +1),
+                      (_delta(_as_float(legs.get("short_call", {}).get("strike")), "call"), -1),
+                      (_delta(_as_float(legs.get("long_call",  {}).get("strike")), "call"), +1)]
+                if any(d is None for d, _ in ds):
+                    continue
+                delta = sum(d * s for d, s in ds)
+            else:
+                strike   = _as_float(opt.get("strike"))
+                opt_type = (opt.get("type") or "").lower()
+                if not (strike > 0 and opt_type in ("call", "put")):
+                    continue
+                delta = _delta(strike, opt_type)
+                if delta is None:
+                    continue
+                if strat == "sell_put":
+                    delta = -delta                       # short the put
+                elif strat == "covered_call":
+                    delta = 1.0 - delta                  # 100 long shares + short call
             # 1 contract = 100 shares of underlying exposure
-            shares_eq  = delta * 100
+            shares_eq  = delta * 100 * contracts
             net_delta += shares_eq
             by_pos.append({
                 "id":         p.get("id"),
@@ -2630,13 +2859,8 @@ def get_performance_stats():
       max_drawdown: worst peak-to-trough $ loss across the equity curve
       max_drawdown_pct: same as % of peak equity
     """
-    try:
-        if not os.path.exists(PERFORMANCE_FILE):
-            return {"n_trades": 0, "note": "No closed trades yet"}
-        with open(PERFORMANCE_FILE) as f:
-            perf = json.load(f)
-    except Exception as e:
-        return {"n_trades": 0, "error": str(e)}
+    with _perf_lock:
+        perf = load_performance()
 
     if not perf:
         return {"n_trades": 0, "note": "No closed trades yet"}
@@ -2661,12 +2885,11 @@ def get_performance_stats():
     # Profit factor (ratio of wins to losses by magnitude)
     profit_factor = total_wins / abs(total_losses) if total_losses < 0 else float("inf") if total_wins > 0 else 0.0
 
-    # Sortino — downside-only deviation (replaces Sharpe for asymmetric returns)
+    # Sortino — mean / downside deviation, where downside deviation is
+    # sqrt(mean(min(p, 0)^2)) over ALL trades (not just the losers).
     mean_pnl = total_pnl / n if n else 0.0
-    downside = [p - 0 for p in pnls if p < 0]   # only negative returns count toward downside vol
-    if len(downside) >= 2:
-        d_var = sum((d - 0) ** 2 for d in downside) / len(downside)
-        d_std = d_var ** 0.5
+    if n >= 2:
+        d_std   = (sum(min(p, 0.0) ** 2 for p in pnls) / n) ** 0.5
         sortino = mean_pnl / d_std if d_std > 0 else 0.0
     else:
         sortino = 0.0
@@ -2714,10 +2937,8 @@ def get_portfolio_risk():
       pnl_stdev: dispersion of current P&L% across positions (high = mixed bag)
       pnl_min / pnl_max: worst and best current P&L%
     """
-    try:
+    with track_lock:
         positions = load_tracked()
-    except Exception:
-        return {"n_positions": 0}
     if not positions:
         return {"n_positions": 0}
 
@@ -2725,18 +2946,25 @@ def get_portfolio_risk():
     by_ticker     = []
     pnl_pcts      = []
     for p in positions:
-        entry      = float(p.get("entry_price") or 0)
-        contracts  = int(p.get("contracts") or 1)
+        entry      = _as_float(p.get("entry_price"))
+        contracts  = max(1, _as_int(p.get("contracts"), 1))
         strategy   = p.get("strategy", "")
-        # Long-premium positions: max loss = entry × 100 × contracts
-        # Short-premium positions (sell_put cash-secured): max loss = strike × 100 × contracts
+        opt        = p.get("option") or {}
+        strike     = _as_float(opt.get("strike"))
+        # Long-premium positions: max loss = premium paid
+        # Cash-secured put:        max loss = strike × 100 (stock to zero) − premium received
+        # Covered call:            max loss = the shares going to zero (strike as proxy) − premium
+        # Iron condor:             max loss = wider wing width − net credit
         if strategy in ("buy_call", "buy_put"):
             max_loss = entry * 100 * contracts
         elif strategy == "sell_put":
-            strike   = float((p.get("option") or {}).get("strike") or 0)
-            max_loss = strike * 100 * contracts
+            max_loss = max(strike - entry, 0) * 100 * contracts
         elif strategy == "covered_call":
-            max_loss = 0.0   # capped — you already own the shares
+            cur_px   = _as_float((p.get("last_signal") or {}).get("current_price")) or _as_float(p.get("price")) or strike
+            max_loss = max(cur_px - entry, 0) * 100 * contracts
+        elif strategy == "iron_condor":
+            width    = max(_as_float(p.get("put_width")), _as_float(p.get("call_width")))
+            max_loss = max(width - entry, 0) * 100 * contracts if width > 0 else entry * 100 * contracts
         else:
             max_loss = entry * 100 * contracts
 
@@ -2761,10 +2989,15 @@ def get_portfolio_risk():
     else:
         pnl_std  = 0.0
 
+    # Stop-loss exposure: SELL_STOP_LOSS is a % of the option premium, so apply
+    # it to premium at risk (entry × 100 × contracts), not to strike collateral.
+    premium_at_risk = sum(_as_float(p.get("entry_price")) * 100 * max(1, _as_int(p.get("contracts"), 1))
+                          for p in positions)
+
     return {
         "n_positions":              len(positions),
         "total_max_loss":           round(total_exposure, 2),
-        "stop_loss_exposure":       round(total_exposure * (SELL_STOP_LOSS / 100.0), 2),
+        "stop_loss_exposure":       round(premium_at_risk * (SELL_STOP_LOSS / 100.0), 2),
         "largest_position_ticker":  largest["ticker"]   if largest else None,
         "largest_position":         largest["max_loss"] if largest else 0,
         "largest_concentration_pct": round(largest["max_loss"] / total_exposure * 100, 1) if largest and total_exposure > 0 else 0,
@@ -2776,18 +3009,14 @@ def get_portfolio_risk():
 
 
 def load_tracked():
-    if os.path.exists(TRACK_FILE):
-        try:
-            with open(TRACK_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return []
+    """Callers hold track_lock."""
+    data = _load_json(TRACK_FILE, [], "Track")
+    return data if isinstance(data, list) else []
 
 
 def save_tracked(positions):
-    with open(TRACK_FILE, "w") as f:
-        json.dump(positions, f, indent=2, default=str)
+    """Callers hold track_lock."""
+    _atomic_json_write(TRACK_FILE, positions)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -2797,17 +3026,13 @@ def save_tracked(positions):
 _perf_lock = threading.Lock()
 
 def load_performance():
-    if os.path.exists(PERFORMANCE_FILE):
-        try:
-            with open(PERFORMANCE_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return []
+    """Callers hold _perf_lock."""
+    data = _load_json(PERFORMANCE_FILE, [], "Perf")
+    return data if isinstance(data, list) else []
 
 def save_performance(trades):
-    with open(PERFORMANCE_FILE, "w") as f:
-        json.dump(trades, f, indent=2, default=str)
+    """Callers hold _perf_lock."""
+    _atomic_json_write(PERFORMANCE_FILE, trades)
 
 def calc_performance_summary(trades):
     """Compute aggregate stats across all closed trades."""
@@ -2819,8 +3044,8 @@ def calc_performance_summary(trades):
             "best_trade": 0, "worst_trade": 0,
             "avg_pnl_pct": 0,
         }
-    pnls     = [t["pnl_total"]   for t in trades]
-    pnl_pcts = [t["pnl_pct"]     for t in trades]
+    pnls     = [_as_float(t.get("pnl_total")) for t in trades]
+    pnl_pcts = [_as_float(t.get("pnl_pct"))   for t in trades]
     winners  = [p for p in pnl_pcts if p > 0]
     losers   = [p for p in pnl_pcts if p <= 0]
     # Total P&L % = total dollar gain / total capital deployed
@@ -2861,12 +3086,12 @@ def get_sell_signal(position: dict) -> dict:
     """
     sym      = position.get("ticker", "")
     strategy = position.get("strategy", "")
-    entry    = position.get("option", {})
-    entry_price = float(position.get("entry_price") or entry.get("mid") or entry.get("ask") or 0)
+    entry    = position.get("option") or {}
+    entry_price = _as_float(position.get("entry_price")) or _as_float(entry.get("mid")) or _as_float(entry.get("ask"))
 
     # Live price override — user-supplied price when yfinance data is stale
-    _live_override   = position.get("live_price_override")
-    _override_active = _live_override is not None and float(_live_override) > 0
+    _live_override   = _as_float(position.get("live_price_override"))
+    _override_active = _live_override > 0
 
     result = {
         "triggered":          False,
@@ -2877,9 +3102,8 @@ def get_sell_signal(position: dict) -> dict:
     }
 
     try:
-        tkr  = yf.Ticker(sym)
-        hist = _yf_call(tkr.history, period="3mo")
-        if hist is None or hist.empty or len(hist) < 30:
+        tkr, hist = _fetch_history(sym, "3mo")
+        if hist is None or len(hist) < 30:
             return result
 
         closes  = hist["Close"]
@@ -2892,6 +3116,18 @@ def get_sell_signal(position: dict) -> dict:
 
         result["current_rsi"]   = round(cur_rsi, 1)
         result["current_price"] = round(price, 3)
+
+        # ── Expired contract ───────────────────────────────────
+        # There is nothing left to manage once the option has expired: flag
+        # it so the card says so instead of showing an unpriceable position.
+        _exp = str(entry.get("expiration") or "")[:10]
+        try:
+            if _exp and date.fromisoformat(_exp) < date.today():
+                result["expired"]   = True
+                result["triggered"] = True
+                result["reasons"].append(f"⌛ Option expired {_exp} — close & log this position")
+        except ValueError:
+            pass
 
         # ── RSI momentum / trajectory ──────────────────────────
         # slope = average RSI change per day over last 3 sessions
@@ -2984,43 +3220,8 @@ def get_sell_signal(position: dict) -> dict:
         result["momentum_label"]  = momentum_label
 
         # ── Fetch current option price ─────────────────────────
-        current_mid     = 0.0
-        current_bid_val = 0.0
-        current_ask_val = 0.0
-        price_quality   = "unavailable"
-        try:
-            opt    = position.get("option", {})
-            exp    = opt.get("expiration")
-            strike = opt.get("strike")
-            otype  = opt.get("type", "call")
-            if exp and strike:
-                opt_tkr = yf.Ticker(sym)
-                chain   = _yf_call(opt_tkr.option_chain, exp)
-                opts    = chain.calls if otype == "call" else chain.puts
-                row     = opts[abs(opts["strike"] - strike) < 0.01]
-                if not row.empty:
-                    row_data                         = row.iloc[0]
-                    current_mid, current_bid_val, \
-                    current_ask_val, _, price_quality = _option_price_detail(row_data)
-
-                    # ── Sanity-check for grossly corrupt yfinance data ──
-                    # Only reject if impliedVolatility > 300% (decimal 3.0) —
-                    # a sure sign the row's price columns belong to a different
-                    # strike. We intentionally don't cap by price here because
-                    # high-IV stocks and longer-dated options can legitimately
-                    # exceed any fixed percentage of stock price.
-                    _row_iv = float(row_data.get("impliedVolatility") or 0)
-                    if _row_iv > 3.0:
-                        print(
-                            f"[PriceCheck] {sym} strike={strike} mid={current_mid:.3f} "
-                            f"iv={_row_iv:.2f} — rejected (IV > 300%, likely misaligned row)"
-                        )
-                        current_mid     = 0.0
-                        current_bid_val = 0.0
-                        current_ask_val = 0.0
-                        price_quality   = "unavailable"
-        except Exception:
-            pass
+        current_mid, current_bid_val, current_ask_val, price_quality, _ = _fetch_option_quote(
+            sym, entry.get("expiration"), entry.get("strike"), (entry.get("type") or "call"), tkr=tkr)
 
         # ── Apply live price override when yfinance is stale ───
         # If the user manually entered a price AND yfinance didn't return a
@@ -3033,56 +3234,30 @@ def get_sell_signal(position: dict) -> dict:
                 result["_clear_live_override"] = True
             else:
                 # Use manual price in place of stale yfinance data
-                current_mid   = float(_live_override)
+                current_mid   = _live_override
                 price_quality = "manual"
 
-        # ── Profit / loss check (if we have entry & current price) ──
+        # ── Profit / loss + price-based exits (strategy-direction aware) ──
         result["current_option_mid"] = round(current_mid, 3) if current_mid > 0 else None
         result["current_bid"]        = round(current_bid_val, 3) if current_bid_val > 0 else None
         result["current_ask"]        = round(current_ask_val, 3) if current_ask_val > 0 else None
         result["price_quality"]      = price_quality
-        if entry_price > 0 and current_mid > 0:
-            pct_change = (current_mid - entry_price) / entry_price * 100
-            dollar_change = (current_mid - entry_price) * 100   # per contract
-            result["pct_change"]    = round(pct_change, 1)
-            result["dollar_change"] = round(dollar_change, 2)
-            if pct_change >= SELL_PROFIT_TARGET:
-                result["triggered"] = True
-                result["reasons"].append(
-                    f"🎯 Profit target hit: +{pct_change:.1f}% (target +{SELL_PROFIT_TARGET}%)"
-                )
-            elif pct_change <= -SELL_STOP_LOSS:
-                result["triggered"] = True
-                result["reasons"].append(
-                    f"🛑 Stop loss hit: {pct_change:.1f}% (limit -{SELL_STOP_LOSS}%)"
-                )
-
-            # ── Trailing stop — protects gains once profit is meaningful ──
-            prev_peak = (position.get("last_signal") or {}).get("peak_pct_change", -999.0)
-            peak_pct  = max(prev_peak, pct_change)
-            result["peak_pct_change"] = round(peak_pct, 2)
-            if peak_pct >= TRAIL_ACTIVATE_PCT and not result["triggered"]:
-                trailing_stop = peak_pct - TRAIL_LOCK_PCT
-                if pct_change <= trailing_stop:
-                    result["triggered"] = True
-                    result["reasons"].append(
-                        f"📉 Trailing stop: dropped to {pct_change:+.1f}% from peak +{peak_pct:.1f}% "
-                        f"(trail lock at {trailing_stop:+.1f}%)"
-                    )
-
-            # ── Stagnation exit — close positions bleeding theta with no move ──
-            try:
-                tracked_at = position.get("tracked_at")
-                if tracked_at and not result["triggered"]:
-                    days_held = (datetime.now() - datetime.fromisoformat(tracked_at)).days
-                    if days_held >= STAGNANT_DAYS and abs(pct_change) <= STAGNANT_RANGE:
-                        result["triggered"] = True
-                        result["reasons"].append(
-                            f"⏳ Stagnation exit: held {days_held}d with P&L {pct_change:+.1f}% "
-                            f"(within ±{STAGNANT_RANGE}%) — theta bleed, exit and redeploy"
-                        )
-            except Exception:
-                pass
+        prev_sig = position.get("last_signal") or {}
+        pct_change, dollar_change = _position_pnl(strategy, entry_price, current_mid, position.get("contracts", 1))
+        if pct_change is not None:
+            result["pct_change"]    = pct_change
+            result["dollar_change"] = dollar_change
+            trig, reasons, peak = _price_exit_check(pct_change, prev_sig.get("peak_pct_change"),
+                                                     position.get("tracked_at"))
+            result["peak_pct_change"] = peak
+            result["reasons"].extend(reasons)
+            result["triggered"] = result["triggered"] or trig
+        else:
+            # No quote this round — carry the previous P&L/peak forward so the
+            # trailing stop isn't reset by one failed chain fetch.
+            for k in ("pct_change", "dollar_change", "peak_pct_change"):
+                if prev_sig.get(k) is not None:
+                    result[k] = prev_sig[k]
 
         # ── RSI / BB reversal checks ───────────────────────────
         if strategy == "buy_call":
@@ -3098,9 +3273,7 @@ def get_sell_signal(position: dict) -> dict:
                     f"📈 Price ${price:.2f} hit upper Bollinger Band ${cur_bb_u:.2f} — extended, take profit"
                 )
             # Signal still valid while RSI is below the exit threshold (bounce in progress)
-            # Goes False only if RSI fully reaches the sell target (thesis consumed) or
-            # stock reverses back into overbought (bounce failed and reversed)
-            result["signal_still_valid"] = cur_rsi < SELL_RSI_BULL_TARGET and cur_rsi < RSI_OVERBOUGHT
+            result["signal_still_valid"] = cur_rsi < SELL_RSI_BULL_TARGET
 
         elif strategy == "buy_put":
             # Entered on overbought pullback — exit when RSI reaches neutral or price hits lower BB
@@ -3115,7 +3288,7 @@ def get_sell_signal(position: dict) -> dict:
                     f"📉 Price ${price:.2f} hit lower Bollinger Band ${cur_bb_l:.2f} — extended, take profit"
                 )
             # Still valid while RSI is above the exit threshold (pullback in progress)
-            result["signal_still_valid"] = cur_rsi > SELL_RSI_BEAR_TARGET and cur_rsi > RSI_OVERSOLD
+            result["signal_still_valid"] = cur_rsi > SELL_RSI_BEAR_TARGET
 
         elif strategy == "sell_put":
             # Sold put for premium — warn if stock breaks below lower BB (put at risk)
@@ -3126,9 +3299,7 @@ def get_sell_signal(position: dict) -> dict:
                 )
             # Good outcome: RSI has recovered, put is near worthless or at max profit
             if cur_rsi > 55:
-                result["reasons"].append(
-                    f"✅ RSI {cur_rsi:.1f} — stock recovered, put likely near max profit"
-                )
+                result["note"] = f"✅ RSI {cur_rsi:.1f} — stock recovered, put likely near max profit"
             # Still valid while stock is above the lower band
             result["signal_still_valid"] = price >= cur_bb_l
 
@@ -3156,8 +3327,9 @@ def get_sell_signal(position: dict) -> dict:
                     )
             result["signal_still_valid"] = sp < price < sc if sp and sc else True
 
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[Track] {sym} sell-signal check failed: {e}")
+        result["error"] = str(e)
 
     return result
 
@@ -3170,7 +3342,6 @@ def _run_tracked_check():
     back — so any edits the user makes during the check (entry price, strike,
     etc.) are never overwritten by stale data.
     """
-    import time as _time
     with track_lock:
         snapshot = load_tracked()
     if not snapshot:
@@ -3214,18 +3385,23 @@ def _run_tracked_check():
                         p["last_signal"] = sig
                         break
                 save_tracked(positions)
-        except Exception:
-            pass
-        _time.sleep(2)   # space out option chain fetches to avoid rate limits
+        except Exception as e:
+            print(f"[Track] {pos.get('ticker')} check failed: {e}")
+        time.sleep(2)   # space out option chain fetches to avoid rate limits
     print(f"[Track] Done checking tracked positions.")
 
 
 def _schedule_track_checker():
     """Re-run the sell signal checker every TRACK_CHECK_MINS minutes."""
-    _run_tracked_check()
-    t = threading.Timer(TRACK_CHECK_MINS * 60, _schedule_track_checker)
-    t.daemon = True
-    t.start()
+    try:
+        _run_tracked_check()
+    except Exception as e:
+        print(f"[Track] Checker crashed: {e}")
+    finally:
+        # Always re-arm — an exception above used to stop the scheduler for good.
+        t = threading.Timer(TRACK_CHECK_MINS * 60, _schedule_track_checker)
+        t.daemon = True
+        t.start()
 
 
 def _refresh_tracked_prices():
@@ -3236,46 +3412,33 @@ def _refresh_tracked_prices():
     re-run the full RSI/BB sell-signal analysis (that stays on the 6h cycle).
     Uses the same safe per-position save pattern to avoid race conditions.
     """
-    import time as _time
     while True:
-        _time.sleep(TRACK_PRICE_REFRESH_MINS * 60)
+        time.sleep(TRACK_PRICE_REFRESH_MINS * 60)
         try:
             with track_lock:
                 positions = load_tracked()
             if not positions:
                 continue
 
+            chains = {}   # (ticker, expiration) → chain, so N positions on one expiry cost one call
             for pos in positions:
                 opt    = pos.get("option") or {}
                 exp    = opt.get("expiration")
                 strike = opt.get("strike")
                 otype  = opt.get("type", "call")
                 sym    = pos.get("ticker", "")
-                if not (exp and strike and sym):
+                if not (exp and strike and sym) or otype not in ("call", "put"):
                     continue
 
                 # Skip if user has an active manual price override
-                if pos.get("live_price_override") is not None:
+                if _as_float(pos.get("live_price_override")) > 0:
                     continue
 
-                snap_strike = strike
-                snap_exp    = exp
-                snap_type   = otype
-
-                try:
-                    tkr   = yf.Ticker(sym)
-                    chain = _yf_call(tkr.option_chain, exp)
-                    opts  = chain.calls if otype == "call" else chain.puts
-                    row   = opts[abs(opts["strike"] - float(strike)) < 0.01]
-                    if row.empty:
-                        continue
-                    r = row.iloc[0]
-                    # IV sanity check — reject grossly corrupt rows
-                    _iv = float(r.get("impliedVolatility") or 0)
-                    if _iv > 3.0:
-                        continue
-                    mid, bid, ask, _, quality = _option_price_detail(r)
-                except Exception:
+                mid, bid, ask, quality, chain = _fetch_option_quote(
+                    sym, exp, strike, otype, chain=chains.get((sym, exp)))
+                if chain is not None:
+                    chains[(sym, exp)] = chain
+                if quality == "unavailable":
                     continue
 
                 # Save only if option hasn't changed since we fetched
@@ -3285,28 +3448,18 @@ def _refresh_tracked_prices():
                         if p["id"] != pos["id"]:
                             continue
                         disk_opt = p.get("option") or {}
-                        if (disk_opt.get("strike")     != snap_strike or
-                            disk_opt.get("expiration") != snap_exp    or
-                            disk_opt.get("type")       != snap_type):
+                        if (disk_opt.get("strike")     != strike or
+                            disk_opt.get("expiration") != exp    or
+                            disk_opt.get("type")       != otype):
                             break   # option changed during fetch — skip
-                        sig = p.get("last_signal") or {}
-                        sig["current_option_mid"] = round(mid, 3) if mid > 0 else None
-                        sig["current_bid"]        = round(bid, 3) if bid > 0 else None
-                        sig["current_ask"]        = round(ask, 3) if ask > 0 else None
-                        sig["price_quality"]      = quality
-                        # Recompute P&L if we have an entry price
-                        entry = float(p.get("entry_price") or 0)
-                        if entry > 0 and mid > 0:
-                            pct = (mid - entry) / entry * 100
-                            sig["pct_change"]    = round(pct, 1)
-                            sig["dollar_change"] = round((mid - entry) * 100, 2)
-                        p["last_signal"]  = sig
-                        # Update last_checked so the UI timestamp reflects the refresh
-                        # (full sell-signal eval still runs only every TRACK_CHECK_MINS;
-                        # this just tells the user the bot is alive and prices are fresh)
+                        # Quote + P&L + price-based exits (target / stop / trail /
+                        # stagnation) are evaluated here too, so a stop isn't missed
+                        # for up to 6 hours between full sell-signal checks.
+                        p["last_signal"]  = _apply_price_update(p, p.get("last_signal") or {}, mid, bid, ask, quality)
                         p["last_checked"] = datetime.now().isoformat()
                         break
                     save_tracked(positions_now)
+                time.sleep(0.5)
 
         except Exception as e:
             print(f"  [PriceRefresh] Error: {e}")
@@ -3318,100 +3471,6 @@ def _refresh_tracked_prices():
 
 _bt_state = {"running": False, "progress": 0, "total": 0, "results": None, "ticker": None}
 _bt_lock  = threading.Lock()
-
-
-def _bt_signals(closes, highs, lows, volumes, idx, params=None):
-    """
-    Compute signal booleans at position `idx` in the OHLCV series.
-    Mirrors the logic in scan_ticker so backtest uses same rules.
-    `params` dict overrides live config values — used by the WFO engine.
-    Returns dict of booleans + individual signal flags, or None if not enough data.
-    """
-    if idx < 60:
-        return None
-
-    # ── Parameter overrides (defaults = live config) ──────────
-    p = params or {}
-    rsi_os  = p.get("rsi_oversold",  RSI_OVERSOLD)
-    rsi_ob  = p.get("rsi_overbought",RSI_OVERBOUGHT)
-    bull_min= p.get("bull_min",      1)
-    bear_min= p.get("bear_min",      2)
-    adx_thr = p.get("adx_threshold", 30)
-
-    c = closes.iloc[:idx+1]
-    h = highs.iloc[:idx+1]
-    l = lows.iloc[:idx+1]
-    v = volumes.iloc[:idx+1]
-
-    rsi = calc_rsi(c, RSI_PERIOD)
-    bb_u, bb_m, bb_l = calc_bb(c, BB_PERIOD, BB_STD_DEV)
-    cur_rsi  = float(rsi.iloc[-1])
-    price    = float(c.iloc[-1])
-    cur_bb_l = float(bb_l.iloc[-1])
-    cur_bb_u = float(bb_u.iloc[-1])
-
-    sig_rsi_os  = cur_rsi < rsi_os       # RSI oversold
-    sig_rsi_ob  = cur_rsi > rsi_ob       # RSI overbought
-    sig_bb_low  = price < cur_bb_l       # below lower BB
-    sig_bb_high = price > cur_bb_u       # above upper BB
-
-    oversold   = sig_rsi_os or sig_bb_low
-    overbought = sig_rsi_ob or sig_bb_high
-    reversal_up = rsi_turning_up(rsi)
-
-    ma200_ser = c.rolling(200).mean()
-    ma200     = float(ma200_ser.iloc[-1]) if not pd.isna(ma200_ser.iloc[-1]) else None
-    trend_bull = ma200 is not None and price > ma200
-    trend_bear = ma200 is not None and price < ma200
-
-    hist_mini = pd.DataFrame({"Close": c, "High": h, "Low": l})
-    adx_s, pdi_s, ndi_s = calc_adx(hist_mini)
-    cur_adx = float(adx_s.iloc[-1]) if adx_s is not None else None
-    cur_pdi = float(pdi_s.iloc[-1]) if pdi_s is not None else None
-    cur_ndi = float(ndi_s.iloc[-1]) if ndi_s is not None else None
-    strong_trend = cur_adx is not None and cur_adx > adx_thr
-
-    macd_line, macd_sig, _ = calc_macd(c)
-    macd_cross  = macd_crossover(macd_line, macd_sig)
-    sig_macd_bull = macd_cross == "bull"
-    sig_macd_bear = macd_cross == "bear"
-
-    sig_vol_ok = False
-    if len(v) > 20:
-        avg_vol = float(v.iloc[-21:-1].mean())
-        sig_vol_ok = float(v.iloc[-1]) >= avg_vol * 1.2
-
-    _raw_knife    = trend_bear and strong_trend and (cur_ndi or 0) > (cur_pdi or 0)
-    exhaustion    = cur_rsi < 25 and reversal_up
-    falling_knife = _raw_knife and not exhaustion
-    melt_up       = trend_bull and strong_trend and (cur_pdi or 0) > (cur_ndi or 0)
-
-    bull_n = sum([sig_rsi_os, sig_bb_low, reversal_up, sig_macd_bull, sig_vol_ok])
-    bear_n = sum([sig_rsi_ob, sig_bb_high, sig_macd_bear, sig_vol_ok])
-
-    return {
-        "price":         price,
-        "rsi":           cur_rsi,
-        "oversold":      oversold,
-        "overbought":    overbought,
-        "falling_knife": falling_knife,
-        "melt_up":       melt_up,
-        "bull_signals":  bull_n,
-        "bear_signals":  bear_n,
-        # Individual signal flags (used by signal quality analysis)
-        "sig_rsi_os":    sig_rsi_os,
-        "sig_bb_low":    sig_bb_low,
-        "sig_reversal":  reversal_up,
-        "sig_macd_bull": sig_macd_bull,
-        "sig_vol_ok":    sig_vol_ok,
-        "sig_rsi_ob":    sig_rsi_ob,
-        "sig_bb_high":   sig_bb_high,
-        "sig_macd_bear": sig_macd_bear,
-        "has_buy_call":  oversold and bull_n >= bull_min and not falling_knife,
-        "has_buy_put":   (overbought or sig_macd_bear) and bear_n >= bear_min and not melt_up,
-        "has_sell_put":  (oversold or sig_macd_bear) and price <= MAX_PRICE_SELL and not falling_knife,
-        "vol_ok":        sig_vol_ok,
-    }
 
 
 def _bt_option_price(S, K, T, sigma, option_type):
@@ -3456,12 +3515,15 @@ def _precompute_indicators(hist):
     ma50_s   = closes.rolling(50).mean()
     ma200_s  = closes.rolling(200).mean()
 
-    # HV Rank per bar: 30-day annualized HV percentile over trailing 252 bars
+    # HV Rank per bar: 30-day annualized HV percentile over the trailing year
+    # (min_periods=60 so the first ~10 months of a 2y history aren't all NaN,
+    # which used to make hv_rank "50" for most training bars and real for
+    # every validation bar — an asymmetry between the WFO windows).
     # High HV Rank (≥60) → good time to sell premium (options expensive)
     # Low  HV Rank (≤40) → good time to buy options (options cheap)
     _rets    = closes.pct_change()
     _hv30    = _rets.rolling(30).std() * np.sqrt(252) * 100  # annualised %
-    hv_rank_s = _hv30.rolling(252).rank(pct=True) * 100       # 0–100 percentile
+    hv_rank_s = _hv30.rolling(252, min_periods=60).rank(pct=True) * 100   # 0–100 percentile
 
     # 52-week rolling low and high
     low_52w_s  = closes.rolling(252).min()
@@ -3489,22 +3551,20 @@ def _precompute_indicators(hist):
     # MFI (Money Flow Index) — RSI weighted by volume
     mfi_s = calc_mfi(hist, period=14)
 
-    # IV estimation per bar — GARCH(1,1) forward vol, falls back to 20-day HV
-    # We compute one GARCH estimate for the full series (end of history) and
-    # use it as a constant across all backtest bars. Per-bar GARCH would be
-    # prohibitively slow inside the WFO combo sweep.
-    _garch_vol   = calc_garch_vol(closes)
-    iv_est_s     = pd.Series(np.full(len(closes), _garch_vol), index=closes.index)
-    iv_est_s     = iv_est_s.clip(lower=0.05, upper=2.0)
+    # IV estimate per bar — trailing 30-day realised vol with a 15% premium
+    # (implied vol usually trades above realised).  Only information available
+    # AT that bar is used.  The previous version fit one GARCH model on the
+    # whole 2-year series and used it for every bar, so each simulated trade
+    # was priced with volatility from its own future (look-ahead bias).
+    iv_est_s = (_rets.rolling(30).std() * np.sqrt(252) * 1.15)
+    iv_est_s = iv_est_s.fillna(_rets.rolling(20, min_periods=5).std() * np.sqrt(252) * 1.15)
+    iv_est_s = iv_est_s.fillna(0.30).clip(lower=0.05, upper=2.0)
 
     # Pre-convert date strings
     dates = [d.strftime("%Y-%m-%d") for d in hist.index]
 
     return {
         "closes":      closes.values,
-        "highs":       highs.values,
-        "lows":        lows.values,
-        "volumes":     volumes.values,
         "rsi":         rsi_s.values,
         "bb_upper":    bb_upper_s.values,
         "bb_lower":    bb_lower_s.values,
@@ -3654,7 +3714,8 @@ def _bt_walk_exit(closes_arr, idx, K, iv_est, hold_days, strategy, entry_opt):
     peak = -999.0
     for i in range(1, hold_days + 1):
         close   = float(closes_arr[idx + i])
-        T_rem   = max((hold_days - i) / 365.0, 0.001)
+        # hold_days counts TRADING bars, so time-to-expiry is bars/252 years
+        T_rem   = max((hold_days - i) / 252.0, 0.001)
         cur_opt = _bt_option_price(close, K, T_rem, iv_est, opt_type)
         pnl     = _pnl(cur_opt)
         peak    = max(peak, pnl)
@@ -3684,10 +3745,24 @@ def _bt_walk_exit(closes_arr, idx, K, iv_est, hold_days, strategy, entry_opt):
 
     # No trigger fired — settle at end of hold (option near expiry)
     close   = float(closes_arr[idx + hold_days])
-    cur_opt = _bt_option_price(close, K, max(1 / 365.0, 0.001), iv_est, opt_type)
+    cur_opt = _bt_option_price(close, K, 1 / 252.0, iv_est, opt_type)
     return {"pnl_pct": round(_pnl(cur_opt), 1), "exit_reason": "end_of_hold",
             "exit_offset": hold_days, "exit_price": round(close, 2),
             "exit_opt": round(cur_opt, 3)}
+
+
+def _bt_strike(price):
+    """
+    Nearest listed strike for a simulated ATM option.  round(price) put a
+    $2.49 stock at K=2 (20% OTM) and a $2.51 stock at K=3 (20% ITM) — exactly
+    the sub-$10 names Sell Put trades.  Exchanges list $0.50 strikes under
+    $25, $1 strikes to $200 and $5 strikes above.
+    """
+    if price < 25:
+        return round(price * 2) / 2
+    if price < 200:
+        return float(round(price))
+    return float(round(price / 5) * 5)
 
 
 def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
@@ -3708,8 +3783,8 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
     """
     if hist is None:
         try:
-            hist = yf.Ticker(ticker).history(period="2y")
-            if hist.empty or len(hist) < 120:
+            _, hist = _fetch_history(ticker, "2y")
+            if hist is None or len(hist) < 120:
                 return []
         except Exception:
             return []
@@ -3718,12 +3793,17 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
     if precomp is None:
         precomp = _precompute_indicators(hist)
 
-    closes  = hist["Close"]
     trades  = []
+    n_bars  = precomp["n"]
     start   = max(60, idx_start)
-    end     = (idx_end or len(hist)) - hold_days
-    T_entry = hold_days / 365.0
+    end     = (idx_end or n_bars) - hold_days
+    T_entry = hold_days / 252.0          # hold_days are trading bars → years
     T_exit  = 0.001
+    # One open position per strategy at a time (as in live trading).  Without
+    # this every consecutive signal bar opened another overlapping trade on the
+    # same move, inflating trade counts and making the Sharpe look far better
+    # than a single-position account could ever achieve.
+    busy_until = {"buy_call": -1, "buy_put": -1, "sell_put": -1}
 
     for idx in range(start, end):
         sigs = _bt_signals_fast(precomp, idx, params)
@@ -3739,9 +3819,9 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
         for strategy, flag in [("buy_call", sigs["has_buy_call"]),
                                 ("buy_put",  sigs["has_buy_put"]),
                                 ("sell_put", sigs["has_sell_put"])]:
-            if not flag:
+            if not flag or idx < busy_until[strategy]:
                 continue
-            K        = round(price)
+            K        = _bt_strike(price)
             opt_type = "call" if strategy == "buy_call" else "put"
             entry_opt = _bt_option_price(price, K, T_entry, iv_est, opt_type)
             if entry_opt <= 0.01:
@@ -3757,6 +3837,7 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                 t_exit_price  = _ex["exit_price"]
                 t_exit_date   = precomp["dates"][idx + _ex["exit_offset"]]
                 t_exit_reason = _ex["exit_reason"]
+                busy_until[strategy] = idx + _ex["exit_offset"]
             else:
                 # Legacy: hold the full period, settle at expiry.
                 exit_opt = _bt_option_price(exit_price, K, T_exit, iv_est, opt_type)
@@ -3767,6 +3848,7 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                 t_exit_price  = round(exit_price, 2)
                 t_exit_date   = exit_date
                 t_exit_reason = "end_of_hold"
+                busy_until[strategy] = idx + hold_days
 
             # ── Hold-path recording (for Hold Horizon Analysis) ──────────
             # For each checkpoint d, compute option P&L if closed at day d
@@ -3781,7 +3863,7 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                     if future_idx >= len(precomp["closes"]):
                         break
                     ep     = float(precomp["closes"][future_idx])
-                    T_rem  = max((hold_days - d) / 365.0, 0.001)
+                    T_rem  = max((hold_days - d) / 252.0, 0.001)
                     ex_val = _bt_option_price(ep, K, T_rem, iv_est, opt_type)
                     if strategy == "sell_put":
                         pnl_path[d] = round((entry_opt - ex_val) / entry_opt * 100, 1)
@@ -3795,10 +3877,10 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                 "exit_date":   t_exit_date,
                 "entry_price": round(price, 2),
                 "exit_price":  t_exit_price,
-                "entry_opt":   round(entry_opt, 3),
-                "exit_opt":    round(exit_opt, 3),
-                "pnl_pct":     pnl_pct,
-                "win":         pnl_pct > 0,
+                "entry_opt":   round(float(entry_opt), 3),
+                "exit_opt":    round(float(exit_opt), 3),
+                "pnl_pct":     float(pnl_pct),
+                "win":         bool(pnl_pct > 0),          # plain bool — np.bool_ is not JSON-serialisable
                 "exit_reason": t_exit_reason,
                 "iv_est":      round(iv_est * 100, 1),
                 "pnl_path":    pnl_path,
@@ -3844,7 +3926,10 @@ def _bt_metrics(trades):
     sharpe = round(avg_pnl / std, 2) if std > 0 else 0
     # Sortino: mean / downside deviation (std of sub-zero returns only)
     downside = [p for p in pnls if p < 0]
-    dd_std   = float(np.std(downside)) if len(downside) > 1 else 0.0
+    # Downside deviation = sqrt(mean(min(p,0)^2)) over ALL trades.  np.std of
+    # just the losers measured how *similar* the losses were (every stop-loss
+    # records exactly -15%, so that was ~0 and Sortino exploded).
+    dd_std   = float(np.sqrt(np.mean(np.square(np.minimum(pnls, 0))))) if n > 1 else 0.0
     sortino  = round(avg_pnl / dd_std, 2) if dd_std > 0 else 0
     # Profit factor: gross winning % / gross losing %
     gross_win  = sum(t["pnl_pct"] for t in wins)
@@ -3914,69 +3999,59 @@ def _bt_summary(trades):
 
 
 def _run_backtest_job(tickers, hold_days):
-    global _bt_state
     all_trades = []
-    with _bt_lock:
-        _bt_state.update(running=True, progress=0, total=len(tickers),
-                         results=None, stage="Downloading history…")
-
-    # ── Bulk download 2y OHLCV for all tickers in one shot ───────
-    # (avoids per-ticker rate limits that caused silent failures)
-    print(f"  [Backtest] Bulk downloading 2y history for {len(tickers)} tickers…")
-    hist_map = {}
     try:
-        raw = yf.download(
-            tickers, period="2y", group_by="ticker",
-            auto_adjust=False, threads=True, progress=False,
-        )
-        for sym in tickers:
-            try:
-                df = (raw[sym] if len(tickers) > 1 else raw).dropna(how="all")
-                if len(df) >= 120:
-                    hist_map[sym] = df
-            except Exception:
-                pass
-        print(f"  [Backtest] Got data for {len(hist_map)}/{len(tickers)} tickers")
-    except Exception as e:
-        print(f"  [Backtest] Bulk download failed ({e}), falling back to per-ticker")
-
-    with _bt_lock:
-        _bt_state["stage"] = "Scanning signals…"
-
-    for i, sym in enumerate(tickers):
-        try:
-            pre_hist = hist_map.get(sym)           # use bulk data if available
-            trades   = run_backtest_ticker(sym, hold_days, hist=pre_hist)
-            all_trades.extend(trades)
-            if trades:
-                print(f"  [Backtest] {sym}: {len(trades)} trades")
-        except Exception as e:
-            print(f"  [Backtest] {sym} error: {e}")
         with _bt_lock:
-            _bt_state["progress"] = i + 1
+            _bt_state.update(running=True, progress=0, total=len(tickers),
+                             results=None, stage="Downloading history…")
 
-    summary      = _bt_summary(all_trades)
-    sig_quality  = signal_quality_analysis(all_trades)
-    all_trades.sort(key=lambda x: x["entry_date"], reverse=True)
-    bt_results = {
-        "trades":       all_trades[:500],
-        "summary":      summary,
-        "sig_quality":  sig_quality,
-        "tickers_used": len(set(t["ticker"] for t in all_trades)),
-        "hold_days":    hold_days,
-        "completed_at": datetime.now().isoformat(),
-    }
-    with _bt_lock:
-        _bt_state.update(running=False, stage="Complete", results=bt_results)
-    # Persist to disk so results survive bot restarts
-    try:
-        with open(BT_FILE, "w") as f:
-            json.dump(bt_results, f, indent=2)
-        print(f"  [Backtest] Results saved to {BT_FILE}")
+        # ── Bulk download 2y OHLCV for all tickers in one shot ───────
+        print(f"  [Backtest] Bulk downloading 2y history for {len(tickers)} tickers…")
+        hist_map = _bulk_download(tickers, "2y", min_rows=120)
+        print(f"  [Backtest] Got data for {len(hist_map)}/{len(tickers)} tickers")
+
+        with _bt_lock:
+            _bt_state["stage"] = "Scanning signals…"
+
+        for i, sym in enumerate(tickers):
+            try:
+                trades = run_backtest_ticker(sym, hold_days, hist=hist_map.get(sym))
+                all_trades.extend(trades)
+                if trades:
+                    print(f"  [Backtest] {sym}: {len(trades)} trades")
+            except Exception as e:
+                print(f"  [Backtest] {sym} error: {e}")
+            with _bt_lock:
+                _bt_state["progress"] = i + 1
+
+        summary      = _bt_summary(all_trades)
+        sig_quality  = signal_quality_analysis(all_trades)
+        all_trades.sort(key=lambda x: x["entry_date"], reverse=True)
+        bt_results = {
+            "trades":       all_trades[:500],
+            "summary":      summary,
+            "sig_quality":  sig_quality,
+            "tickers_used": len(set(t["ticker"] for t in all_trades)),
+            "hold_days":    hold_days,
+            "completed_at": datetime.now().isoformat(),
+        }
+        with _bt_lock:
+            _bt_state.update(stage="Complete", results=bt_results)
+        # Persist to disk so results survive bot restarts
+        try:
+            _atomic_json_write(BT_FILE, bt_results)
+            print(f"  [Backtest] Results saved to {BT_FILE}")
+        except Exception as e:
+            print(f"  [Backtest] Could not save results: {e}")
+        print(f"  [Backtest] Done — {len(all_trades)} trades, "
+              f"win rate {summary.get('win_rate', 'N/A')}%")
     except Exception as e:
-        print(f"  [Backtest] Could not save results: {e}")
-    print(f"  [Backtest] Done — {len(all_trades)} trades, "
-          f"win rate {summary.get('win_rate', 'N/A')}%")
+        print(f"  [Backtest] FAILED: {e}")
+        with _bt_lock:
+            _bt_state["stage"] = f"Error: {e}"
+    finally:
+        with _bt_lock:
+            _bt_state["running"] = False
 
 
 # ══════════════════════════════════════════════════════════════
@@ -4046,23 +4121,36 @@ _wfo_lock  = threading.Lock()
 def _save_wfo_results(results: dict):
     """Persist WFO results + timestamp to disk so they survive restarts."""
     try:
-        payload = {
-            "saved_at": datetime.now().isoformat(),
-            "results":  results,
-        }
-        with open(WFO_FILE, "w") as f:
-            json.dump(payload, f, indent=2)
+        _atomic_json_write(WFO_FILE, {"saved_at": datetime.now().isoformat(), "results": results})
         print(f"  [WFO] Results saved to {WFO_FILE}")
     except Exception as e:
         print(f"  [WFO] Could not save results: {e}")
 
 
+def _apply_wfo_params(suggestion: dict) -> dict:
+    """
+    Push an optimizer suggestion into the live scanner: RSI thresholds become
+    the module constants, everything else (bull_min, bear_min, adx_threshold)
+    goes into scan_state["wfo_params"] where scan_ticker reads it.
+    Shared by /api/optimizer/apply and the startup restore.
+    """
+    global RSI_OVERSOLD, RSI_OVERBOUGHT
+    applied = {}
+    if "rsi_oversold" in suggestion:
+        RSI_OVERSOLD = suggestion["rsi_oversold"];     applied["RSI_OVERSOLD"] = RSI_OVERSOLD
+    if "rsi_overbought" in suggestion:
+        RSI_OVERBOUGHT = suggestion["rsi_overbought"]; applied["RSI_OVERBOUGHT"] = RSI_OVERBOUGHT
+    live = {k: v for k, v in suggestion.items() if k not in ("rsi_oversold", "rsi_overbought", "hold_days")}
+    with scan_lock:
+        scan_state["wfo_params"] = live
+    applied.update(live)
+    return applied
+
+
 def _save_hs_results(results: dict):
     """Persist Hold Horizon Analysis results to disk so they survive restarts."""
     try:
-        payload = {"saved_at": datetime.now().isoformat(), "results": results}
-        with open(HS_RESULTS_FILE, "w") as f:
-            json.dump(payload, f, indent=2)
+        _atomic_json_write(HS_RESULTS_FILE, {"saved_at": datetime.now().isoformat(), "results": results})
         print(f"  [HoldSweep] Results saved to {HS_RESULTS_FILE}")
     except Exception as e:
         print(f"  [HoldSweep] Could not save results: {e}")
@@ -4070,12 +4158,9 @@ def _save_hs_results(results: dict):
 
 def _load_hs_results():
     """Load persisted Hold Horizon results on startup. Restores _hs_state['results']."""
-    if not os.path.exists(HS_RESULTS_FILE):
-        return
     try:
-        with open(HS_RESULTS_FILE) as f:
-            payload = json.load(f)
-        results = payload.get("results")
+        payload = _load_json(HS_RESULTS_FILE, {}, "HoldSweep")
+        results = payload.get("results") if isinstance(payload, dict) else None
         if not results:
             return
         with _hs_lock:
@@ -4148,12 +4233,10 @@ def _load_wfo_results():
     If valid, restores _wfo_state and auto-applies the best params to the scanner
     so you don't have to click Apply after every restart.
     """
-    global RSI_OVERSOLD, RSI_OVERBOUGHT
-    if not os.path.exists(WFO_FILE):
-        return
     try:
-        with open(WFO_FILE) as f:
-            payload = json.load(f)
+        payload = _load_json(WFO_FILE, {}, "WFO")
+        if not isinstance(payload, dict):
+            return
         saved_at = payload.get("saved_at", "")
         results  = payload.get("results", {})
         if not results:
@@ -4163,25 +4246,30 @@ def _load_wfo_results():
             _wfo_state["results"] = results
             _wfo_state["stage"]   = f"Loaded from disk (saved {saved_at[:10]})"
 
-        # Auto-apply the best suggestion
-        suggestion = results.get("suggestion", {})
-        if suggestion:
-            if "rsi_oversold"   in suggestion:
-                RSI_OVERSOLD   = suggestion["rsi_oversold"]
-            if "rsi_overbought" in suggestion:
-                RSI_OVERBOUGHT = suggestion["rsi_overbought"]
-            scan_state["wfo_params"] = {
-                k: v for k, v in suggestion.items()
-                if k not in ("rsi_oversold", "rsi_overbought", "hold_days")
-            }
-        print(f"  [WFO] Restored results from {WFO_FILE} (saved {saved_at[:10]}) — params auto-applied")
+        # Auto-apply the best suggestion — but only if it actually validated.
+        # A run whose best out-of-sample Sharpe is <= 0 found nothing worth
+        # trading on; applying it anyway just made the scanner stricter.
+        suggestion = results.get("suggestion") or {}
+        best       = results.get("best") or {}
+        val_sharpe = _as_float(best.get("val_sharpe"), -99.0)
+        if suggestion and val_sharpe > 0:
+            _apply_wfo_params(suggestion)
+            print(f"  [WFO] Restored results from {WFO_FILE} (saved {saved_at[:10]}) — "
+                  f"params auto-applied (val Sharpe {val_sharpe:.2f})")
+        else:
+            print(f"  [WFO] Restored results from {WFO_FILE} (saved {saved_at[:10]}) — "
+                  f"NOT applied (val Sharpe {val_sharpe:.2f} ≤ 0)")
     except Exception as e:
         print(f"  [WFO] Could not load saved results: {e}")
 
 
 def _wfo_sharpe(trades):
-    """Sharpe-like ratio: mean P&L / std P&L.  Returns -99 on empty."""
-    if len(trades) < 3:
+    """
+    Per-trade Sharpe-like ratio: mean P&L / std P&L.
+    Returns -99 when there are too few trades to mean anything (fewer than
+    10 — three trades used to be enough to "win" the optimizer).
+    """
+    if len(trades) < 10:
         return -99.0
     pnls = [t["pnl_pct"] for t in trades]
     m = sum(pnls) / len(pnls)
@@ -4271,8 +4359,18 @@ def _run_wfo_job(tickers):
 
     Progress: total = len(combos) + 10  (486 training + 10 validation = 496)
     """
-    global _wfo_state
+    try:
+        _run_wfo_job_inner(tickers)
+    except Exception as e:
+        print(f"  [WFO] FAILED: {e}")
+        with _wfo_lock:
+            _wfo_state.update(stage=f"Error: {e}")
+    finally:
+        with _wfo_lock:
+            _wfo_state["running"] = False      # never leave the optimizer stuck on "running"
 
+
+def _run_wfo_job_inner(tickers):
     combos = _expand_grid(WFO_PARAM_GRID)
     total_steps = len(combos) + 10   # 486 training + 10 validation
     with _wfo_lock:
@@ -4281,23 +4379,11 @@ def _run_wfo_job(tickers):
 
     # ── Step 1: bulk-download all histories once ────────────────
     print(f"  [WFO] Downloading 2y history for {len(tickers)} tickers…")
-    hist_map = {}
-    try:
-        raw = yf.download(tickers, period="2y", group_by="ticker",
-                          auto_adjust=False, threads=True, progress=False)
-        for sym in tickers:
-            try:
-                df = (raw[sym] if len(tickers) > 1 else raw).dropna(how="all")
-                if len(df) >= 120:
-                    hist_map[sym] = df
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"  [WFO] Bulk download failed: {e}")
+    hist_map = _bulk_download(tickers, "2y", min_rows=120)
 
     if not hist_map:
         with _wfo_lock:
-            _wfo_state.update(running=False, stage="No data available")
+            _wfo_state.update(stage="No data available")
         return
 
     # ── Step 2: pre-compute indicators once per ticker ──────────
@@ -4306,8 +4392,14 @@ def _run_wfo_job(tickers):
     print(f"  [WFO] Pre-computing indicators for {len(hist_map)} tickers…")
     precomp_map = {sym: _precompute_indicators(h) for sym, h in hist_map.items()}
 
-    # ── Step 3: compute split index per ticker ──────────────────
-    split_map = {sym: int(len(h) * 0.75) for sym, h in hist_map.items()}
+    # ── Step 3: split by DATE, not by per-ticker row count ──────
+    # A ticker with a short history (IPO, data gap) had its "first 75%" land
+    # in calendar months that were the validation window for everyone else,
+    # so pooled training trades leaked validation-period information.
+    all_dates  = sorted(set().union(*[set(h.index) for h in hist_map.values()]))
+    split_date = all_dates[int(len(all_dates) * 0.75)]
+    split_map  = {sym: int(h.index.searchsorted(split_date)) for sym, h in hist_map.items()}
+    print(f"  [WFO] Train/validation split at {pd.Timestamp(split_date).date()}")
 
     # Steps 4 & 5: param sweep + validation in one process pool.
     # ProcessPoolExecutor bypasses the GIL so all CPU cores work in parallel.
@@ -4331,8 +4423,8 @@ def _run_wfo_job(tickers):
             try:
                 sharpe, n_trades, combo = fut.result()
                 train_scores.append((sharpe, n_trades, combo))
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [WFO] combo failed: {e}")
             train_done += 1
             with _wfo_lock:
                 _wfo_state["progress"] = train_done
@@ -4347,8 +4439,8 @@ def _run_wfo_job(tickers):
         for fut in as_completed(val_futures):
             try:
                 leaderboard.append(fut.result())
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  [WFO] validation failed: {e}")
             val_done += 1
             with _wfo_lock:
                 _wfo_state["progress"] = len(combos) + val_done
@@ -4356,26 +4448,27 @@ def _run_wfo_job(tickers):
     leaderboard.sort(key=lambda x: x["val_sharpe"], reverse=True)
     best = leaderboard[0] if leaderboard else None
 
-    # ── Live config suggestion (don't auto-apply, show to user) ─
-    suggestion = None
-    if best:
-        suggestion = {k: v for k, v in best["params"].items()}
+    # ── Live config suggestion (shown to the user; Apply is a separate click) ─
+    suggestion = dict(best["params"]) if best else None
 
     wfo_results = {
         "leaderboard":   leaderboard,
         "best":          best,
         "suggestion":    suggestion,
+        "split_date":    str(pd.Timestamp(split_date).date()),
         "tickers_used":  list(hist_map.keys()),
         "completed_at":  datetime.now().isoformat(),
     }
     with _wfo_lock:
-        _wfo_state.update(
-            running=False,
-            stage="Complete",
-            progress=total_steps,
-            results=wfo_results,
-        )
-    _save_wfo_results(wfo_results)
+        _wfo_state.update(stage="Complete" if best else "Complete — no combo produced enough trades",
+                          progress=total_steps, results=wfo_results)
+    # Persist only a run that actually validated (val Sharpe > 0) — or the very
+    # first run — so a quick single-ticker experiment can't overwrite a good
+    # full-universe result on disk.  The run is still shown in the UI either way.
+    if best and (_as_float(best.get("val_sharpe"), -99.0) > 0 or not os.path.exists(WFO_FILE)):
+        _save_wfo_results(wfo_results)
+    elif best:
+        print("  [WFO] Best combo did not validate (val Sharpe ≤ 0) — results shown but not saved over the previous run")
     print(f"  [WFO] Done — best val Sharpe {best['val_sharpe'] if best else 'N/A'}")
 
 
@@ -4430,29 +4523,31 @@ def _run_calibration_job(months: int = 12, universe: str = "focus"):
       6. Build signal weight dict and save to calibration_data.json.
       7. Apply weights immediately to _cal_weights so live scores update.
     """
-    global _cal_weights
+    try:
+        _run_calibration_job_inner(months, universe)
+    except Exception as e:
+        print(f"  [CAL] FAILED: {e}")
+        with _cal_lock:
+            _cal_state["stage"] = f"Error: {e}"
+    finally:
+        with _cal_lock:
+            _cal_state["running"] = False      # a crash used to leave this True → 409 forever
 
+
+def _calibration_universe(universe):
     if universe == "snp500":
-        # Bypass SCAN_MODE check in get_universe() by temporarily forcing full mode
-        import requests as _req
-        _snp = []
-        try:
-            resp = _req.get(
-                "https://raw.githubusercontent.com/datasets/s-and-p-500-companies"
-                "/main/data/constituents.csv",
-                headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-            if resp.status_code == 200:
-                lines = resp.text.strip().split("\n")[1:]
-                _snp = [l.split(",")[0].strip().replace(".", "-")
-                        for l in lines if l.strip()]
-                _snp = [x for x in _snp if 1 < len(x) <= 6]
-        except Exception as e:
-            print(f"  [CAL] S&P 500 fetch failed ({e}), falling back to focus list")
-        tickers = list(dict.fromkeys(_snp)) if _snp else list(dict.fromkeys(FOCUS_LIST))
+        tickers = get_universe(force_mode="full")
         print(f"  [CAL] Universe: S&P 500 — {len(tickers)} tickers")
     else:
         tickers = list(dict.fromkeys(FOCUS_LIST))
         print(f"  [CAL] Universe: Focus list — {len(tickers)} tickers")
+    return tickers
+
+
+def _run_calibration_job_inner(months, universe):
+    global _cal_weights
+
+    tickers = _calibration_universe(universe)
 
     with _cal_lock:
         _cal_state.update(running=True, progress=0, total=len(tickers),
@@ -4464,23 +4559,11 @@ def _run_calibration_job(months: int = 12, universe: str = "focus"):
     # *score* to the last `months` months via idx_start below.
     print(f"  [CAL] Downloading 2y history for {len(tickers)} tickers "
           f"(signal window: last {months}m)…")
-    hist_map: dict = {}
-    try:
-        raw = yf.download(tickers, period="2y", group_by="ticker",
-                          auto_adjust=False, threads=True, progress=False)
-        for sym in tickers:
-            try:
-                df = (raw[sym] if len(tickers) > 1 else raw).dropna(how="all")
-                if len(df) >= 120:
-                    hist_map[sym] = df
-            except Exception:
-                pass
-    except Exception as e:
-        print(f"  [CAL] Bulk download failed: {e}")
+    hist_map = _bulk_download(tickers, "2y", min_rows=120)
 
     if not hist_map:
         with _cal_lock:
-            _cal_state.update(running=False, stage="Download failed — no data")
+            _cal_state.update(stage="Download failed — no data")
         return
 
     with _cal_lock:
@@ -4604,6 +4687,12 @@ def _run_calibration_job(months: int = 12, universe: str = "focus"):
             new_weights["buy_put"][flag] = w
 
     _cal_weights = new_weights   # apply immediately to live scorer
+    # This full replace used to silently drop the finer-grained LR weights
+    # until the next restart re-overlaid them — re-apply them now instead.
+    with _lr_lock:
+        _lr_w = (_lr_state.get("results") or {}).get("weights") or {}
+    if _lr_w:
+        _apply_lr_weights(_lr_w)
 
     # ── 6. Persist to disk ────────────────────────────────────
     cur_vix    = get_vix()
@@ -4628,15 +4717,13 @@ def _run_calibration_job(months: int = 12, universe: str = "focus"):
         "completed_at":        datetime.now().isoformat(),
     }
     try:
-        with open(CALIBRATION_FILE, "w") as f:
-            json.dump(results, f, indent=2)
+        _atomic_json_write(CALIBRATION_FILE, results)
         print(f"  [CAL] Saved to {CALIBRATION_FILE}")
     except Exception as e:
         print(f"  [CAL] Save failed: {e}")
 
     with _cal_lock:
-        _cal_state.update(running=False, stage="Complete",
-                          progress=len(hist_map), results=results)
+        _cal_state.update(stage="Complete", progress=len(hist_map), results=results)
     print(f"  [CAL] Done — {len(all_trades)} trades, {len(sim_quality)} signals analysed")
 
 
@@ -4671,7 +4758,6 @@ def _fit_lr_on_trade_list(trade_list, source_label=""):
     """
     try:
         from sklearn.linear_model import LogisticRegression
-        import numpy as np
     except ImportError:
         raise RuntimeError("scikit-learn not installed — "
                            "run: pip install scikit-learn --break-system-packages")
@@ -4711,8 +4797,13 @@ def _fit_lr_on_trade_list(trade_list, source_label=""):
         # median split: "above-median P&L = win, below = loss".  This always
         # gives a balanced dataset and teaches the model what separates a *better
         # than average* trade from a worse one — which is what we actually want.
+        # Signal-log entries carry the STOCK move, not the option P&L.  For a
+        # put buyer a rising stock is the losing outcome, so flip the sign for
+        # buy_put before the median split (it used to label those as wins).
+        _dir = -1.0 if strat == "buy_put" else 1.0
         pnl_vals = [
-            e["pnl_pct"] if e.get("pnl_pct") is not None else e.get("stock_return_pct")
+            e["pnl_pct"] if e.get("pnl_pct") is not None
+            else (None if e.get("stock_return_pct") is None else _dir * float(e["stock_return_pct"]))
             for e in strat_entries
         ]
         has_pnl  = all(v is not None for v in pnl_vals)
@@ -4844,20 +4935,10 @@ def _run_logistic_calibration(source="signal_log", months=12, universe="focus"):
             with _lr_lock:
                 _lr_state["stage"] = f"Downloading history for {len(tickers)} tickers…"
 
-            hist_map: dict = {}
-            try:
-                raw = yf.download(tickers, period="2y", group_by="ticker",
-                                  auto_adjust=False, threads=True, progress=False)
-                for sym in tickers:
-                    try:
-                        df = (raw[sym] if len(tickers) > 1 else raw).dropna(how="all")
-                        if len(df) >= 120:
-                            hist_map[sym] = df
-                    except Exception:
-                        pass
-            except Exception as e:
+            hist_map = _bulk_download(tickers, "2y", min_rows=120)
+            if not hist_map:
                 with _lr_lock:
-                    _lr_state.update(running=False, stage=f"Download failed: {e}")
+                    _lr_state.update(running=False, stage="Download failed — no data")
                 return
 
             with _lr_lock:
@@ -4978,9 +5059,6 @@ def _run_hold_sweep_job(months=12, universe="focus"):
     record_path=True to capture P&L at every HOLD_SWEEP_INTERVALS checkpoint,
     then aggregates into per-strategy curves.
     """
-    global _hs_state
-    from datetime import datetime as _dt
-
     with _hs_lock:
         _hs_state.update(running=True, stage="Downloading tickers…", results=None)
 
@@ -4989,13 +5067,19 @@ def _run_hold_sweep_job(months=12, universe="focus"):
         if universe == "snp500":
             tickers = get_universe(force_mode="full")
         else:
-            tickers = FOCUS_LIST[:]
+            tickers = list(dict.fromkeys(FOCUS_LIST))
         if not tickers:
             with _hs_lock:
-                _hs_state.update(running=False, stage="No tickers found")
+                _hs_state.update(stage="No tickers found")
             return
 
-        cutoff = pd.Timestamp.today() - pd.DateOffset(months=months)
+        cutoff = pd.Timestamp.today().normalize() - pd.DateOffset(months=months)
+
+        # One bulk download instead of ~500 individual history() calls
+        # (unadjusted prices — same basis as the calibration/LR jobs).
+        with _hs_lock:
+            _hs_state["stage"] = f"Downloading 2y history for {len(tickers)} tickers…"
+        hist_map = _bulk_download(tickers, "2y", min_rows=120)
 
         # Use the live bot's calibrated entry params (from WFO) so HH tests the
         # SAME setups the live scanner would actually trade — not the loosest
@@ -5014,19 +5098,24 @@ def _run_hold_sweep_job(months=12, universe="focus"):
 
         def _sweep_one(tkr):
             try:
-                h = yf.Ticker(tkr).history(period="2y")
-                if h.empty or len(h) < 120:
+                h = hist_map.get(tkr)
+                if h is None:
+                    _, h = _fetch_history(tkr, "2y")
+                if h is None or len(h) < 120:
                     return []
-                # yfinance.Ticker.history returns tz-aware index; strip it so the
-                # cutoff comparison works (cutoff is tz-naive).
+                # yfinance returns a tz-aware index; strip it so the cutoff
+                # comparison works (cutoff is tz-naive).
                 if h.index.tz is not None:
+                    h = h.copy()
                     h.index = h.index.tz_localize(None)
-                h = h[h.index >= cutoff]
-                if len(h) < 60:
+                # Pre-compute indicators on the FULL 2y history (the 200-day MA and
+                # 52-week range need it), then only *score* bars after the cutoff.
+                pc        = _precompute_indicators(h)
+                idx_start = int(h.index.searchsorted(pd.Timestamp(cutoff)))
+                if len(h) - idx_start < 25:
                     return []
-                pc = _precompute_indicators(h)
                 return run_backtest_ticker(
-                    tkr, hold_days=21, hist=h, precomp=pc,
+                    tkr, hold_days=21, hist=h, precomp=pc, idx_start=idx_start,
                     params=live_params, record_path=True
                 )
             except Exception as _e:
@@ -5049,12 +5138,12 @@ def _run_hold_sweep_job(months=12, universe="focus"):
 
         if not all_trades:
             with _hs_lock:
-                _hs_state.update(running=False, stage="No trades produced — try a longer window")
+                _hs_state.update(stage="No trades produced — try a longer window")
             return
 
         agg = _aggregate_hold_sweep(all_trades)
         result = {
-            "completed_at": _dt.now().isoformat(),
+            "completed_at": datetime.now().isoformat(),
             "months":       months,
             "universe":     universe,
             "n_trades":     len(all_trades),
@@ -5062,34 +5151,29 @@ def _run_hold_sweep_job(months=12, universe="focus"):
             "by_strategy":  agg,
         }
         with _hs_lock:
-            _hs_state.update(running=False,
-                             stage=f"Done — {len(all_trades):,} trades analysed",
-                             results=result)
+            _hs_state.update(stage=f"Done — {len(all_trades):,} trades analysed", results=result)
         _save_hs_results(result)
 
     except Exception as e:
+        print(f"  [HoldSweep] FAILED: {e}")
         with _hs_lock:
-            _hs_state.update(running=False, stage=f"Error: {e}", results=None)
+            _hs_state.update(stage=f"Error: {e}", results=None)
+    finally:
+        with _hs_lock:
+            _hs_state["running"] = False
 
 
 def _load_lr_calibration_on_startup():
     """Restore saved LR calibration weights from disk on startup."""
-    global _cal_weights
-    if not os.path.exists(LR_CALIBRATION_FILE):
-        return
     try:
-        with open(LR_CALIBRATION_FILE) as f:
-            data = json.load(f)
+        data = _load_json(LR_CALIBRATION_FILE, None, "LR")
+        if not isinstance(data, dict):
+            return
         with _lr_lock:
             _lr_state["results"] = data
         weights = data.get("weights", {})
         if weights:
-            merged = {k: dict(v) for k, v in _cal_weights.items()}
-            for strat, w in weights.items():
-                if strat not in merged:
-                    merged[strat] = {}
-                merged[strat].update(w)
-            _cal_weights = merged
+            _apply_lr_weights(weights)
             print(f"  [LR] Loaded LR weights (run: {data.get('completed_at','?')[:10]})")
     except Exception as e:
         print(f"  [LR] Could not load {LR_CALIBRATION_FILE}: {e}")
@@ -5097,11 +5181,10 @@ def _load_lr_calibration_on_startup():
 
 def _load_bt_results():
     """Restore last backtest results from disk on startup."""
-    if not os.path.exists(BT_FILE):
-        return
     try:
-        with open(BT_FILE) as f:
-            data = json.load(f)
+        data = _load_json(BT_FILE, None, "Backtest")
+        if not isinstance(data, dict):
+            return
         with _bt_lock:
             _bt_state["results"] = data
             _bt_state["stage"]   = f"Loaded from disk ({data.get('completed_at','')[:10]})"
@@ -5115,11 +5198,10 @@ def _load_bt_results():
 def _load_calibration_on_startup():
     """Restore saved calibration weights from disk on startup."""
     global _cal_weights
-    if not os.path.exists(CALIBRATION_FILE):
-        return
     try:
-        with open(CALIBRATION_FILE) as f:
-            data = json.load(f)
+        data = _load_json(CALIBRATION_FILE, None, "CAL")
+        if not isinstance(data, dict):
+            return
         with _cal_lock:
             _cal_state["results"] = data
             _cal_state["stage"]   = f"Loaded from disk ({data.get('completed_at','')[:10]})"
@@ -5142,26 +5224,28 @@ def _load_calibration_on_startup():
 
 _signal_log_lock = threading.Lock()
 
+SIGNAL_LOG_MAX = 5000
+
+
 def _load_signal_log() -> list:
-    """Load signal log from disk.  Returns [] on any error."""
-    if not os.path.exists(SIGNAL_LOG_FILE):
-        return []
-    try:
-        with open(SIGNAL_LOG_FILE) as f:
-            return json.load(f)
-    except Exception:
-        return []
+    """Load signal log from disk (callers hold _signal_log_lock)."""
+    data = _load_json(SIGNAL_LOG_FILE, [], "SigLog")
+    return data if isinstance(data, list) else []
 
 
 def _save_signal_log(entries: list):
-    """Overwrite signal log on disk.  Silently drops oldest entries beyond 5 000."""
+    """
+    Write the signal log atomically (callers hold _signal_log_lock).
+    Keeps every pending entry plus the most recent resolved ones, up to
+    SIGNAL_LOG_MAX total.  (`resolved[-0:]` used to return the whole list, so
+    nothing was ever trimmed.)
+    """
     try:
-        # Keep most-recent 5 000 entries (resolved first, then pending)
-        resolved = [e for e in entries if e.get("resolved")]
         pending  = [e for e in entries if not e.get("resolved")]
-        trimmed  = pending + resolved[-max(0, 5000 - len(pending)):]
-        with open(SIGNAL_LOG_FILE, "w") as f:
-            json.dump(trimmed, f, indent=2)
+        resolved = [e for e in entries if e.get("resolved")]
+        keep     = max(0, SIGNAL_LOG_MAX - len(pending))
+        trimmed  = pending + (resolved[-keep:] if keep else [])
+        _atomic_json_write(SIGNAL_LOG_FILE, trimmed)
     except Exception as e:
         print(f"  [SigLog] Save failed: {e}")
 
@@ -5173,6 +5257,9 @@ def _log_new_signals(totals: dict):
     within the last 3 days are skipped (avoids duplicates from live-refresh).
     """
     try:
+      # Hold the lock across load → append → save so a concurrent resolver
+      # pass can't be overwritten with stale (still-pending) entries.
+      with _signal_log_lock:
         entries    = _load_signal_log()
         now_str    = datetime.now().isoformat()
         today      = datetime.now().date()
@@ -5187,12 +5274,18 @@ def _log_new_signals(totals: dict):
             "iron_condor":  14,
         }
 
-        # Build a quick dedup set: (ticker, strategy, date[:10])
-        recent_keys = {
-            (e["ticker"], e["strategy"], e["signal_date"][:10])
-            for e in entries
-            if not e.get("resolved")
-        }
+        # Dedup: skip a ticker+strategy that was already logged within the last
+        # 3 trading days (resolved or not).  Same-day-only dedup logged the same
+        # setup every day of a multi-day oversold stretch, which fed the
+        # calibration overlapping, autocorrelated "samples" of one trade.
+        recent_keys = set()
+        for e in entries:
+            try:
+                age = int(np.busday_count(datetime.fromisoformat(e["signal_date"]).date(), today))
+            except Exception:
+                continue
+            if age <= 3:
+                recent_keys.add((e["ticker"], e["strategy"]))
 
         STRAT_MAP = {
             "sell_puts":     "sell_put",
@@ -5208,7 +5301,7 @@ def _log_new_signals(totals: dict):
             check_date = (datetime.now() + pd.DateOffset(days=hold_days)).date().isoformat()
             for rec in totals.get(bucket, []):
                 ticker = rec.get("ticker", "")
-                key    = (ticker, strat_key, str(today))
+                key    = (ticker, strat_key)
                 if key in recent_keys:
                     continue
                 entry = {
@@ -5229,7 +5322,7 @@ def _log_new_signals(totals: dict):
                     "sig_bb_high":   rec.get("price", 0) > rec.get("bb_upper", 0),
                     "sig_macd_bull": rec.get("macd_bull", False),
                     "sig_macd_bear": rec.get("macd_bear", False),
-                    "sig_reversal":  rec.get("reversal_up", False),
+                    "sig_reversal":  rec.get("reversal", rec.get("reversal_up", False)),  # scan stores "reversal"
                     "sig_vol_ok":    rec.get("vol_confirmed", False),
                     "sig_mfi_os":    rec.get("sig_mfi_os", False),
                     "sig_mfi_ob":    rec.get("sig_mfi_ob", False),
@@ -5241,8 +5334,7 @@ def _log_new_signals(totals: dict):
                 added += 1
 
         if added:
-            with _signal_log_lock:
-                _save_signal_log(entries)
+            _save_signal_log(entries)
             print(f"  [SigLog] Logged {added} new recommendations")
     except Exception as e:
         print(f"  [SigLog] Logging failed: {e}")
@@ -5578,11 +5670,12 @@ def _signal_log_summary() -> dict:
 
 def _schedule_signal_log_resolver():
     """Daemon thread: resolve pending signal log entries every 6 hours."""
-    import time as _time
-    _resolve_signal_log()   # run once immediately on startup
     while True:
-        _time.sleep(6 * 3600)
-        _resolve_signal_log()
+        try:
+            _resolve_signal_log()   # runs once immediately on startup, then every 6 h
+        except Exception as e:
+            print(f"  [SigLog] Resolver crashed: {e}")   # keep the thread alive
+        time.sleep(6 * 3600)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -5596,57 +5689,43 @@ def _live_refresh_loop():
     tickers currently showing signals and updates the results in-place.
     Stops when _live_refresh_stop is set (e.g. a new full scan starts).
     """
-    global scan_state
-    import time
+    # Capture THIS loop's stop event.  _start_live_refresh() swaps the global
+    # for a fresh Event; a loop still mid-refresh that re-read the global would
+    # see the new, unset event and never stop — leaving two loops running.
+    stop = _live_refresh_stop
 
     print(f"  [Live] Refresh loop started — interval: {_live_refresh_mins} min")
-    while not _live_refresh_stop.wait(timeout=_live_refresh_mins * 60):
+    while not stop.wait(timeout=_live_refresh_mins * 60):
         with scan_lock:
             if scan_state["running"]:
                 continue   # full scan in progress — skip refresh
             current = scan_state["results"]
+            condors = list(current.get("iron_condors", []))
 
-        signal_tickers = list({r["ticker"] for strat in current.values() for r in strat})
+        signal_tickers = sorted({r["ticker"] for k, strat in current.items()
+                                 if k != "iron_condors" for r in strat})
         if not signal_tickers:
             print("  [Live] No signal tickers to refresh — waiting")
             continue
 
         print(f"  [Live] Refreshing {len(signal_tickers)} signal ticker(s): {', '.join(signal_tickers)}")
 
-        # Bulk download for the small signal set
-        bulk_hist = {}
-        try:
-            raw = yf.download(
-                signal_tickers, period="1y", group_by="ticker",
-                auto_adjust=False, threads=True, progress=False,
-            )
-            if len(signal_tickers) == 1:
-                bulk_hist[signal_tickers[0]] = raw
-            else:
-                for sym in signal_tickers:
-                    try:
-                        df = raw[sym].dropna(how="all")
-                        if not df.empty:
-                            bulk_hist[sym] = df
-                    except Exception:
-                        pass
-        except Exception as e:
-            print(f"  [Live] Bulk download failed: {e} — using per-ticker fallback")
+        # Bulk download for the small signal set (per-ticker fallback inside scan_ticker)
+        bulk_hist = _bulk_download(signal_tickers, "1y")
 
         new_totals = {"sell_puts": [], "buy_calls": [], "buy_puts": [],
-                      "covered_calls": [], "iron_condors": []}
+                      "covered_calls": [], "iron_condors": condors}   # condors come from their own scan — keep them
         for sym in signal_tickers:
-            if _live_refresh_stop.is_set():
+            if stop.is_set():
                 return
             try:
-                res_raw = scan_ticker(sym, bulk_hist.get(sym), False)
+                res_raw = scan_ticker(sym, bulk_hist.get(sym), False, prefetch_fn=_prefetch_ticker)
                 if res_raw:
                     res = res_raw.get("_signals", {})
                     if "sell_put"     in res: new_totals["sell_puts"].append(res["sell_put"])
                     if "buy_call"     in res: new_totals["buy_calls"].append(res["buy_call"])
                     if "buy_put"      in res: new_totals["buy_puts"].append(res["buy_put"])
                     if "covered_call" in res: new_totals["covered_calls"].append(res["covered_call"])
-                    if "iron_condor"  in res: new_totals["iron_condors"].append(res["iron_condor"])
             except Exception as e:
                 print(f"  [Live] {sym} error: {e}")
 
@@ -5661,21 +5740,32 @@ def _live_refresh_loop():
             print(f"  [Live] Dropped (signal gone): {', '.join(dropped)}")
 
         with scan_lock:
+            if stop.is_set() or scan_state["running"]:
+                return          # a full scan started meanwhile — don't clobber its results
             scan_state["results"]      = new_totals
             scan_state["last_refresh"] = refreshed_at
+        _save_prefetch_cache()
 
         print(f"  [Live] Refresh complete at {refreshed_at}")
 
     print("  [Live] Refresh loop stopped.")
 
 
+_live_refresh_thread = None
+
+
 def _start_live_refresh():
     """Start (or restart) the live refresh daemon thread."""
-    global _live_refresh_stop
+    global _live_refresh_stop, _live_refresh_thread
     _live_refresh_stop.set()          # stop any existing loop
     _live_refresh_stop = threading.Event()
-    t = threading.Thread(target=_live_refresh_loop, daemon=True)
-    t.start()
+    _live_refresh_thread = threading.Thread(target=_live_refresh_loop, daemon=True)
+    _live_refresh_thread.start()
+
+
+def _live_refresh_active():
+    t = _live_refresh_thread
+    return bool(t and t.is_alive() and not _live_refresh_stop.is_set())
 
 
 def _auto_rescan_loop():
@@ -5683,22 +5773,32 @@ def _auto_rescan_loop():
     Daemon thread: re-runs the full universe scan every _auto_rescan_hours hours.
     Schedules the next run from the moment the PREVIOUS scan FINISHES, so a
     slow scan never causes a backlog.  Skips a cycle if a scan is already running.
+    Sleeps in 60 s steps so a change to the interval from the UI takes effect
+    without waiting out the old timer.
     """
     global _next_rescan_at
-    import time as _time
     while True:
         _next_rescan_at = datetime.now() + timedelta(hours=_auto_rescan_hours)
-        secs = _auto_rescan_hours * 3600
         print(f"  [AutoScan] Next full scan in {_auto_rescan_hours}h "
               f"(~{_next_rescan_at.strftime('%H:%M')})")
-        _time.sleep(secs)
+        while datetime.now() < _next_rescan_at:
+            time.sleep(60)
+            _next_rescan_at = min(_next_rescan_at,
+                                  datetime.now() + timedelta(hours=_auto_rescan_hours))
         with scan_lock:
-            already_running = scan_state.get("running", False)
+            if scan_state.get("running", False):
+                already_running = True
+            else:
+                already_running = False
+                scan_state["running"] = True      # claim the slot, same as /api/scan/start
         if already_running:
             print("  [AutoScan] Skipping — scan already in progress")
             continue
         print("  [AutoScan] Triggering scheduled full scan…")
-        _run_scan()   # blocks until scan completes; loop then reschedules
+        try:
+            _run_scan()   # blocks until scan completes; loop then reschedules
+        except Exception as e:
+            print(f"  [AutoScan] Scheduled scan failed: {e}")
 
 
 
@@ -5706,134 +5806,99 @@ def _auto_rescan_loop():
 #  BACKGROUND SCAN THREAD
 # ══════════════════════════════════════════════════════════════
 
+_STRAT_BUCKET = {"sell_put": "sell_puts", "buy_call": "buy_calls", "buy_put": "buy_puts",
+                 "covered_call": "covered_calls", "iron_condor": "iron_condors"}
+
+
+def _empty_totals():
+    return {k: [] for k in _STRAT_BUCKET.values()}
+
+
 def _run_scan(mode=None):
-    global scan_state, SCAN_MODE
+    """
+    Full-universe scan.  The caller (/api/scan/start or the auto-rescan loop)
+    has already set scan_state["running"] = True; this function owns clearing
+    it — in a finally, so a crash can never leave the UI stuck on "scanning".
+    """
+    global SCAN_MODE
     # Stop any running live refresh before starting a full scan
     _live_refresh_stop.set()
-
-    # Refresh 6-month T-bill rate (cached 6h — near-instant if recent)
-    fetch_risk_free_rate()
-
-    if mode in ("focus", "full"):
-        SCAN_MODE = mode
-    tickers = get_universe()
-    totals  = {"sell_puts": [], "buy_calls": [], "buy_puts": [], "covered_calls": [], "iron_condors": []}
-
-    with scan_lock:
-        scan_state.update(running=True, progress=0, total=len(tickers),
-                          results={"sell_puts":[], "buy_calls":[], "buy_puts":[], "covered_calls":[], "iron_condors":[]})
-
-    # ── Bulk OHLCV download (single API call for all tickers) ────────────
-    # This avoids 500 individual history() calls and massively reduces
-    # rate-limit exposure. Tickers with no data will have all-NaN rows.
-    print(f"  [Bulk download] Fetching 1-year OHLCV for {len(tickers)} tickers…")
-    bulk_hist = {}
+    totals  = _empty_totals()
+    t0      = time.time()
     try:
-        raw = yf.download(
-            tickers,
-            period="1y",
-            group_by="ticker",
-            auto_adjust=False,
-            threads=True,
-            progress=False,
-        )
-        # With multiple tickers, raw is a MultiIndex DataFrame: raw[sym] → OHLCV
-        # With a single ticker it's a plain DataFrame — handle both cases
-        if len(tickers) == 1:
-            bulk_hist[tickers[0]] = raw
-        else:
-            for sym in tickers:
-                try:
-                    df = raw[sym].dropna(how="all")
-                    if not df.empty:
-                        bulk_hist[sym] = df
-                except Exception:
-                    pass
-        print(f"  [Bulk download] Done — {len(bulk_hist)}/{len(tickers)} tickers have data")
-    except Exception as e:
-        print(f"  [Bulk download] Failed ({e}) — will fall back to per-ticker fetches")
+        # Refresh 6-month T-bill rate (cached 6h — near-instant if recent)
+        fetch_risk_free_rate()
 
-    # ── Parallel prefetch phase: all network calls fire simultaneously ───────
-    # This fires ~3 Yahoo API calls per ticker (info, calendar, option chain)
-    # in parallel across all tickers, so scan_ticker does zero network calls.
-    print(f"  [Prefetch] Firing network calls for {len(tickers)} tickers in parallel ({SCAN_PREFETCH_WORKERS} workers)…")
-    prefetch_map = {}
-    with ThreadPoolExecutor(max_workers=SCAN_PREFETCH_WORKERS) as pool:
-        pf_futures = {pool.submit(_prefetch_ticker, sym): sym for sym in tickers}
-        for fut in as_completed(pf_futures):
-            sym = pf_futures[fut]
-            try:
-                prefetch_map[sym] = fut.result()
-            except Exception:
-                prefetch_map[sym] = {}
-    print(f"  [Prefetch] Done — {len(prefetch_map)} tickers prefetched")
-    _save_prefetch_cache()
+        if mode in ("focus", "full"):
+            SCAN_MODE = mode
+        tickers = get_universe()
 
-    done = 0
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(scan_ticker, sym, bulk_hist.get(sym), False,
-                               prefetch_map.get(sym)): sym for sym in tickers}
-        for fut in as_completed(futures):
-            done += 1
-            raw = fut.result()
-            log = raw.get("_log") if raw else None
-            res = raw.get("_signals", {}) if raw else {}
-            if log:
-                print(log)
-            if res:
-                if "sell_put"    in res: totals["sell_puts"].append(res["sell_put"])
-                if "buy_call"    in res: totals["buy_calls"].append(res["buy_call"])
-                if "buy_put"     in res: totals["buy_puts"].append(res["buy_put"])
-                if "covered_call"in res: totals["covered_calls"].append(res["covered_call"])
-                if "iron_condor" in res: totals["iron_condors"].append(res["iron_condor"])
-
-            with scan_lock:
-                scan_state["progress"] = done
-                # Stream partial results live
-                scan_state["results"] = {
-                    k: sorted(v, key=lambda x: x["score"], reverse=True)
-                    for k, v in totals.items()
-                }
-
-    for key in totals:
-        totals[key] = sorted(totals[key], key=lambda x: x["score"], reverse=True)
-
-    with scan_lock:
-        scan_state.update(running=False, last_scan=datetime.now().isoformat(),
-                          results=totals)
-    print(f"\n  Scan complete — sell_puts:{len(totals['sell_puts'])}  "
-          f"buy_calls:{len(totals['buy_calls'])}  "
-          f"buy_puts:{len(totals['buy_puts'])}  "
-          f"covered_calls:{len(totals['covered_calls'])}  "
-          f"iron_condors:{len(totals['iron_condors'])}")
-    # Log all recommendations to the unbiased signal log
-    threading.Thread(target=_log_new_signals, args=(totals,), daemon=True).start()
-
-    # ── News enrichment (only for signal tickers, in parallel) ──
-    signal_tickers = {r["ticker"] for strat in totals.values() for r in strat}
-    if signal_tickers:
-        print(f"  Fetching news for {len(signal_tickers)} signal ticker(s)…")
-        # Clear cache for signal tickers so we always get fresh news
-        for _sym in signal_tickers:
-            _news_cache.pop(_sym, None)
-        news_map = {}
-        def _fetch_news(sym):
-            news_map[sym] = fetch_ticker_news(sym)
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-            pool.map(_fetch_news, signal_tickers)
-        # Attach news + conflict warning to each result
-        for strat_list in totals.values():
-            for r in strat_list:
-                sym   = r["ticker"]
-                news  = news_map.get(sym, [])
-                r["news"]          = news
-                r["news_conflict"] = news_signal_conflict(news, r.get("strategy",""))
         with scan_lock:
-            scan_state["results"] = totals
-        print(f"  News enrichment done.")
+            scan_state.update(running=True, progress=0, total=len(tickers), results=_empty_totals())
+
+        # Market-context series (VIX, Fed, SPY) once, before the workers start.
+        _warm_market_caches()
+
+        # ── Bulk OHLCV download (single API call for all tickers) ────────────
+        print(f"  [Bulk download] Fetching 1-year OHLCV for {len(tickers)} tickers…")
+        bulk_hist = _bulk_download(tickers, "1y")
+        print(f"  [Bulk download] Done — {len(bulk_hist)}/{len(tickers)} tickers have data")
+
+        # ── Scan ─────────────────────────────────────────────────────────────
+        # The indicator gate runs on the bulk history alone.  Only tickers that
+        # pass it fetch info / calendar / option chain (via prefetch_fn), so the
+        # ~500 chain downloads the old prefetch phase did up-front are gone.
+        done = 0
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = {pool.submit(scan_ticker, sym, bulk_hist.get(sym), False, None, _prefetch_ticker): sym
+                       for sym in tickers}
+            for fut in as_completed(futures):
+                done += 1
+                sym = futures[fut]
+                try:
+                    raw = fut.result()
+                except Exception as e:
+                    raw = {"_signals": {}, "_log": f"  [Scan] {sym:6s} ✗  error: {e}"}
+                log = raw.get("_log") if raw else None
+                res = raw.get("_signals", {}) if raw else {}
+                if log:
+                    print(log)
+                for strat, bucket in _STRAT_BUCKET.items():
+                    if strat in res:
+                        totals[bucket].append(res[strat])
+
+                with scan_lock:
+                    scan_state["progress"] = done
+                    # Stream partial results live
+                    scan_state["results"] = {
+                        k: sorted(v, key=lambda x: x["score"], reverse=True)
+                        for k, v in totals.items()
+                    }
+        _save_prefetch_cache()
+
+        for key in totals:
+            totals[key] = sorted(totals[key], key=lambda x: x["score"], reverse=True)
+
+        with scan_lock:
+            scan_state.update(last_scan=datetime.now().isoformat(), results=totals)
+        print(f"\n  Scan complete in {time.time() - t0:.0f}s — " +
+              "  ".join(f"{k}:{len(v)}" for k, v in totals.items()))
+
+        # Log all recommendations to the unbiased signal log (snapshot — the
+        # live refresh may replace scan_state["results"] while this runs).
+        threading.Thread(target=_log_new_signals, args=(json.loads(json.dumps(totals, default=_json_default)),),
+                         daemon=True).start()
+    except Exception as e:
+        print(f"  [Scan] FAILED: {e}")
+    finally:
+        with scan_lock:
+            scan_state["running"] = False
 
     # Also refresh sell signals on all tracked positions after every scan
-    _run_tracked_check()
+    try:
+        _run_tracked_check()
+    except Exception as e:
+        print(f"[Track] post-scan check failed: {e}")
 
     # ── Kick off live refresh loop ───────────────────────────────
     _start_live_refresh()
@@ -5843,34 +5908,25 @@ def _run_scan(mode=None):
 #  TRADE QUEUE & GUARDRAIL
 # ══════════════════════════════════════════════════════════════
 
+_queue_lock = threading.Lock()   # guards trade_queue.json and trade_history.json
+
+
 def load_queue():
-    if os.path.exists(QUEUE_FILE):
-        try:
-            with open(QUEUE_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return []
+    data = _load_json(QUEUE_FILE, [], "Queue")
+    return data if isinstance(data, list) else []
 
 
 def save_queue(q):
-    with open(QUEUE_FILE, "w") as f:
-        json.dump(q, f, indent=2, default=str)
+    _atomic_json_write(QUEUE_FILE, q)
 
 
 def load_history():
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return []
+    data = _load_json(HISTORY_FILE, [], "History")
+    return data if isinstance(data, list) else []
 
 
 def save_history(h):
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(h, f, indent=2, default=str)
+    _atomic_json_write(HISTORY_FILE, h)
 
 
 def calc_trade_cost(trade):
@@ -5880,11 +5936,11 @@ def calc_trade_cost(trade):
     • SELL put     → capital reserved = qty × 100 × strike
     • SELL call (covered) → $0 additional capital
     """
-    qty    = int(trade.get("qty", 1))
-    strat  = trade.get("strategy", "")
-    opt    = trade.get("option", {})
-    strike = float(opt.get("strike", 0))
-    ask    = float(opt.get("ask", 0))
+    qty    = max(1, _as_int(trade.get("qty"), 1))
+    strat  = _norm_strategy(trade.get("strategy", ""))
+    opt    = trade.get("option") or {}
+    strike = _as_float(opt.get("strike"))
+    ask    = _as_float(opt.get("ask"))
 
     if strat == "buy_call" or strat == "buy_put":
         return qty * 100 * ask
@@ -5894,12 +5950,19 @@ def calc_trade_cost(trade):
         return 0.0   # no additional capital required
     elif strat == "iron_condor":
         # Max loss = spread_width - net_credit (per contract × qty)
-        put_width  = float(trade.get("put_width",  0))
-        call_width = float(trade.get("call_width", 0))
-        net_credit = float(opt.get("net_credit", ask))
+        put_width  = _as_float(trade.get("put_width"))
+        call_width = _as_float(trade.get("call_width"))
+        net_credit = _as_float(opt.get("net_credit"), ask)
         spread_w   = max(put_width, call_width) if (put_width or call_width) else strike * 0.05
         return qty * 100 * max(spread_w - net_credit, 0)
     return qty * 100 * ask
+
+
+def _norm_strategy(s):
+    """'sell_puts' / 'Sell Put' / 'sell_put' → 'sell_put' (the dashboard sends plural bucket names)."""
+    s = str(s or "").strip().lower().replace(" ", "_")
+    return {"sell_puts": "sell_put", "buy_calls": "buy_call", "buy_puts": "buy_put",
+            "covered_calls": "covered_call", "iron_condors": "iron_condor"}.get(s, s)
 
 
 def guardrail_check(trade):
@@ -5944,7 +6007,7 @@ def api_scan_status():
             "total":           scan_state["total"],
             "last_scan":       scan_state["last_scan"],
             "last_refresh":    scan_state.get("last_refresh"),
-            "live_active":     not _live_refresh_stop.is_set(),
+            "live_active":     _live_refresh_active(),
             "live_mins":       _live_refresh_mins,
             "next_rescan":     _next_rescan_at.strftime("%H:%M") if _next_rescan_at else None,
             "rescan_hours":    _auto_rescan_hours,
@@ -6026,62 +6089,65 @@ _condor_state = {"running": False, "progress": 0, "total": 0}
 _condor_lock  = threading.Lock()
 
 def _run_condor_scan():
-    global _condor_state
-    tickers = get_universe()
+    """Caller has set _condor_state['running']; cleared here in a finally."""
     condors = []
-
-    with _condor_lock:
-        _condor_state.update(running=True, progress=0, total=len(tickers))
-
-    print(f"  [Condor] Scanning {len(tickers)} tickers for iron condors…")
-
-    # Bulk OHLCV
-    bulk_hist = {}
+    done    = 0
     try:
-        raw = yf.download(tickers, period="1y", group_by="ticker",
-                          auto_adjust=False, threads=True, progress=False)
-        if len(tickers) == 1:
-            bulk_hist[tickers[0]] = raw
-        else:
-            for sym in tickers:
+        tickers = get_universe()
+        with _condor_lock:
+            _condor_state.update(progress=0, total=len(tickers))
+        print(f"  [Condor] Scanning {len(tickers)} tickers for iron condors…")
+        _warm_market_caches()
+        bulk_hist = _bulk_download(tickers, "1y")
+
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+            futures = {pool.submit(scan_ticker, sym, bulk_hist.get(sym), True, None, _prefetch_ticker): sym
+                       for sym in tickers}
+            for fut in as_completed(futures):
+                done += 1
                 try:
-                    df = raw[sym].dropna(how="all")
-                    if not df.empty:
-                        bulk_hist[sym] = df
-                except Exception:
-                    pass
+                    raw = fut.result()
+                except Exception as e:
+                    print(f"  [Condor] {futures[fut]} error: {e}")
+                    raw = None
+                if raw and "iron_condor" in raw.get("_signals", {}):
+                    condors.append(raw["_signals"]["iron_condor"])
+                with _condor_lock:
+                    _condor_state["progress"] = done
+        _save_prefetch_cache()
+
+        condors = sorted(condors, key=lambda x: x["score"], reverse=True)
+        with scan_lock:
+            scan_state["results"]["iron_condors"] = condors
+        print(f"  [Condor] Done — {len(condors)} iron condor(s) found")
     except Exception as e:
-        print(f"  [Condor] Bulk download failed: {e}")
+        print(f"  [Condor] FAILED: {e}")
+    finally:
+        with _condor_lock:
+            _condor_state.update(running=False, progress=done)
 
-    done = 0
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(scan_ticker, sym, bulk_hist.get(sym), True): sym for sym in tickers}
-        for fut in as_completed(futures):
-            done += 1
-            raw = fut.result()
-            if raw:
-                res = raw.get("_signals", {})
-                if "iron_condor" in res:
-                    condors.append(res["iron_condor"])
-            with _condor_lock:
-                _condor_state["progress"] = done
 
-    condors = sorted(condors, key=lambda x: x["score"], reverse=True)
-    with scan_lock:
-        scan_state["results"]["iron_condors"] = condors
-    with _condor_lock:
-        _condor_state.update(running=False, progress=done)
-    print(f"  [Condor] Done — {len(condors)} iron condor(s) found")
+def _start_job(state, lock, target, args=(), name="job"):
+    """
+    Check-and-claim a background job's `running` flag atomically, then start
+    its thread.  Returns a 409 response tuple when already running, else None.
+    Setting the flag here (not inside the thread) closes two gaps: a double
+    POST starting two jobs, and the UI's first status poll seeing running=False
+    while the thread was still doing its setup.
+    """
+    with lock:
+        if state.get("running"):
+            return jsonify({"ok": False, "message": f"{name} already running"}), 409
+        state["running"] = True
+        state["stage"]   = "Starting…"
+    threading.Thread(target=target, args=args, daemon=True).start()
+    return None
 
 
 @app.route("/api/condor/scan", methods=["POST"])
 def api_condor_scan():
-    with _condor_lock:
-        if _condor_state["running"]:
-            return jsonify({"ok": False, "message": "Condor scan already running"}), 409
-    t = threading.Thread(target=_run_condor_scan, daemon=True)
-    t.start()
-    return jsonify({"ok": True})
+    busy = _start_job(_condor_state, _condor_lock, _run_condor_scan, name="Condor scan")
+    return busy or jsonify({"ok": True})
 
 
 @app.route("/api/condor/status")
@@ -6093,29 +6159,25 @@ def api_condor_status():
 @app.route("/api/backtest/run", methods=["POST"])
 def api_backtest_run():
     data      = request.get_json(silent=True) or {}
-    hold_days = max(7, min(60, int(data.get("hold_days", 21))))
-    ticker    = data.get("ticker", "").strip().upper()
-    mode      = data.get("mode", "focus")   # "ticker" | "focus" | "full"
-    with _bt_lock:
-        if _bt_state["running"]:
-            return jsonify({"ok": False, "message": "Backtest already running"}), 409
+    hold_days = max(7, min(60, _as_int(data.get("hold_days"), 21)))
+    ticker    = str(data.get("ticker") or "").strip().upper()
+    mode      = data.get("mode", "focus")   # "ticker" | "focus" | "full" | "signals"
     if mode == "ticker" and ticker:
         tickers = [ticker]
     elif mode == "full":
-        tickers = get_universe()
+        tickers = get_universe(force_mode="full")   # "Full" must not depend on the scan-mode toggle
     elif mode == "signals":
         # Pull unique tickers from whatever is currently showing signals
         with scan_lock:
-            tickers = list({r["ticker"]
-                            for strat in scan_state["results"].values()
-                            for r in strat})
+            tickers = sorted({r["ticker"]
+                              for strat in scan_state["results"].values()
+                              for r in strat})
         if not tickers:
             return jsonify({"ok": False, "message": "No signals found — run a scan first"}), 400
     else:
         tickers = list(dict.fromkeys(FOCUS_LIST))
-    t = threading.Thread(target=_run_backtest_job, args=(tickers, hold_days), daemon=True)
-    t.start()
-    return jsonify({"ok": True, "tickers": len(tickers), "hold_days": hold_days})
+    busy = _start_job(_bt_state, _bt_lock, _run_backtest_job, (tickers, hold_days), name="Backtest")
+    return busy or jsonify({"ok": True, "tickers": len(tickers), "hold_days": hold_days})
 
 
 @app.route("/api/backtest/status")
@@ -6149,15 +6211,15 @@ def api_bs_analyze():
     Expects: { ticker, stock_price, strike, dte, iv_pct, market_price, option_type }
     Returns: fair_value, greeks, intrinsic, extrinsic, vol comparison, interpretation
     """
-    from scipy.stats import norm
     data        = request.get_json(silent=True) or {}
-    ticker      = data.get("ticker", "").upper().strip()
-    S           = float(data.get("stock_price", 0))
-    K           = float(data.get("strike", 0))
-    dte         = float(data.get("dte", 0))
-    iv_pct      = float(data.get("iv_pct", 0))
-    mkt_price   = float(data.get("market_price", 0))
-    opt_type    = data.get("option_type", "call")
+    ticker      = str(data.get("ticker") or "").upper().strip()
+    # Blank form fields arrive as null — _as_float turns those into 0 instead of a 500
+    S           = _as_float(data.get("stock_price"))
+    K           = _as_float(data.get("strike"))
+    dte         = _as_float(data.get("dte"))
+    iv_pct      = _as_float(data.get("iv_pct"))
+    mkt_price   = _as_float(data.get("market_price"))
+    opt_type    = "put" if data.get("option_type") == "put" else "call"
 
     if S <= 0 or K <= 0 or dte <= 0 or iv_pct <= 0:
         return jsonify({"ok": False, "error": "Please fill in all fields with valid values."})
@@ -6184,8 +6246,10 @@ def api_bs_analyze():
         # Greeks
         gamma = norm.pdf(d1) / (S * sigma * sqrt(T))
         vega  = S * norm.pdf(d1) * sqrt(T) / 100          # per 1% IV move
+        # Rate term is −rK·e^(−rT)·N(d2) for calls and +rK·e^(−rT)·N(−d2) for puts
         theta = (-(S * norm.pdf(d1) * sigma) / (2 * sqrt(T))
-                 - r * K * exp(-r * T) * (norm.cdf(d2) if opt_type=="call" else norm.cdf(-d2))) / 365
+                 + (-r * K * exp(-r * T) * norm.cdf(d2) if opt_type == "call"
+                    else r * K * exp(-r * T) * norm.cdf(-d2))) / 365
         rho   = (K * T * exp(-r * T) * (norm.cdf(d2) if opt_type=="call" else -norm.cdf(-d2))) / 100
 
         # GARCH vol comparison
@@ -6194,9 +6258,8 @@ def api_bs_analyze():
         vol_diff_pct  = None
         if ticker:
             try:
-                tkr_obj  = yf.Ticker(ticker)
-                hist_data = _yf_call(tkr_obj.history, period="6mo")
-                if hist_data is not None and not hist_data.empty and len(hist_data) >= 60:
+                _, hist_data = _fetch_history(ticker, "6mo")
+                if hist_data is not None and len(hist_data) >= 60:
                     gv = calc_garch_vol(hist_data["Close"])
                     garch_vol_pct = round(gv * 100, 1)
                     vol_diff_pct  = round(iv_pct - garch_vol_pct, 1)
@@ -6283,26 +6346,22 @@ def api_bs_analyze():
 def api_optimizer_run():
     data   = request.get_json(silent=True) or {}
     mode   = data.get("mode", "focus")
-    ticker = data.get("ticker", "").strip().upper()
-    with _wfo_lock:
-        if _wfo_state["running"]:
-            return jsonify({"ok": False, "message": "Optimizer already running"}), 409
+    ticker = str(data.get("ticker") or "").strip().upper()
     if mode == "ticker" and ticker:
         tickers = [ticker]
     elif mode == "signals":
         with scan_lock:
-            tickers = list({r["ticker"]
-                            for strat in scan_state["results"].values()
-                            for r in strat})
+            tickers = sorted({r["ticker"]
+                              for strat in scan_state["results"].values()
+                              for r in strat})
         if not tickers:
             return jsonify({"ok": False, "message": "No signals — run a scan first"}), 400
     elif mode == "full":
         tickers = get_universe(force_mode="full")
     else:
         tickers = list(dict.fromkeys(FOCUS_LIST))
-    t = threading.Thread(target=_run_wfo_job, args=(tickers,), daemon=True)
-    t.start()
-    return jsonify({"ok": True, "tickers": len(tickers)})
+    busy = _start_job(_wfo_state, _wfo_lock, _run_wfo_job, (tickers,), name="Optimizer")
+    return busy or jsonify({"ok": True, "tickers": len(tickers)})
 
 
 @app.route("/api/optimizer/status")
@@ -6327,38 +6386,22 @@ def api_optimizer_results():
 @app.route("/api/optimizer/apply", methods=["POST"])
 def api_optimizer_apply():
     """Apply the best found parameters to the live scanner config."""
-    global RSI_OVERSOLD, RSI_OVERBOUGHT, LIVE_REFRESH_MINS
     with _wfo_lock:
         r = _wfo_state.get("results")
     if not r or not r.get("suggestion"):
         return jsonify({"ok": False, "message": "No optimization results yet"}), 400
-    s = r["suggestion"]
-    applied = {}
-    if "rsi_oversold"   in s:
-        RSI_OVERSOLD   = s["rsi_oversold"];   applied["RSI_OVERSOLD"]   = RSI_OVERSOLD
-    if "rsi_overbought" in s:
-        RSI_OVERBOUGHT = s["rsi_overbought"]; applied["RSI_OVERBOUGHT"] = RSI_OVERBOUGHT
-    # bull_min, bear_min, adx_threshold are used at signal-time via _bt_signals params;
-    # for the live scanner they go into scan_state so scan_ticker can read them
-    scan_state["wfo_params"] = {k: v for k, v in s.items()
-                                if k not in ("rsi_oversold","rsi_overbought","hold_days")}
-    applied.update(scan_state["wfo_params"])
+    applied = _apply_wfo_params(r["suggestion"])
     print(f"  [WFO] Applied best params: {applied}")
     return jsonify({"ok": True, "applied": applied})
 
 
 @app.route("/api/calibrate/run", methods=["POST"])
 def api_calibrate_run():
-    data   = request.get_json(silent=True) or {}
-    months = int(data.get("months", 12))
-    months = max(3, min(24, months))
-    universe = data.get("universe", "focus")   # "focus" | "snp500"
-    with _cal_lock:
-        if _cal_state["running"]:
-            return jsonify({"ok": False, "message": "Calibration already running"}), 409
-    t = threading.Thread(target=_run_calibration_job, args=(months, universe), daemon=True)
-    t.start()
-    return jsonify({"ok": True, "months": months, "universe": universe})
+    data     = request.get_json(silent=True) or {}
+    months   = max(3, min(24, _as_int(data.get("months"), 12)))
+    universe = "snp500" if data.get("universe") == "snp500" else "focus"
+    busy = _start_job(_cal_state, _cal_lock, _run_calibration_job, (months, universe), name="Calibration")
+    return busy or jsonify({"ok": True, "months": months, "universe": universe})
 
 
 @app.route("/api/calibrate/status")
@@ -6384,17 +6427,13 @@ def api_calibrate_results():
 
 @app.route("/api/calibrate/logistic", methods=["POST"])
 def api_calibrate_logistic():
-    with _lr_lock:
-        if _lr_state["running"]:
-            return jsonify({"ok": False, "message": "Logistic calibration already running"}), 409
     data     = request.get_json(silent=True) or {}
-    source   = data.get("source", "signal_log")   # "signal_log" | "backtest"
-    months   = max(3, min(24, int(data.get("months", 12))))
-    universe = data.get("universe", "snp500")
-    t = threading.Thread(target=_run_logistic_calibration,
-                         args=(source, months, universe), daemon=True)
-    t.start()
-    return jsonify({"ok": True, "source": source, "months": months, "universe": universe})
+    source   = "backtest" if data.get("source") == "backtest" else "signal_log"
+    months   = max(3, min(24, _as_int(data.get("months"), 12)))
+    universe = "focus" if data.get("universe") == "focus" else "snp500"
+    busy = _start_job(_lr_state, _lr_lock, _run_logistic_calibration, (source, months, universe),
+                      name="Logistic calibration")
+    return busy or jsonify({"ok": True, "source": source, "months": months, "universe": universe})
 
 
 @app.route("/api/calibrate/logistic/results")
@@ -6409,18 +6448,11 @@ def api_calibrate_logistic_results():
 
 @app.route("/api/calibrate/hold-sweep", methods=["POST"])
 def api_hold_sweep():
-    with _hs_lock:
-        if _hs_state["running"]:
-            return jsonify({"error": "Already running"}), 409
-        # Mark running synchronously so the first poll doesn't race the thread
-        _hs_state.update(running=True, stage="Starting…", results=None)
     data     = request.get_json(silent=True) or {}
-    months   = int(data.get("months", 12))
-    universe = data.get("universe", "focus")
-    t = threading.Thread(target=_run_hold_sweep_job,
-                         args=(months, universe), daemon=True)
-    t.start()
-    return jsonify({"started": True})
+    months   = max(3, min(24, _as_int(data.get("months"), 12)))
+    universe = "snp500" if data.get("universe") == "snp500" else "focus"
+    busy = _start_job(_hs_state, _hs_lock, _run_hold_sweep_job, (months, universe), name="Hold Horizon analysis")
+    return busy or jsonify({"ok": True, "started": True, "months": months, "universe": universe})
 
 
 @app.route("/api/calibrate/hold-sweep/results")
@@ -6515,9 +6547,8 @@ def api_debug_scan(sym):
     """
     sym = sym.upper()
     try:
-        tkr  = yf.Ticker(sym)
-        hist = _yf_call(tkr.history, period="1y")
-        if hist is None or hist.empty or len(hist) < 60:
+        tkr, hist = _fetch_history(sym, "1y")
+        if hist is None or len(hist) < 60:
             return jsonify({"error": "Not enough history data"}), 400
 
         closes  = hist["Close"]
@@ -6630,7 +6661,7 @@ def api_debug_scan(sym):
                 "price_ok_for_sell": price <= MAX_PRICE_SELL,
             },
             "blockers": {
-                "sell_put":  "price > $10 limit" if price > MAX_PRICE_SELL
+                "sell_put":  f"price > ${MAX_PRICE_SELL:.0f} limit" if price > MAX_PRICE_SELL
                              else "falling_knife" if falling_knife
                              else "not oversold or no macd_bear" if not (oversold or macd_bear)
                              else None,
@@ -6666,7 +6697,8 @@ def api_results(strategy):
 
 @app.route("/api/queue", methods=["GET"])
 def api_queue_get():
-    return jsonify(load_queue())
+    with _queue_lock:
+        return jsonify(load_queue())
 
 
 @app.route("/api/queue", methods=["POST"])
@@ -6676,38 +6708,42 @@ def api_queue_add():
     Body: { ticker, strategy, option, qty, name, price }
     Returns guardrail info so the UI can warn the user immediately.
     """
-    data  = request.json or {}
+    data  = request.get_json(silent=True) or {}
+    if not data.get("ticker") or not isinstance(data.get("option"), dict):
+        return jsonify({"ok": False, "message": "ticker and option are required"}), 400
     trade = {
         "id":         str(uuid.uuid4())[:8],
         "queued_at":  datetime.now().isoformat(),
-        "status":     "pending",    # pending | executing | done | cancelled
-        "ticker":     data.get("ticker", ""),
+        "status":     "pending",    # pending | executing | error  (done trades move to history)
+        "ticker":     str(data.get("ticker", "")).upper(),
         "name":       data.get("name", ""),
-        "price":      data.get("price", 0),
-        "strategy":   data.get("strategy", ""),
+        "price":      _as_float(data.get("price")),
+        "strategy":   _norm_strategy(data.get("strategy", "")),
         "strategy_label": data.get("strategy_label", ""),
         "option":     data.get("option", {}),
-        "qty":        int(data.get("qty", 1)),
-        "put_width":  data.get("put_width",  0),
-        "call_width": data.get("call_width", 0),
+        "qty":        max(1, _as_int(data.get("qty"), 1)),
+        "put_width":  _as_float(data.get("put_width")),
+        "call_width": _as_float(data.get("call_width")),
         "legs":       data.get("legs",       None),
-        "entry_price": data.get("entry_price", 0),
+        "entry_price": _as_float(data.get("entry_price")),
     }
 
     passes, cost, msg = guardrail_check(trade)
     trade["estimated_cost"] = round(cost, 2)
     trade["guardrail_ok"]   = passes
 
-    q = load_queue()
-    q.append(trade)
-    save_queue(q)
+    with _queue_lock:
+        q = load_queue()
+        q.append(trade)
+        save_queue(q)
     return jsonify({"ok": True, "trade": trade, "guardrail": {"passes": passes, "cost": cost, "message": msg}})
 
 
 @app.route("/api/queue/<trade_id>", methods=["DELETE"])
 def api_queue_remove(trade_id):
-    q = [t for t in load_queue() if t["id"] != trade_id]
-    save_queue(q)
+    with _queue_lock:
+        q = [t for t in load_queue() if t["id"] != trade_id]
+        save_queue(q)
     return jsonify({"ok": True})
 
 
@@ -6722,27 +6758,28 @@ def api_execute(trade_id):
       → Required if the trade exceeds the $1,000 guardrail.
     ──────────────────────────────────────────────────────────
     """
-    q     = load_queue()
-    trade = next((t for t in q if t["id"] == trade_id), None)
-    if not trade:
-        return jsonify({"ok": False, "message": "Trade not found in queue"}), 404
+    body     = request.get_json(silent=True) or {}
+    override = str(body.get("override_confirm", "")).strip().upper()
 
-    if trade["status"] == "executing":
-        return jsonify({"ok": False, "message": "Already executing"}), 409
+    # Check + claim under the lock so two clicks can't both pass the
+    # "pending" test and place the same order twice.
+    with _queue_lock:
+        q     = load_queue()
+        trade = next((t for t in q if t["id"] == trade_id), None)
+        if not trade:
+            return jsonify({"ok": False, "message": "Trade not found in queue"}), 404
+        if trade["status"] == "executing":
+            return jsonify({"ok": False, "message": "Already executing"}), 409
 
-    # ── Guardrail check ───────────────────────────────────────
-    passes, cost, msg = guardrail_check(trade)
-    if not passes:
-        body     = request.json or {}
-        override = str(body.get("override_confirm", "")).strip().upper()
-        if override != "CONFIRM":
+        # ── Guardrail check ───────────────────────────────────────
+        passes, cost, msg = guardrail_check(trade)
+        if not passes and override != "CONFIRM":
             return jsonify({"ok": False, "guardrail_fail": True, "cost": cost, "message": msg}), 403
 
-    # ── Mark as executing ─────────────────────────────────────
-    trade["status"] = "executing"
-    save_queue(q)
+        trade["status"] = "executing"
+        save_queue(q)
 
-    # ── Hand off to SoFi automation ───────────────────────────
+    # ── Hand off to SoFi automation (network — outside the lock) ──
     try:
         from sofi_trader import place_order_on_sofi
         result = place_order_on_sofi(trade, auto_submit=AUTO_SUBMIT)
@@ -6753,24 +6790,26 @@ def api_execute(trade_id):
         result = {"ok": False, "message": str(e)}
 
     # ── Update queue + history ────────────────────────────────
-    trade["status"]     = "done" if result.get("ok") else "error"
-    trade["executed_at"]= datetime.now().isoformat()
-    trade["result"]     = result.get("message", "")
-    save_queue(q)
-
-    if result.get("ok"):
-        h = load_history()
-        h.append(trade)
-        save_history(h)
-        q = [t for t in q if t["id"] != trade_id]
+    with _queue_lock:
+        q     = load_queue()
+        trade = next((t for t in q if t["id"] == trade_id), trade)
+        trade["status"]      = "done" if result.get("ok") else "error"
+        trade["executed_at"] = datetime.now().isoformat()
+        trade["result"]      = result.get("message", "")
+        if result.get("ok"):
+            h = load_history()
+            h.append(trade)
+            save_history(h)
+            q = [t for t in q if t["id"] != trade_id]
         save_queue(q)
 
-    return jsonify({"ok": result.get("ok"), "message": result.get("message", "")})
+    return jsonify({"ok": bool(result.get("ok")), "message": result.get("message", "")})
 
 
 @app.route("/api/history")
 def api_history():
-    return jsonify(load_history())
+    with _queue_lock:
+        return jsonify(load_history())
 
 
 @app.route("/api/history/perf")
@@ -6779,7 +6818,8 @@ def api_history_perf():
     Fetch current option mid prices for all history entries in parallel.
     Returns { trade_id: { entry_mid, current_mid, pct_change, dollar_change } }
     """
-    history = load_history()
+    with _queue_lock:
+        history = load_history()
     perf    = {}
 
     def _fetch(t):
@@ -6787,33 +6827,25 @@ def api_history_perf():
         if not tid:
             return
         try:
-            opt          = t.get("option", {})
-            exp          = opt.get("expiration")
-            strike       = opt.get("strike")
-            otype        = opt.get("type", "call")
-            entry_price  = float(t.get("entry_price") or opt.get("mid") or opt.get("ask") or 0)
-            qty          = int(t.get("qty", 1))
-            if not exp or not strike or entry_price <= 0:
+            opt          = t.get("option") or {}
+            entry_price  = _as_float(t.get("entry_price")) or _as_float(opt.get("mid")) or _as_float(opt.get("ask"))
+            if entry_price <= 0:
                 return
-            tkr   = yf.Ticker(t["ticker"])
-            chain = _yf_call(tkr.option_chain, exp)
-            opts  = chain.calls if otype == "call" else chain.puts
-            row   = opts[abs(opts["strike"] - float(strike)) < 0.01]
-            if row.empty:
+            current_mid, _, _, quality, _ = _fetch_option_quote(
+                t.get("ticker"), opt.get("expiration"), opt.get("strike"), opt.get("type", "call"))
+            if quality == "unavailable":
                 return
-            current_mid = _option_mid(row.iloc[0])
-            if current_mid <= 0:
+            pct, dollar = _position_pnl(_norm_strategy(t.get("strategy")), entry_price, current_mid, t.get("qty", 1))
+            if pct is None:
                 return
-            pct    = (current_mid - entry_price) / entry_price * 100
-            dollar = (current_mid - entry_price) * 100 * qty
             perf[tid] = {
                 "entry_mid":    round(entry_price,  3),
                 "current_mid":  round(current_mid,  3),
-                "pct_change":   round(pct,          1),
-                "dollar_change":round(dollar,       2),
+                "pct_change":   pct,
+                "dollar_change": dollar,
             }
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[History] {t.get('ticker')} price fetch failed: {e}")
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         pool.map(_fetch, history)
@@ -6834,8 +6866,9 @@ def api_news_debug(ticker):
     """Debug endpoint — shows raw RSS response to diagnose news issues."""
     sym = ticker.strip().upper()
     try:
-        import requests, xml.etree.ElementTree as ET
-        url  = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={sym}&region=US&lang=en-US"
+        import requests
+        from urllib.parse import quote
+        url  = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={quote(sym)}&region=US&lang=en-US"
         headers = {"User-Agent": "Mozilla/5.0"}
         resp = requests.get(url, headers=headers, timeout=8)
         return jsonify({
@@ -6863,10 +6896,10 @@ def api_news_debug(ticker):
 @app.route("/api/search", methods=["POST"])
 def api_search():
     """Run all strategies on a single user-supplied ticker."""
-    sym = (request.json or {}).get("ticker", "").strip().upper()
-    if not sym:
-        return jsonify({"ok": False, "message": "No ticker provided"}), 400
-    raw     = scan_ticker(sym)
+    sym = str((request.get_json(silent=True) or {}).get("ticker") or "").strip().upper()
+    if not sym or not re.fullmatch(r"[A-Z0-9.\-^=]{1,10}", sym):
+        return jsonify({"ok": False, "message": "No valid ticker provided"}), 400
+    raw     = scan_ticker(sym, prefetch_fn=_prefetch_ticker)
     signals = raw.get("_signals", {}) if raw else {}
     if not signals:
         return jsonify({"ok": False, "message": f"No signals found for {sym} — it may not meet any strategy criteria right now."})
@@ -6876,19 +6909,24 @@ def api_search():
 @app.route("/api/track", methods=["POST"])
 def api_track_add():
     """Add a signal to the tracked positions list."""
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
+    if not data.get("ticker") or not isinstance(data.get("option"), dict):
+        return jsonify({"ok": False, "message": "ticker and option are required"}), 400
     position = {
         "id":           str(uuid.uuid4())[:8],
         "tracked_at":   datetime.now().isoformat(),
-        "ticker":       data.get("ticker", ""),
+        "ticker":       str(data.get("ticker", "")).upper(),
         "name":         data.get("name", ""),
-        "price":        data.get("price", 0),
-        "strategy":     data.get("strategy", ""),
+        "price":        _as_float(data.get("price")),
+        "strategy":     _norm_strategy(data.get("strategy", "")),
         "strategy_label": data.get("strategy_label", ""),
         "option":       data.get("option", {}),
         "legs":         data.get("legs", None),
-        "net_credit":   data.get("net_credit", 0),
-        "entry_price":  data.get("entry_price", 0),   # option mid at time of tracking
+        "net_credit":   _as_float(data.get("net_credit")),
+        "put_width":    _as_float(data.get("put_width")),
+        "call_width":   _as_float(data.get("call_width")),
+        "contracts":    max(1, _as_int(data.get("contracts") or data.get("qty"), 1)),
+        "entry_price":  _as_float(data.get("entry_price")),   # option mid at time of tracking
         "last_signal":  None,
         "last_checked": None,
     }
@@ -6969,79 +7007,56 @@ def api_track_update_option(position_id):
     Update the option details (strike / expiration / type) for a tracked position.
     Tries to fetch a fresh price for the new option from yfinance.
     """
-    data = request.json or {}
+    data       = request.get_json(silent=True) or {}
+    new_strike = _as_float(data.get("strike"))
+    new_exp    = str(data.get("expiration") or "").strip()
+    new_type   = str(data.get("type") or "call").strip().lower()
+    if new_strike <= 0 or not new_exp or new_type not in ("call", "put"):
+        return jsonify({"ok": False, "message": "Strike, expiration, and type are required"})
     try:
-        new_strike = float(data.get("strike", 0))
-        new_exp    = str(data.get("expiration", "")).strip()
-        new_type   = str(data.get("type", "call")).strip().lower()
-        if new_strike <= 0 or not new_exp or new_type not in ("call", "put"):
-            return jsonify({"ok": False, "message": "Strike, expiration, and type are required"})
-    except (TypeError, ValueError) as e:
-        return jsonify({"ok": False, "message": f"Invalid input: {e}"})
+        exp_date = date.fromisoformat(new_exp)
+    except ValueError:
+        return jsonify({"ok": False, "message": "Expiration must be YYYY-MM-DD"})
+
+    with track_lock:
+        pos = next((p for p in load_tracked() if p["id"] == position_id), None)
+    if not pos:
+        return jsonify({"ok": False, "message": "Position not found"})
+    ticker = pos.get("ticker", "")
+
+    # ── Fetch fresh option data for the new strike/exp (network, outside the lock) ──
+    new_opt = dict(pos.get("option") or {})
+    new_opt.update(strike=new_strike, expiration=new_exp, type=new_type,
+                   dte=max((exp_date - date.today()).days, 0))
+    entry_price_auto = None
+    try:
+        chain = _yf_call(yf.Ticker(ticker).option_chain, new_exp)
+        opts  = chain.calls if new_type == "call" else chain.puts
+        row   = opts[(opts["strike"] - new_strike).abs() < 0.01]
+        if not row.empty:
+            r = row.iloc[0]
+            mid, bid, ask, _, quality = _option_price_detail(r)
+            if _as_float(r.get("impliedVolatility")) > 3.0:
+                print(f"[PriceCheck] {ticker} edit strike={new_strike} rejected (IV > 300%, misaligned row)")
+            else:
+                new_opt["bid"]           = round(bid, 3)
+                new_opt["ask"]           = round(ask, 3)
+                new_opt["mid"]           = round(mid, 3)
+                new_opt["iv"]            = round(_as_float(r.get("impliedVolatility")) * 100, 1)
+                new_opt["volume"]        = _as_int(r.get("volume"))          # NaN-safe (yfinance leaves untraded rows NaN)
+                new_opt["open_interest"] = _as_int(r.get("openInterest"))
+                # Auto-set entry price only from a live or near-live quote — never
+                # from lastPrice alone, which can be days old for thin options.
+                if mid > 0 and quality in ("live", "stale_bid", "ask_only"):
+                    entry_price_auto = round(mid, 3)
+    except Exception as e:
+        print(f"[option edit] Could not fetch live data for {ticker} {new_exp} {new_type} ${new_strike}: {e}")
 
     with track_lock:
         positions = load_tracked()
         pos = next((p for p in positions if p["id"] == position_id), None)
         if not pos:
             return jsonify({"ok": False, "message": "Position not found"})
-
-        ticker = pos.get("ticker", "")
-
-        # ── Try to fetch fresh option data for the new strike/exp ──
-        new_opt = dict(pos.get("option") or {})
-        new_opt["strike"]     = new_strike
-        new_opt["expiration"] = new_exp
-        new_opt["type"]       = new_type
-        entry_price_auto      = None
-        try:
-            tkr   = yf.Ticker(ticker)
-            # Fetch current stock price for misalignment sanity check
-            _hist = _yf_call(tkr.history, period="2d")
-            _stock_price = float(_hist["Close"].iloc[-1]) if _hist is not None and not _hist.empty else 0.0
-            chain = _yf_call(tkr.option_chain, new_exp)
-            opts  = chain.calls if new_type == "call" else chain.puts
-            row   = opts[abs(opts["strike"] - new_strike) < 0.01]
-            if not row.empty:
-                r = row.iloc[0]
-                mid, bid, ask, last, quality = _option_price_detail(r)
-
-                # ── Sanity-check for grossly corrupt yfinance data ──
-                _row_iv   = float(r.get("impliedVolatility") or 0)
-                _price_ok = True
-                if _row_iv > 3.0:
-                    print(
-                        f"[PriceCheck] {ticker} edit strike={new_strike} mid={mid:.3f} "
-                        f"iv={_row_iv:.2f} — rejected (IV > 300%, likely misaligned row)"
-                    )
-                    _price_ok = False
-
-                if _price_ok:
-                    new_opt["bid"]            = round(float(r.get("bid") or 0), 3)
-                    new_opt["ask"]            = round(float(r.get("ask") or 0), 3)
-                    new_opt["mid"]            = round(mid, 3)
-                    new_opt["iv"]             = round(float(r.get("impliedVolatility") or 0) * 100, 1)
-                    new_opt["volume"]         = int(r.get("volume") or 0)
-                    new_opt["open_interest"]  = int(r.get("openInterest") or 0)
-                    # Re-compute DTE from today to expiration
-                    from datetime import date as _date
-                    try:
-                        exp_date = _date.fromisoformat(new_exp)
-                        new_opt["dte"] = max((exp_date - _date.today()).days, 0)
-                    except Exception:
-                        pass
-                    # Auto-set entry price only from a live or near-live quote.
-                    # Never use lastPrice alone — it can be days old for thinly-traded
-                    # options and will produce a wildly wrong P&L baseline.
-                    # quality values that indicate a real-time price:
-                    #   "live"       – fresh two-sided bid+ask
-                    #   "stale_bid"  – bid looks old but ask is current
-                    #   "ask_only"   – no bid yet (common at open), ask is current
-                    # Excluded: "last_only" (lastPrice only, no live quote) and "unavailable"
-                    if mid > 0 and quality in ("live", "stale_bid", "ask_only"):
-                        entry_price_auto = round(mid, 3)
-        except Exception as e:
-            print(f"[option edit] Could not fetch live data for {ticker} {new_exp} {new_type} ${new_strike}: {e}")
-
         pos["option"]      = new_opt
         pos["last_signal"] = None   # will be populated by the immediate refresh below
         pos["last_checked"]= None
@@ -7059,8 +7074,6 @@ def api_track_update_option(position_id):
     # Don't wait 6 hours for the background pass — run get_sell_signal
     # now in a short-lived thread so the card shows live prices within seconds.
     def _refresh_after_edit(pid):
-        import time as _time
-        _time.sleep(0.5)   # let the response return first
         try:
             with track_lock:
                 positions = load_tracked()
@@ -7096,13 +7109,10 @@ def api_track_update_option(position_id):
 @app.route("/api/track/<position_id>/entry", methods=["PATCH"])
 def api_track_update_entry(position_id):
     """Update the actual entry price paid for a tracked position."""
-    data = request.json or {}
-    try:
-        new_price = float(data.get("entry_price", 0))
-        if new_price <= 0:
-            return jsonify({"ok": False, "message": "Price must be greater than 0"})
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "message": "Invalid price"})
+    data      = request.get_json(silent=True) or {}
+    new_price = _as_float(data.get("entry_price"))
+    if new_price <= 0:
+        return jsonify({"ok": False, "message": "Price must be greater than 0"})
 
     with track_lock:
         positions = load_tracked()
@@ -7110,6 +7120,13 @@ def api_track_update_entry(position_id):
             if p["id"] == position_id:
                 p["entry_price"]        = new_price
                 p["entry_price_manual"] = True   # flag that user set this manually
+                # Recompute P&L against the new entry so the card updates at once
+                sig = p.get("last_signal") or {}
+                if _as_float(sig.get("current_option_mid")) > 0:
+                    p["last_signal"] = _apply_price_update(p, sig, _as_float(sig.get("current_option_mid")),
+                                                           _as_float(sig.get("current_bid")),
+                                                           _as_float(sig.get("current_ask")),
+                                                           sig.get("price_quality", "unavailable"))
                 break
         else:
             return jsonify({"ok": False, "message": "Position not found"})
@@ -7126,10 +7143,10 @@ def api_track_live_price(position_id):
     quote (bid+ask both present), at which point it is automatically cleared.
     Pass {live_price: 0} or {clear: true} to remove the override.
     """
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
 
     # Allow explicit clear
-    if data.get("clear"):
+    if data.get("clear") or (data.get("live_price") is not None and _as_float(data.get("live_price")) == 0):
         with track_lock:
             positions = load_tracked()
             for p in positions:
@@ -7142,12 +7159,9 @@ def api_track_live_price(position_id):
             save_tracked(positions)
         return jsonify({"ok": True})
 
-    try:
-        new_price = float(data.get("live_price", 0))
-        if new_price <= 0:
-            return jsonify({"ok": False, "message": "Price must be greater than 0"})
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "message": "Invalid price"})
+    new_price = _as_float(data.get("live_price"))
+    if new_price <= 0:
+        return jsonify({"ok": False, "message": "Price must be greater than 0"})
 
     with track_lock:
         positions = load_tracked()
@@ -7155,37 +7169,9 @@ def api_track_live_price(position_id):
             if p["id"] == position_id:
                 p["live_price_override"]    = round(new_price, 3)
                 p["live_price_override_at"] = datetime.now().isoformat()
-                # Inject into last_signal so tracker instantly shows updated P&L
-                if p.get("last_signal") is None:
-                    p["last_signal"] = {}
-                p["last_signal"]["current_option_mid"] = round(new_price, 3)
-                p["last_signal"]["price_quality"]      = "manual"
-                p["last_signal"]["current_bid"]        = None
-                p["last_signal"]["current_ask"]        = None
-                # Re-evaluate profit/stop thresholds
-                entry = float(p.get("entry_price") or 0)
-                if entry > 0:
-                    pct = (new_price - entry) / entry * 100
-                    dollar = (new_price - entry) * 100
-                    p["last_signal"]["pct_change"]    = round(pct, 1)
-                    p["last_signal"]["dollar_change"] = round(dollar, 2)
-                    # Check if sell thresholds are breached
-                    reasons = list(p["last_signal"].get("reasons") or [])
-                    # Remove old price-based reasons
-                    reasons = [r for r in reasons if "Profit target" not in r and "Stop loss" not in r]
-                    if pct >= SELL_PROFIT_TARGET:
-                        p["last_signal"]["triggered"] = True
-                        reasons.insert(0, f"🎯 Profit target hit: +{pct:.1f}% (target +{SELL_PROFIT_TARGET}%)")
-                    elif pct <= -SELL_STOP_LOSS:
-                        p["last_signal"]["triggered"] = True
-                        reasons.insert(0, f"🛑 Stop loss hit: {pct:.1f}% (limit -{SELL_STOP_LOSS}%)")
-                    else:
-                        # Remove triggered flag if price moved back inside bounds
-                        price_triggered = any("Profit target" in r or "Stop loss" in r
-                                              for r in p["last_signal"].get("reasons", []))
-                        if price_triggered:
-                            p["last_signal"]["triggered"] = False
-                    p["last_signal"]["reasons"] = reasons
+                # Inject into last_signal so the tracker instantly shows updated
+                # P&L and re-evaluates target / stop / trailing / stagnation.
+                p["last_signal"] = _apply_price_update(p, p.get("last_signal") or {}, new_price, 0.0, 0.0, "manual")
                 break
         else:
             return jsonify({"ok": False, "message": "Position not found"})
@@ -7195,6 +7181,31 @@ def api_track_live_price(position_id):
 
 
 # ── Performance tracker API ───────────────────────────────────
+
+def _closed_trade_record(ticker, strategy, option_desc, entry, exit_, contracts,
+                         entry_date, exit_date, notes, source):
+    """Build a closed-trade dict with strategy-direction-aware P&L (exit 0 = expired worthless)."""
+    sign      = -1.0 if strategy in SHORT_PREMIUM_STRATS else 1.0
+    pnl_per   = sign * (exit_ - entry) * 100
+    pnl_total = pnl_per * contracts
+    pnl_pct   = sign * (exit_ - entry) / entry * 100
+    return {
+        "id":          str(uuid.uuid4())[:8],
+        "ticker":      ticker,
+        "strategy":    strategy,
+        "option_desc": option_desc,
+        "entry_price": round(entry, 3),
+        "exit_price":  round(exit_, 3),
+        "contracts":   contracts,
+        "pnl_per":     round(pnl_per,   2),
+        "pnl_total":   round(pnl_total, 2),
+        "pnl_pct":     round(pnl_pct,   1),
+        "entry_date":  entry_date,
+        "exit_date":   exit_date,
+        "notes":       notes,
+        "source":      source,
+    }
+
 
 @app.route("/api/performance", methods=["GET"])
 def api_performance_get():
@@ -7207,33 +7218,18 @@ def api_performance_get():
 @app.route("/api/performance", methods=["POST"])
 def api_performance_add():
     """Add a manually-entered closed trade."""
-    import uuid as _uuid
-    data = request.get_json(silent=True) or {}
-    try:
-        entry  = float(data["entry_price"])
-        exit_  = float(data["exit_price"])
-        contr  = int(data.get("contracts", 1))
-        pnl_per   = (exit_ - entry) * 100
-        pnl_total = pnl_per * contr
-        pnl_pct   = (exit_ - entry) / entry * 100
-        trade = {
-            "id":          str(_uuid.uuid4())[:8],
-            "ticker":      data.get("ticker", "").upper(),
-            "strategy":    data.get("strategy", ""),
-            "option_desc": data.get("option_desc", ""),
-            "entry_price": round(entry, 3),
-            "exit_price":  round(exit_,  3),
-            "contracts":   contr,
-            "pnl_per":     round(pnl_per,   2),
-            "pnl_total":   round(pnl_total, 2),
-            "pnl_pct":     round(pnl_pct,   1),
-            "entry_date":  data.get("entry_date", ""),
-            "exit_date":   data.get("exit_date",  ""),
-            "notes":       data.get("notes", ""),
-            "source":      "manual",
-        }
-    except (KeyError, ValueError, ZeroDivisionError) as e:
-        return jsonify({"ok": False, "error": str(e)}), 400
+    data  = request.get_json(silent=True) or {}
+    entry = _as_float(data.get("entry_price"))
+    exit_ = _as_float(data.get("exit_price"), -1.0)
+    contr = max(1, _as_int(data.get("contracts"), 1))
+    strat = _norm_strategy(data.get("strategy", ""))
+    if entry <= 0 or exit_ < 0:
+        return jsonify({"ok": False, "error": "Entry price must be > 0 and exit price ≥ 0 (0 = expired worthless)."}), 400
+    trade = _closed_trade_record(
+        ticker=str(data.get("ticker") or "").upper(), strategy=strat,
+        option_desc=data.get("option_desc", ""), entry=entry, exit_=exit_, contracts=contr,
+        entry_date=data.get("entry_date", ""), exit_date=data.get("exit_date", ""),
+        notes=data.get("notes", ""), source="manual")
     with _perf_lock:
         trades = load_performance()
         trades.append(trade)
@@ -7244,10 +7240,8 @@ def api_performance_add():
 @app.route("/api/performance/from-tracker", methods=["POST"])
 def api_performance_from_tracker():
     """Log a tracked position as closed and move it to performance history."""
-    import uuid as _uuid
     data       = request.get_json(silent=True) or {}
     pos_id     = data.get("position_id")
-    exit_price = data.get("exit_price")
     exit_date  = data.get("exit_date", "")
 
     with track_lock:
@@ -7255,34 +7249,22 @@ def api_performance_from_tracker():
         pos = next((p for p in positions if p["id"] == pos_id), None)
         if not pos:
             return jsonify({"ok": False, "error": "Position not found"}), 404
-        opt         = pos.get("option", {})
-        entry_price = float(pos.get("entry_price") or opt.get("mid") or opt.get("ask") or 0)
-        if exit_price is None:
-            sig = pos.get("last_signal", {})
-            exit_price = float(sig.get("current_option_mid") or 0)
-        exit_price = float(exit_price)
-        if entry_price <= 0 or exit_price <= 0:
-            return jsonify({"ok": False, "error": "Need valid entry and exit prices. Use ✏️ Edit entry first if entry is missing."}), 400
-        contr     = int(pos.get("contracts", 1))
-        pnl_per   = (exit_price - entry_price) * 100
-        pnl_total = pnl_per * contr
-        pnl_pct   = (exit_price - entry_price) / entry_price * 100
-        trade = {
-            "id":          str(_uuid.uuid4())[:8],
-            "ticker":      pos.get("ticker", ""),
-            "strategy":    pos.get("strategy", ""),
-            "option_desc": f"{opt.get('type','').capitalize()} ${opt.get('strike','')} {opt.get('expiration','')}",
-            "entry_price": round(entry_price, 3),
-            "exit_price":  round(exit_price,  3),
-            "contracts":   contr,
-            "pnl_per":     round(pnl_per,   2),
-            "pnl_total":   round(pnl_total, 2),
-            "pnl_pct":     round(pnl_pct,   1),
-            "entry_date":  str(pos.get("added_at", ""))[:10],
-            "exit_date":   exit_date or datetime.now().strftime("%Y-%m-%d"),
-            "notes":       data.get("notes", ""),
-            "source":      "tracker",
-        }
+        opt         = pos.get("option") or {}
+        sig         = pos.get("last_signal") or {}
+        entry_price = _as_float(pos.get("entry_price")) or _as_float(opt.get("mid")) or _as_float(opt.get("ask"))
+        exit_price  = _as_float(data.get("exit_price"), -1.0)
+        if exit_price < 0:                                   # not supplied → use the latest quote
+            exit_price = _as_float(sig.get("current_option_mid"), -1.0)
+        if entry_price <= 0 or exit_price < 0:
+            return jsonify({"ok": False, "error": "Need a valid entry price and an exit price (0 = expired worthless). "
+                                                  "Use ✏️ Edit entry first if entry is missing."}), 400
+        trade = _closed_trade_record(
+            ticker=pos.get("ticker", ""), strategy=_norm_strategy(pos.get("strategy", "")),
+            option_desc=f"{str(opt.get('type', '')).capitalize()} ${opt.get('strike', '')} {opt.get('expiration', '')}",
+            entry=entry_price, exit_=exit_price, contracts=max(1, _as_int(pos.get("contracts"), 1)),
+            entry_date=str(pos.get("tracked_at") or "")[:10],
+            exit_date=exit_date or datetime.now().strftime("%Y-%m-%d"),
+            notes=data.get("notes", ""), source="tracker")
         positions = [p for p in positions if p["id"] != pos_id]
         save_tracked(positions)
     with _perf_lock:
@@ -7440,6 +7422,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
          border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;margin-right:6px}
 @keyframes spin{to{transform:rotate(360deg)}}
 @keyframes livepulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
+@keyframes pulse-bar{0%,100%{opacity:.35}50%{opacity:1}}
 
 /* Monte Carlo section */
 .mc-section{border-top:1px solid var(--border);padding:12px 16px}
@@ -7461,7 +7444,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
 
 <header>
   <h1>⚡ Options Bot</h1>
-  <span class="tagline">⚡ Focus: ~80 liquid names · 📊 Full: S&amp;P 500 (~503) · 4 strategies · SoFi execution</span>
+  <span class="tagline">⚡ Focus: ~100 liquid names · 📊 Full: S&amp;P 500 (~503) · 5 strategies · SoFi execution</span>
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <div id="scan-info" style="font-size:12px;color:var(--muted)">Not yet scanned</div>
     <div id="live-badge" style="display:none;align-items:center;gap:6px;font-size:11px;
@@ -7583,7 +7566,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
 
 <div class="panel" id="panel-tracked">
   <div class="disclaimer">
-    <b>📍 Tracked Positions</b> — The bot checks these every 10 minutes and flags sell signals.
+    <b>📍 Tracked Positions</b> — Option prices and the profit-target / stop / trailing-stop checks refresh every 3 minutes; the full RSI/Bollinger sell-signal review runs every 6 hours and after every scan.
     A signal fires when: profit target hit, stop loss hit, RSI reverses through the threshold, or Bollinger Band signal fires.
   </div>
   <div id="tracked-content"><div class="queue-empty">No tracked positions yet. Click "Track" on any signal card to start monitoring it.</div></div>
@@ -7656,7 +7639,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
           style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;
                  padding:7px 12px;color:var(--text);font-size:13px;outline:none">
           <option value="signals">⚡ Current Signals (fastest)</option>
-          <option value="focus">Focus List (~80 tickers)</option>
+          <option value="focus">Focus List (~100 tickers)</option>
           <option value="ticker">Single Ticker</option>
           <option value="full">Full S&P 500 (slow)</option>
         </select>
@@ -7735,7 +7718,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
     <h2 style="color:var(--accent);font-size:18px;margin-bottom:6px">🧬 Walk-Forward Optimizer</h2>
     <p style="color:var(--muted);font-size:13px;margin-bottom:16px">
       Sweeps RSI thresholds, confluence requirements, ADX threshold, and hold period across
-      <b>162 parameter combinations</b>. Trains on the first 75% of history, validates on the last 25%
+      <b>486 parameter combinations</b>. Trains on the first 75% of history, validates on the last 25%
       to prevent overfitting. Best settings can be applied to the live scanner.
     </p>
     <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
@@ -7745,7 +7728,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
           style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;
                  padding:7px 12px;color:var(--text);font-size:13px;outline:none">
           <option value="signals">⚡ Current Signals (fastest)</option>
-          <option value="focus">Focus List (~80 tickers)</option>
+          <option value="focus">Focus List (~100 tickers)</option>
           <option value="full">Full S&P 500 (slow)</option>
         </select>
       </div>
@@ -8089,7 +8072,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
           </select>
           <select id="cal-universe" style="background:var(--surface);border:1px solid var(--border);
                   color:var(--text);border-radius:8px;padding:6px 10px;font-size:13px">
-            <option value="focus">Focus List (~70 stocks, fast)</option>
+            <option value="focus">Focus List (~100 stocks, fast)</option>
             <option value="snp500">S&amp;P 500 (500 stocks, ~10 min)</option>
           </select>
           <button id="cal-run-btn" class="btn btn-primary" onclick="runCalibration()"
@@ -8285,7 +8268,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
           <select id="hs-universe"
                   style="background:var(--surface);border:1px solid var(--border);
                          color:var(--text);border-radius:8px;padding:6px 10px;font-size:13px">
-            <option value="focus">Focus List (~70 stocks, fast)</option>
+            <option value="focus">Focus List (~100 stocks, fast)</option>
             <option value="snp500">S&amp;P 500 (500 stocks, ~10 min)</option>
           </select>
           <select id="hs-months"
@@ -8379,12 +8362,27 @@ let scanPoll   = null;
 let resultPoll = null;
 const chartRegistry = {};
 
+// Escape text that comes from the server / third parties (company names,
+// RSS headlines, publishers) before it goes into innerHTML or an attribute.
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+// Escape for use inside a single-quoted JS string in an onclick="" attribute.
+function jsq(s) {
+  return esc(String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+}
+// Only http(s) links are allowed into href (RSS feeds are untrusted input).
+function safeHref(u) {
+  return /^https?:\/\//i.test(String(u || '')) ? esc(u) : '#';
+}
+
 // ── Tab switching ─────────────────────────────────────────────
 function switchTab(tab) {
   activeTab = tab;
-  document.querySelectorAll('.tab').forEach((el,i)=>{
-    el.classList.toggle('active',
-      ['sell_puts','buy_calls','buy_puts','covered_calls','iron_condors','tracked','queue','history','backtest','bsmodel','performance'][i]===tab);
+  // Match the tab by the name in its onclick (a positional list drifted every
+  // time a tab was added — the Calibrate tab never highlighted).
+  document.querySelectorAll('.tab').forEach(el=>{
+    el.classList.toggle('active', (el.getAttribute('onclick')||'').includes(`'${tab}'`));
   });
   document.querySelectorAll('.panel').forEach(el=> el.classList.remove('active'));
   document.getElementById('panel-'+tab).classList.add('active');
@@ -8516,7 +8514,6 @@ function pollResults() {
 }
 
 // ── Live refresh UI ────────────────────────────────────────────
-let livePoll = null;
 
 function updateLiveBadge(data) {
   const badge   = document.getElementById('live-badge');
@@ -8607,14 +8604,19 @@ async function loadCondorResults() {
       container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--muted)">No iron condor setups found.</div>';
       return;
     }
-    // Reuse the standard card builder by temporarily loading into the panel
-    const tempDiv = document.createElement('div');
+    // buildCard returns an HTML string (appendChild on it threw, so condor
+    // results never rendered).  Build the cards the same way loadStrategy does.
+    const rendered = [];
+    let cards = '';
     data.forEach(item => {
-      const card = buildCard(item, 'iron_condors');
-      tempDiv.appendChild(card);
+      try { cards += buildCard(item, 'iron_condors'); rendered.push(item); }
+      catch(e) { console.error('buildCard error for', item.ticker, e); }
     });
-    container.innerHTML = '';
-    container.appendChild(tempDiv);
+    container.innerHTML = `<div class="cards">${cards}</div>`;
+    try { renderCharts(rendered); } catch(e) { console.error('renderCharts error', e); }
+    for (const d of rendered) {
+      renderNewsIntoCard(d.ticker, 'iron_condor', 'news-' + d.ticker + '_iron_condor');
+    }
   } catch(e) { console.error('Condor results load error:', e); }
 }
 
@@ -8690,8 +8692,8 @@ function buildCard(d, strategy) {
   if(d.bb_oversold)   sigs += `<span class="sig sig-yellow">Below BB</span>`;
   if(d.bb_overbought) sigs += `<span class="sig sig-orange">Above BB</span>`;
   // Donchian Channel signals
-  if(d.dc_at_lower)   sigs += `<span class="sig sig-red" title="Price at ${DC_PERIOD||20}-day Donchian lower band — N-period price low">📉 DC Lower $${d.dc_lower?.toFixed(2)}</span>`;
-  if(d.dc_at_upper)   sigs += `<span class="sig sig-orange" title="Price at ${DC_PERIOD||20}-day Donchian upper band — N-period price high">📈 DC Upper $${d.dc_upper?.toFixed(2)}</span>`;
+  if(d.dc_at_lower)   sigs += `<span class="sig sig-red" title="Price at 20-day Donchian lower band — N-period price low">📉 DC Lower $${d.dc_lower?.toFixed(2)}</span>`;
+  if(d.dc_at_upper)   sigs += `<span class="sig sig-orange" title="Price at 20-day Donchian upper band — N-period price high">📈 DC Upper $${d.dc_upper?.toFixed(2)}</span>`;
   if(d.dc_squeeze)    sigs += `<span class="sig sig-blue" title="Donchian range ${d.dc_range_pct?.toFixed(1)}% — tight consolidation, breakout likely">🗜 DC Squeeze ${d.dc_range_pct?.toFixed(1)}%</span>`;
   if(d.reversal)      sigs += `<span class="sig sig-green">RSI Turning ↑</span>`;
   if(d.iv_high)       sigs += `<span class="sig sig-purple">IV Rank ${d.iv_rank?.toFixed(0)}</span>`;
@@ -8873,12 +8875,12 @@ function buildCard(d, strategy) {
 <div class="card">
   <div class="card-head">
     <div style="flex:1">
-      <div class="ticker">${d.ticker}</div>
-      <div class="cname">${d.name}</div>
+      <div class="ticker">${esc(d.ticker)}</div>
+      <div class="cname">${esc(d.name)}</div>
     </div>
     <div style="text-align:right;flex:1">
       <div class="cprice" style="color:${sc}">$${d.price.toFixed(3)}</div>
-      <div class="csector">${d.sector}</div>
+      <div class="csector">${esc(d.sector)}</div>
     </div>
     <div class="score-ring" style="background:${sc}22;color:${sc};border:2px solid ${sc}">${d.score}</div>
   </div>
@@ -8968,10 +8970,10 @@ function buildCard(d, strategy) {
         oninput="updateCost('${id}',${isCondor?d.net_credit||0:opt.ask||0},${opt.strike||0},'${sid}',${d.put_width||0},${d.call_width||0})"/>
     </div>
     <div class="cost-est" id="cost-${id}">Est. capital: <span class="cost-val">${calcCostDisplay(1, isCondor?d.net_credit||0:opt.ask||0, opt.strike||0, sid, d.put_width||0, d.call_width||0)}</span></div>
-    <button class="btn btn-primary" onclick="addToQueue('${d.ticker}','${d.name}',${d.price},'${sid}s','${d.strategy_label||action}','${id}')">
+    <button class="btn btn-primary" onclick="addToQueue('${jsq(d.ticker)}','${jsq(d.name)}',${d.price},'${sid}','${jsq(d.strategy_label||action)}','${id}')">
       + Add to Queue
     </button>
-    <button class="btn btn-ghost" style="margin-left:6px" onclick="trackPosition('${d.ticker}','${d.name}',${d.price},'${sid}','${d.strategy_label||action}','${id}')">
+    <button class="btn btn-ghost" style="margin-left:6px" onclick="trackPosition('${jsq(d.ticker)}','${jsq(d.name)}',${d.price},'${sid}','${jsq(d.strategy_label||action)}','${id}')">
       📍 Track
     </button>
     <button class="btn btn-ghost" style="margin-left:6px" onclick="openBSFromCard('${d.ticker}',${d.price},${opt.strike||0},${opt.dte||30},${opt.iv||0},${opt.mid||0},'${opt.type||sid}')">
@@ -9025,11 +9027,11 @@ function renderNewsIntoCard(ticker, strategy, containerId) {
             <span style="min-width:60px;font-size:10px;font-weight:700;color:${sc};
                          padding:2px 6px;border-radius:4px;background:${sc}18;text-align:center">${lbl}</span>
             <div style="flex:1;min-width:0">
-              <a href="${a.link}" target="_blank"
+              <a href="${safeHref(a.link)}" target="_blank" rel="noopener noreferrer"
                  style="font-size:12px;color:var(--text);text-decoration:none;
                         display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                 title="${a.title}">${a.title}</a>
-              <span style="font-size:10px;color:var(--muted)">${a.publisher}${ts?' · '+ts:''}</span>
+                 title="${esc(a.title)}">${esc(a.title)}</a>
+              <span style="font-size:10px;color:var(--muted)">${esc(a.publisher)}${ts?' · '+ts:''}</span>
             </div>
           </div>`;
       }).join('');
@@ -9370,11 +9372,22 @@ function renderCharts(data) {
 }
 
 // ── Trade queue ───────────────────────────────────────────────
+// Cards rendered from the search overlay aren't in /api/results — keep the
+// signal objects of the last search so Add/Track can find them.
+window._searchSignals = window._searchSignals || {};
+
+function findSignal(results, ticker, strategy) {
+  return results.find(d=>d.ticker===ticker) || window._searchSignals[`${ticker}_${strategy}`] || null;
+}
+
 async function addToQueue(ticker, name, price, strategy, stratLabel, id) {
   const qty = parseInt(document.getElementById('qty-'+id)?.value)||1;
-  // Build option object from the card's data — we'll read it from /api/results
-  const results = await fetch('/api/results/'+strategy).then(r=>r.json());
-  const signal  = results.find(d=>d.ticker===ticker);
+  // `strategy` is the singular name (sell_put); the results URL uses the plural bucket.
+  // Sending the plural to /api/queue used to make calc_trade_cost miss the
+  // sell_put branch, so cash-secured puts were costed at the premium and the
+  // $1,000 guardrail never fired for them.
+  const results = await fetch('/api/results/'+strategy+'s').then(r=>r.json()).catch(()=>[]);
+  const signal  = findSignal(results, ticker, strategy);
   if(!signal){ alert('Signal no longer available. Re-run scan.'); return; }
 
   const entryPrice = signal.strategy === 'iron_condor'
@@ -9388,11 +9401,13 @@ async function addToQueue(ticker, name, price, strategy, stratLabel, id) {
                 put_width:  signal.put_width  || 0,
                 call_width: signal.call_width || 0,
                 legs:       signal.legs       || null};
-  const resp = await fetch('/api/queue',{method:'POST',headers:{'Content-Type':'application/json'},
-                                          body:JSON.stringify(body)}).then(r=>r.json());
-
-  const trade = resp.trade;
-  const g     = resp.guardrail;
+  let resp;
+  try {
+    resp = await fetch('/api/queue',{method:'POST',headers:{'Content-Type':'application/json'},
+                                     body:JSON.stringify(body)}).then(r=>r.json());
+  } catch(e) { alert('Could not reach the bot: '+e); return; }
+  if(!resp.ok){ alert(resp.message || resp.error || 'Could not add to queue.'); return; }
+  const g = resp.guardrail;
 
   let msg = `Added ${ticker} ${stratLabel} ×${qty} to queue.`;
   if(!g.passes){
@@ -9405,8 +9420,8 @@ async function addToQueue(ticker, name, price, strategy, stratLabel, id) {
 
 // ── Tracked positions ─────────────────────────────────────────
 async function trackPosition(ticker, name, price, strategy, stratLabel, id) {
-  const results = await fetch('/api/results/'+strategy+'s').then(r=>r.json());
-  const signal  = results.find(d=>d.ticker===ticker);
+  const results = await fetch('/api/results/'+strategy+'s').then(r=>r.json()).catch(()=>[]);
+  const signal  = findSignal(results, ticker, strategy);
   if(!signal){ alert('Signal no longer available. Re-run scan.'); return; }
 
   const entryPrice = signal.strategy === 'iron_condor'
@@ -9420,12 +9435,15 @@ async function trackPosition(ticker, name, price, strategy, stratLabel, id) {
     option:          signal.option   || {},
     legs:            signal.legs     || null,
     net_credit:      signal.net_credit || 0,
+    put_width:       signal.put_width  || 0,
+    call_width:      signal.call_width || 0,
+    contracts:       parseInt(document.getElementById('qty-'+id)?.value)||1,
     entry_price:     entryPrice,
   };
   const resp = await fetch('/api/track',{method:'POST',headers:{'Content-Type':'application/json'},
                                           body:JSON.stringify(body)}).then(r=>r.json());
   if(resp.ok){
-    alert(`📍 Now tracking ${ticker} ${stratLabel}. The bot will check for sell signals every 10 minutes.`);
+    alert(`📍 Now tracking ${ticker} ${stratLabel}. Prices and stop/target checks refresh every 3 minutes; the full sell-signal review runs every 6 hours.`);
     document.getElementById('cnt-tracked').textContent =
       parseInt(document.getElementById('cnt-tracked').textContent||0)+1;
   } else {
@@ -9434,7 +9452,13 @@ async function trackPosition(ticker, name, price, strategy, stratLabel, id) {
 }
 
 async function refreshTracked() {
-  const positions = await fetch('/api/tracked').then(r=>r.json());
+  let positions;
+  try {
+    positions = await fetch('/api/tracked').then(r=>r.json());
+  } catch(e) {
+    console.warn('tracked refresh failed (bot restarting?)', e);   // the 60 s poll used to throw an unhandled rejection
+    return;
+  }
   document.getElementById('cnt-tracked').textContent = positions.length;
   const el = document.getElementById('tracked-content');
   if(!positions.length){
@@ -9623,7 +9647,7 @@ async function refreshTracked() {
     return `<tr>
       <td>
         <b>${p.ticker}</b><br>
-        <span style="font-size:11px;color:var(--muted)">${p.name||''}</span><br>
+        <span style="font-size:11px;color:var(--muted)">${esc(p.name||'')}</span><br>
         <span style="font-size:10px;color:var(--muted)">Since ${trackedAt}</span>
       </td>
       <td>${p.strategy_label||p.strategy}</td>
@@ -9807,15 +9831,20 @@ async function searchTicker() {
   resultsEl.innerHTML = '<div style="color:var(--muted);padding:16px 0">Scanning ticker, please wait…</div>';
   overlay.style.display = 'block';
 
-  const resp = await fetch('/api/search', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ticker: sym})
-  }).then(r => r.json());
+  let resp;
+  try {
+    resp = await fetch('/api/search', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ticker: sym})
+    }).then(r => r.json());
+  } catch(e) {
+    resp = {ok:false, message:'Could not reach the bot: '+e};
+  }
 
   if (!resp.ok) {
     titleEl.textContent = sym;
-    resultsEl.innerHTML = `<div style="color:var(--red);padding:16px 0">${resp.message}</div>`;
+    resultsEl.innerHTML = `<div style="color:var(--red);padding:16px 0">${esc(resp.message)}</div>`;
     return;
   }
 
@@ -9823,16 +9852,20 @@ async function searchTicker() {
   const count   = Object.keys(signals).length;
   titleEl.textContent = `${sym} — ${count} signal${count !== 1 ? 's' : ''} found`;
 
-  const keyMap = {
-    sell_put: 'sell_puts', buy_call: 'buy_calls',
-    buy_put: 'buy_puts', covered_call: 'covered_calls', iron_condor: 'iron_condors'
-  };
   let html = '';
+  const rendered = [];
   for (const [key, d] of Object.entries(signals)) {
-    try { html += buildCard(d, keyMap[key] || key); }
-    catch(e) { console.error('buildCard error', key, e); }
+    try {
+      html += buildCard(d, key);
+      rendered.push(d);
+      window._searchSignals[`${d.ticker}_${d.strategy || key}`] = d;   // so Add/Track work for searched tickers
+    } catch(e) { console.error('buildCard error', key, e); }
   }
   resultsEl.innerHTML = html || '<div style="color:var(--muted)">No cards to display.</div>';
+  try { renderCharts(rendered); } catch(e) { console.error('renderCharts error', e); }
+  for (const d of rendered) {
+    renderNewsIntoCard(d.ticker, d.strategy, 'news-' + d.ticker + '_' + d.strategy);
+  }
 }
 
 function closeSearch() {
@@ -9853,7 +9886,7 @@ async function refreshQueue() {
     </tr></thead>
     <tbody>
     ${q.map(t=>`<tr>
-      <td><b>${t.ticker}</b><br><span style="font-size:11px;color:var(--muted)">${t.name||''}</span></td>
+      <td><b>${esc(t.ticker)}</b><br><span style="font-size:11px;color:var(--muted)">${esc(t.name||'')}</span></td>
       <td>${t.strategy_label||t.strategy}</td>
       <td style="font-size:12px">${t.option?.type||''} $${t.option?.strike?.toFixed(2)||''}<br>
           ${t.option?.expiration||''} (${t.option?.dte||'?'}d)</td>
@@ -9930,14 +9963,24 @@ async function submitExecution() {
   const over = !t.guardrail_ok;
   const body = over ? { override_confirm: document.getElementById('modal-confirm-input').value.trim() } : {};
 
-  document.getElementById('modal-btn-confirm').disabled=true;
-  document.getElementById('modal-btn-confirm').innerHTML='<span class="spinner"></span>Launching SoFi…';
+  const btn = document.getElementById('modal-btn-confirm');
+  const btnLabel = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Launching SoFi…';
 
-  const resp = await fetch('/api/execute/'+t.id,{
-    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
-  }).then(r=>r.json());
-
-  closeModal();
+  let resp;
+  try {
+    resp = await fetch('/api/execute/'+t.id,{
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+    }).then(r=>r.json());
+  } catch(e) {
+    resp = {ok:false, message:'Could not reach the bot: '+e};
+  } finally {
+    // Restore the button — it used to stay on the spinner forever after the first click.
+    btn.innerHTML = btnLabel;
+    btn.disabled  = false;
+    closeModal();
+  }
   if(resp.ok){
     alert(`✓ SoFi has been opened and your order form is filled in.\n\nPlease review the order on screen, then click "Place Order" yourself in SoFi.\n\nTrade moved to History.`);
   } else if(resp.guardrail_fail){
@@ -9969,7 +10012,11 @@ async function runBacktest() {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({mode, ticker, hold_days})
   });
-  if (!r.ok) { alert('Backtest already running'); btn.disabled=false; btn.textContent='▶ Run Backtest'; return; }
+  if (!r.ok) {
+    const err = await r.json().catch(()=>({}));
+    alert(err.message || err.error || 'Backtest could not start');
+    btn.disabled=false; btn.textContent='▶ Run Backtest'; return;
+  }
   if (btPoll) clearInterval(btPoll);
   btPoll = setInterval(async () => {
     try {
@@ -10037,13 +10084,15 @@ async function renderBacktestResults() {
        ${v.count} trades · <span style="color:${v.win_rate>=50?'var(--green)':'var(--red)'}">WR ${v.win_rate}%</span> · Avg ${v.avg_pnl>0?'+':''}${v.avg_pnl}%
      </div>`).join('');
 
-  // Equity curve on canvas
+  // Equity curve on canvas — the summary block must be visible first or the
+  // canvas measures 0 px wide and the curve is never drawn.
+  document.getElementById('bt-summary').style.display = 'block';
   const canvas = document.getElementById('bt-equity-chart');
   const ctx    = canvas.getContext('2d');
-  canvas.width = canvas.offsetWidth * window.devicePixelRatio;
-  canvas.height = 120 * window.devicePixelRatio;
+  const W = canvas.offsetWidth || canvas.parentElement?.clientWidth || 800, H = 120;
+  canvas.width = W * window.devicePixelRatio;
+  canvas.height = H * window.devicePixelRatio;
   ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-  const W = canvas.offsetWidth, H = 120;
   ctx.clearRect(0,0,W,H);
   // Build cumulative P&L series (sorted by entry_date)
   const sorted = [...trades].sort((a,b)=>a.entry_date.localeCompare(b.entry_date));
@@ -10066,7 +10115,7 @@ async function renderBacktestResults() {
   ctx.fillStyle = cum>=0 ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)'; ctx.fill();
 
   // Trade table
-  document.getElementById('bt-trade-count').textContent = `(${trades.length} shown)`;
+  document.getElementById('bt-trade-count').textContent = `(${Math.min(trades.length, 200)} of ${trades.length} shown)`;
   document.getElementById('bt-trade-tbody').innerHTML = trades.slice(0,200).map(t=>{
     const color = t.win ? 'var(--green)' : 'var(--red)';
     const sl = {buy_call:'📈 Buy Call', buy_put:'📉 Buy Put', sell_put:'💰 Sell Put'}[t.strategy]||t.strategy;
@@ -10228,7 +10277,7 @@ async function refreshHistory() {
     ${[...h].reverse().map(t=>`<tr>
       <td>
         <b>${t.ticker}</b><br>
-        <span style="font-size:11px;color:var(--muted)">${t.name||''}</span>
+        <span style="font-size:11px;color:var(--muted)">${esc(t.name||'')}</span>
       </td>
       <td style="font-size:12px">${t.strategy_label||t.strategy}</td>
       <td style="font-size:12px">
@@ -10349,7 +10398,7 @@ async function refreshPerformance() {
           <div>
             <div style="color:var(--muted);font-size:11px">STOP-LOSS EXPOSURE</div>
             <div style="font-weight:700;font-size:16px;color:var(--text)">$${risk.stop_loss_exposure.toFixed(0)}</div>
-            <div style="color:var(--muted);font-size:10px">if all hit -15%</div>
+            <div style="color:var(--muted);font-size:10px">if all hit -${_stopLossPct}%</div>
           </div>
           <div>
             <div style="color:var(--muted);font-size:11px">LARGEST POSITION</div>
@@ -10466,7 +10515,7 @@ async function logFromTracker(posId) {
     const tracked = await fetch('/api/tracked').then(r=>r.json());
     document.getElementById('cnt-tracked').textContent = tracked.length;
   } else {
-    alert(resp.message || 'Could not log trade.');
+    alert(resp.message || resp.error || 'Could not log trade.');
   }
 }
 
@@ -10510,7 +10559,7 @@ async function addManualTrade() {
     refreshPerformance();
     setTimeout(() => { status.textContent = ''; }, 3000);
   } else {
-    status.textContent = resp.message || 'Error logging trade.';
+    status.textContent = resp.message || resp.error || 'Error logging trade.';
     status.style.color = 'var(--red)';
   }
 }
@@ -10521,7 +10570,7 @@ async function deletePerformanceTrade(tradeId) {
   if (resp.ok) {
     refreshPerformance();
   } else {
-    alert(resp.message || 'Could not delete trade.');
+    alert(resp.message || resp.error || 'Could not delete trade.');
   }
 }
 
@@ -10633,12 +10682,16 @@ async function runBSAnalysis() {
 }
 
 window.onload = async () => {
-  const s = await fetch('/api/scan/status').then(r=>r.json());
-  if(s.last_scan) {
-    const _nextStr = s.next_rescan ? ` · Next: ${s.next_rescan}` : '';
-    document.getElementById('scan-info').textContent = `Last scan: ${new Date(s.last_scan).toLocaleTimeString()}${_nextStr}`;
-    ['sell_puts','buy_calls','buy_puts','covered_calls'].forEach(loadStrategy);
-  }
+  // Guarded: if this first call failed nothing below it ever initialised.
+  try {
+    const s = await fetch('/api/scan/status').then(r=>r.json());
+    if(s.last_scan) {
+      const _nextStr = s.next_rescan ? ` · Next: ${s.next_rescan}` : '';
+      document.getElementById('scan-info').textContent = `Last scan: ${new Date(s.last_scan).toLocaleTimeString()}${_nextStr}`;
+      ['sell_puts','buy_calls','buy_puts','covered_calls'].forEach(loadStrategy);
+      loadCondorResults();
+    }
+  } catch(e) { console.error('status load failed', e); }
   // Restore WFO results if saved from a previous session
   try {
     const wfo = await fetch('/api/optimizer/status').then(r=>r.json());
@@ -10653,8 +10706,10 @@ window.onload = async () => {
   initRedCandle();
   initRiskBudget();
   // Load tracked count on startup
-  const tracked = await fetch('/api/tracked').then(r=>r.json());
-  document.getElementById('cnt-tracked').textContent = tracked.length;
+  try {
+    const tracked = await fetch('/api/tracked').then(r=>r.json());
+    document.getElementById('cnt-tracked').textContent = tracked.length;
+  } catch(e) { console.error('tracked load failed', e); }
   // Auto-refresh tracked tab every 60s if it's active
   setInterval(()=>{ if(activeTab==='tracked') refreshTracked(); }, 60000);
   // Load VIX regime on startup
@@ -10789,6 +10844,10 @@ function renderLRResults(data) {
   const wrap = document.getElementById('cal-lr-wrap');
   if (!wrap) return;
   wrap.style.display = 'block';
+  // The LR block lives inside the classic-calibration results wrapper, which
+  // stayed hidden until a classic calibration had run — make it visible.
+  const outer = document.getElementById('cal-results-wrap');
+  if (outer) outer.style.display = 'block';
 
   const meta = document.getElementById('cal-lr-meta');
   if (meta) {
@@ -10903,6 +10962,10 @@ async function loadSignalLogStats() {
       const pen = d.pending  || 0;
       meta.textContent = `${res} resolved · ${pen} pending · bot logs every scan automatically`;
     }
+    if ((d.resolved || 0) + (d.pending || 0) > 0) {
+      const outer = document.getElementById('cal-results-wrap');   // signal-log block lives inside it
+      if (outer) outer.style.display = 'block';
+    }
 
     // ── Win-rate bars ──────────────────────────────────────────────────
     const rows = document.getElementById('cal-siglog-rows');
@@ -10955,7 +11018,8 @@ function rerenderSigLog() {
     tbody.innerHTML = `<tr><td colspan="8" style="padding:20px;text-align:center;color:var(--muted)">
       Run a scan to start logging recommendations
     </td></tr>`;
-    document.getElementById('siglog-tally').style.display = 'none';
+    const tally = document.getElementById('siglog-tally');
+    if (tally) tally.style.display = 'none';
     return;
   }
 
@@ -11342,7 +11406,6 @@ function renderHoldSweepResults(r) {
             label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y != null ? ctx.parsed.y.toFixed(1) + '%' : 'n/a'}`
           }
         },
-        annotation: {},
       },
       scales: {
         x: {
@@ -11461,11 +11524,16 @@ def main():
     # Resolve pending signal log entries (checks outcomes every 6 hours)
     threading.Thread(target=_schedule_signal_log_resolver, daemon=True).start()
 
+    # Scheduled full re-scan every AUTO_RESCAN_HOURS (this thread was defined
+    # but never started before, so the "next rescan" in the UI was always empty)
+    threading.Thread(target=_auto_rescan_loop, daemon=True).start()
 
     # Open browser after short delay so Flask has time to start
     threading.Timer(1.5, lambda: webbrowser.open(f"http://localhost:{SERVER_PORT}")).start()
 
-    app.run(host="0.0.0.0", port=SERVER_PORT, debug=False, use_reloader=False)
+    # Bind to localhost only: the dashboard has no authentication and can
+    # change config / queue trades, so it must not be reachable from the LAN.
+    app.run(host="127.0.0.1", port=SERVER_PORT, debug=False, use_reloader=False, threaded=True)
 
 
 if __name__ == "__main__":

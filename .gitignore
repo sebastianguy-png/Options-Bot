@@ -1,0 +1,15 @@
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Runtime caches / scratch files written by the bot
+prefetch_cache.pkl
+*.tmp
+*.corrupt
+backtest_results.json
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
