@@ -1,0 +1,590 @@
+{
+  "shipped rules": {
+    "all": {
+      "train": {
+        "n": 5030,
+        "win": 31.9,
+        "net": -6.1,
+        "gross": -1.12,
+        "pf": 0.66,
+        "sharpe": -0.16,
+        "bars": 2.0
+      },
+      "val": {
+        "n": 2813,
+        "win": 35.4,
+        "net": -5.7,
+        "gross": -0.77,
+        "pf": 0.68,
+        "sharpe": -0.15,
+        "bars": 1.9
+      },
+      "all": {
+        "n": 7843,
+        "win": 33.2,
+        "net": -5.9,
+        "gross": -0.99,
+        "pf": 0.67,
+        "sharpe": -0.15,
+        "bars": 1.9
+      }
+    },
+    "calls only": {
+      "train": {
+        "n": 944,
+        "win": 34.1,
+        "net": -6.0,
+        "gross": -1.27,
+        "pf": 0.69,
+        "sharpe": -0.15,
+        "bars": 2.1
+      },
+      "val": {
+        "n": 592,
+        "win": 36.1,
+        "net": -4.3,
+        "gross": 0.44,
+        "pf": 0.77,
+        "sharpe": -0.11,
+        "bars": 2.1
+      },
+      "all": {
+        "n": 1536,
+        "win": 34.9,
+        "net": -5.4,
+        "gross": -0.61,
+        "pf": 0.72,
+        "sharpe": -0.14,
+        "bars": 2.1
+      }
+    },
+    "sell puts only": {
+      "train": {
+        "n": 172,
+        "win": 32.6,
+        "net": -10.0,
+        "gross": 2.83,
+        "pf": 0.45,
+        "sharpe": -0.34,
+        "bars": 2.4
+      },
+      "val": {
+        "n": 119,
+        "win": 33.6,
+        "net": -15.9,
+        "gross": -1.6,
+        "pf": 0.37,
+        "sharpe": -0.4,
+        "bars": 2.3
+      },
+      "all": {
+        "n": 291,
+        "win": 33.0,
+        "net": -12.4,
+        "gross": 1.02,
+        "pf": 0.41,
+        "sharpe": -0.37,
+        "bars": 2.4
+      }
+    },
+    "calls + sell puts": {
+      "train": {
+        "n": 1116,
+        "win": 33.9,
+        "net": -6.6,
+        "gross": -0.64,
+        "pf": 0.66,
+        "sharpe": -0.17,
+        "bars": 2.2
+      },
+      "val": {
+        "n": 711,
+        "win": 35.7,
+        "net": -6.2,
+        "gross": 0.1,
+        "pf": 0.69,
+        "sharpe": -0.15,
+        "bars": 2.2
+      },
+      "all": {
+        "n": 1827,
+        "win": 34.6,
+        "net": -6.5,
+        "gross": -0.35,
+        "pf": 0.67,
+        "sharpe": -0.17,
+        "bars": 2.2
+      }
+    },
+    "puts only": {
+      "train": {
+        "n": 3914,
+        "win": 31.4,
+        "net": -5.9,
+        "gross": -1.26,
+        "pf": 0.67,
+        "sharpe": -0.15,
+        "bars": 1.9
+      },
+      "val": {
+        "n": 2102,
+        "win": 35.3,
+        "net": -5.5,
+        "gross": -1.06,
+        "pf": 0.68,
+        "sharpe": -0.15,
+        "bars": 1.8
+      },
+      "all": {
+        "n": 6016,
+        "win": 32.8,
+        "net": -5.8,
+        "gross": -1.19,
+        "pf": 0.67,
+        "sharpe": -0.15,
+        "bars": 1.9
+      }
+    }
+  },
+  "garch gate, no stop/target, hold 21": {
+    "all": {
+      "train": {
+        "n": 941,
+        "win": 44.0,
+        "net": -1.2,
+        "gross": 3.51,
+        "pf": 0.96,
+        "sharpe": -0.02,
+        "bars": 8.8
+      },
+      "val": {
+        "n": 417,
+        "win": 42.9,
+        "net": -3.1,
+        "gross": 2.24,
+        "pf": 0.89,
+        "sharpe": -0.04,
+        "bars": 7.2
+      },
+      "all": {
+        "n": 1358,
+        "win": 43.7,
+        "net": -1.8,
+        "gross": 3.12,
+        "pf": 0.94,
+        "sharpe": -0.02,
+        "bars": 8.3
+      }
+    },
+    "calls only": {
+      "train": {
+        "n": 195,
+        "win": 54.4,
+        "net": 14.4,
+        "gross": 18.68,
+        "pf": 1.48,
+        "sharpe": 0.15,
+        "bars": 12.2
+      },
+      "val": {
+        "n": 80,
+        "win": 43.8,
+        "net": -0.6,
+        "gross": 3.95,
+        "pf": 0.99,
+        "sharpe": -0.01,
+        "bars": 13.6
+      },
+      "all": {
+        "n": 275,
+        "win": 51.3,
+        "net": 10.0,
+        "gross": 14.39,
+        "pf": 1.29,
+        "sharpe": 0.1,
+        "bars": 12.6
+      }
+    },
+    "sell puts only": {
+      "train": {
+        "n": 18,
+        "win": 55.6,
+        "net": 14.4,
+        "gross": 21.77,
+        "pf": 1.82,
+        "sharpe": 0.25,
+        "bars": 17.2
+      },
+      "val": {
+        "n": 8,
+        "win": 75.0,
+        "net": 45.5,
+        "gross": 53.33,
+        "pf": 4.7,
+        "sharpe": 0.76,
+        "bars": 16.1
+      },
+      "all": {
+        "n": 26,
+        "win": 61.5,
+        "net": 24.0,
+        "gross": 31.48,
+        "pf": 2.5,
+        "sharpe": 0.4,
+        "bars": 16.9
+      }
+    },
+    "calls + sell puts": {
+      "train": {
+        "n": 213,
+        "win": 54.5,
+        "net": 14.4,
+        "gross": 18.94,
+        "pf": 1.5,
+        "sharpe": 0.16,
+        "bars": 12.6
+      },
+      "val": {
+        "n": 88,
+        "win": 46.6,
+        "net": 3.6,
+        "gross": 8.44,
+        "pf": 1.08,
+        "sharpe": 0.03,
+        "bars": 13.8
+      },
+      "all": {
+        "n": 301,
+        "win": 52.2,
+        "net": 11.2,
+        "gross": 15.87,
+        "pf": 1.34,
+        "sharpe": 0.11,
+        "bars": 13.0
+      }
+    },
+    "puts only": {
+      "train": {
+        "n": 728,
+        "win": 40.9,
+        "net": -5.8,
+        "gross": -1.01,
+        "pf": 0.8,
+        "sharpe": -0.08,
+        "bars": 7.6
+      },
+      "val": {
+        "n": 329,
+        "win": 41.9,
+        "net": -4.9,
+        "gross": 0.58,
+        "pf": 0.8,
+        "sharpe": -0.08,
+        "bars": 5.4
+      },
+      "all": {
+        "n": 1057,
+        "win": 41.2,
+        "net": -5.5,
+        "gross": -0.51,
+        "pf": 0.8,
+        "sharpe": -0.08,
+        "bars": 6.9
+      }
+    }
+  },
+  "garch gate, no stop, target 100, hold 10": {
+    "all": {
+      "train": {
+        "n": 1067,
+        "win": 42.2,
+        "net": -1.5,
+        "gross": 3.68,
+        "pf": 0.95,
+        "sharpe": -0.02,
+        "bars": 5.9
+      },
+      "val": {
+        "n": 516,
+        "win": 42.2,
+        "net": -4.2,
+        "gross": 1.33,
+        "pf": 0.84,
+        "sharpe": -0.06,
+        "bars": 5.0
+      },
+      "all": {
+        "n": 1583,
+        "win": 42.2,
+        "net": -2.4,
+        "gross": 2.91,
+        "pf": 0.91,
+        "sharpe": -0.03,
+        "bars": 5.6
+      }
+    },
+    "calls only": {
+      "train": {
+        "n": 216,
+        "win": 50.0,
+        "net": 12.8,
+        "gross": 17.47,
+        "pf": 1.43,
+        "sharpe": 0.15,
+        "bars": 8.2
+      },
+      "val": {
+        "n": 116,
+        "win": 37.1,
+        "net": -9.5,
+        "gross": -4.2,
+        "pf": 0.78,
+        "sharpe": -0.1,
+        "bars": 8.4
+      },
+      "all": {
+        "n": 332,
+        "win": 45.5,
+        "net": 5.0,
+        "gross": 9.9,
+        "pf": 1.15,
+        "sharpe": 0.06,
+        "bars": 8.3
+      }
+    },
+    "sell puts only": {
+      "train": {
+        "n": 22,
+        "win": 45.5,
+        "net": -5.8,
+        "gross": 6.0,
+        "pf": 0.76,
+        "sharpe": -0.1,
+        "bars": 8.9
+      },
+      "val": {
+        "n": 11,
+        "win": 72.7,
+        "net": 14.5,
+        "gross": 24.35,
+        "pf": 2.16,
+        "sharpe": 0.33,
+        "bars": 8.6
+      },
+      "all": {
+        "n": 33,
+        "win": 54.5,
+        "net": 1.0,
+        "gross": 12.12,
+        "pf": 1.05,
+        "sharpe": 0.02,
+        "bars": 8.8
+      }
+    },
+    "calls + sell puts": {
+      "train": {
+        "n": 238,
+        "win": 49.6,
+        "net": 11.1,
+        "gross": 16.41,
+        "pf": 1.38,
+        "sharpe": 0.13,
+        "bars": 8.3
+      },
+      "val": {
+        "n": 127,
+        "win": 40.2,
+        "net": -7.5,
+        "gross": -1.72,
+        "pf": 0.81,
+        "sharpe": -0.08,
+        "bars": 8.4
+      },
+      "all": {
+        "n": 365,
+        "win": 46.3,
+        "net": 4.6,
+        "gross": 10.1,
+        "pf": 1.14,
+        "sharpe": 0.05,
+        "bars": 8.3
+      }
+    },
+    "puts only": {
+      "train": {
+        "n": 829,
+        "win": 40.0,
+        "net": -5.1,
+        "gross": 0.03,
+        "pf": 0.82,
+        "sharpe": -0.07,
+        "bars": 5.3
+      },
+      "val": {
+        "n": 389,
+        "win": 42.9,
+        "net": -3.1,
+        "gross": 2.32,
+        "pf": 0.86,
+        "sharpe": -0.05,
+        "bars": 3.9
+      },
+      "all": {
+        "n": 1218,
+        "win": 41.0,
+        "net": -4.5,
+        "gross": 0.76,
+        "pf": 0.83,
+        "sharpe": -0.07,
+        "bars": 4.8
+      }
+    }
+  },
+  "garch OFF, no stop/target, hold 21": {
+    "all": {
+      "train": {
+        "n": 2232,
+        "win": 41.0,
+        "net": -6.4,
+        "gross": -1.83,
+        "pf": 0.78,
+        "sharpe": -0.09,
+        "bars": 7.9
+      },
+      "val": {
+        "n": 1355,
+        "win": 41.6,
+        "net": -8.0,
+        "gross": -3.29,
+        "pf": 0.7,
+        "sharpe": -0.13,
+        "bars": 7.3
+      },
+      "all": {
+        "n": 3587,
+        "win": 41.2,
+        "net": -7.0,
+        "gross": -2.38,
+        "pf": 0.75,
+        "sharpe": -0.1,
+        "bars": 7.7
+      }
+    },
+    "calls only": {
+      "train": {
+        "n": 398,
+        "win": 45.7,
+        "net": -4.8,
+        "gross": -0.69,
+        "pf": 0.88,
+        "sharpe": -0.05,
+        "bars": 12.6
+      },
+      "val": {
+        "n": 240,
+        "win": 44.2,
+        "net": -9.3,
+        "gross": -5.12,
+        "pf": 0.76,
+        "sharpe": -0.11,
+        "bars": 13.1
+      },
+      "all": {
+        "n": 638,
+        "win": 45.1,
+        "net": -6.4,
+        "gross": -2.35,
+        "pf": 0.83,
+        "sharpe": -0.07,
+        "bars": 12.8
+      }
+    },
+    "sell puts only": {
+      "train": {
+        "n": 74,
+        "win": 37.8,
+        "net": 1.4,
+        "gross": 10.97,
+        "pf": 1.05,
+        "sharpe": 0.02,
+        "bars": 12.5
+      },
+      "val": {
+        "n": 51,
+        "win": 41.2,
+        "net": -4.0,
+        "gross": 7.78,
+        "pf": 0.89,
+        "sharpe": -0.05,
+        "bars": 11.5
+      },
+      "all": {
+        "n": 125,
+        "win": 39.2,
+        "net": -0.8,
+        "gross": 9.67,
+        "pf": 0.97,
+        "sharpe": -0.01,
+        "bars": 12.1
+      }
+    },
+    "calls + sell puts": {
+      "train": {
+        "n": 472,
+        "win": 44.5,
+        "net": -3.8,
+        "gross": 1.14,
+        "pf": 0.9,
+        "sharpe": -0.04,
+        "bars": 12.6
+      },
+      "val": {
+        "n": 291,
+        "win": 43.6,
+        "net": -8.3,
+        "gross": -2.86,
+        "pf": 0.78,
+        "sharpe": -0.1,
+        "bars": 12.8
+      },
+      "all": {
+        "n": 763,
+        "win": 44.2,
+        "net": -5.5,
+        "gross": -0.38,
+        "pf": 0.85,
+        "sharpe": -0.06,
+        "bars": 12.7
+      }
+    },
+    "puts only": {
+      "train": {
+        "n": 1760,
+        "win": 40.1,
+        "net": -7.2,
+        "gross": -2.63,
+        "pf": 0.73,
+        "sharpe": -0.11,
+        "bars": 6.7
+      },
+      "val": {
+        "n": 1064,
+        "win": 41.1,
+        "net": -7.9,
+        "gross": -3.41,
+        "pf": 0.66,
+        "sharpe": -0.15,
+        "bars": 5.8
+      },
+      "all": {
+        "n": 2824,
+        "win": 40.4,
+        "net": -7.4,
+        "gross": -2.92,
+        "pf": 0.71,
+        "sharpe": -0.12,
+        "bars": 6.3
+      }
+    }
+  }
+}
