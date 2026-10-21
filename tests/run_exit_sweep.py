@@ -26,12 +26,13 @@ import options_bot as ob                              # noqa: E402
 
 STAGE_A = {
     "garch_mode":         ["off", "gate"],
+    "max_spread_pct":     [100, 15, 8],               # liquidity rule: drop tickers whose measured spread exceeds this
     "stop_loss_pct":      [15, 30, 50, 0],            # 0 = no premium stop (the premium is the max loss)
-    "profit_target_pct":  [30, 60, 100, 0],           # 0 = no fixed target (trailing / RSI-BB / max hold decide)
+    "profit_target_pct":  [60, 100, 0],               # 0 = no fixed target (RSI-BB / max hold decide)
     "trail_activate_pct": [15, 0],
-    "stagnant_days":      [3, 0],
-    "hold_days":          [5, 10, 21],
-    "stock_stop_pct":     [0, 3, 6],
+    "stagnant_days":      [0],                        # the first sweep: every robust combo had it off
+    "hold_days":          [10, 21],
+    "stock_stop_pct":     [0, 3],
 }
 STAGE_B = {
     "rsi_oversold":       [30, 35],
@@ -54,11 +55,14 @@ def summarize(trades, label):
         if st:
             ms = ob._bt_metrics(st)
             by[s] = {k: ms[k] for k in ("count", "win_rate", "avg_pnl", "profit_factor", "sharpe", "avg_bars_held")}
+    n = len(trades)
     return {"label": label, "n": m["count"], "win_rate": m["win_rate"], "avg_pnl": m["avg_pnl"],
+            "avg_pnl_gross": round(sum(t.get("pnl_gross_pct", t["pnl_pct"]) for t in trades) / n, 2),
+            "avg_cost_pct":  round(sum(t.get("cost_pct", 0) for t in trades) / n, 2),
             "avg_pnl_trigger_fill": m["avg_pnl_trigger_fill"], "profit_factor": m["profit_factor"],
             "sharpe": m["sharpe"], "sortino": m["sortino"], "max_drawdown_pct": m["max_drawdown_pct"],
             "avg_bars_held": m["avg_bars_held"], "exit_mix": dict(Counter(t["exit_reason"] for t in trades)),
-            "by_strategy": by}
+            "tickers": len({t["ticker"] for t in trades}), "by_strategy": by}
 
 
 def run_combo(precomp, split_map, combo, window):
@@ -71,8 +75,9 @@ def run_combo(precomp, split_map, combo, window):
 
 
 def fmt_row(b):
-    s = (f"{b['label']:<60} n={b['n']:5d} win={b['win_rate']:5.1f}% avg={b['avg_pnl']:+6.2f}% "
-         f"PF={b['profit_factor']:<5} sharpe={b['sharpe']:<6} bars={b['avg_bars_held']}")
+    s = (f"{b['label']:<60} n={b['n']:5d} win={b['win_rate']:5.1f}% net={b['avg_pnl']:+6.2f}% "
+         f"(gross {b['avg_pnl_gross']:+6.2f}%, cost {b['avg_cost_pct']:4.1f}%) PF={b['profit_factor']:<5} "
+         f"sharpe={b['sharpe']:<6} bars={b['avg_bars_held']} tickers={b['tickers']}")
     for st, v in b["by_strategy"].items():
         s += f"\n      {st:<10} n={v['count']:5d} win={v['win_rate']:5.1f}% avg={v['avg_pnl']:+6.2f}% PF={v['profit_factor']} bars={v['avg_bars_held']}"
     mix = ", ".join(f"{k} {v}" for k, v in sorted(b["exit_mix"].items(), key=lambda x: -x[1]))
@@ -141,11 +146,17 @@ def main():
         for window in ("train", "val", "all"):
             baselines.append(summarize(run_combo(precomp, split_map, combo, window), f"{label} [{window}]"))
 
+    # Which individual signals carried value inside the best robust rule set (net of costs)
+    pick = best_robust or best_a
+    sig_quality = ob.signal_quality_analysis(run_combo(precomp, split_map, pick["params"], "all")) if pick else []
+    spread = ob._get_spread_model()
+
     report = {"universe": "full" if args.full else "focus", "tickers": len(precomp),
               "split_date": str(pd.Timestamp(split_date).date()), "stage_a_grid": STAGE_A, "stage_b_grid": STAGE_B,
+              "spread_model": {k: v for k, v in spread.items() if k != "by_ticker"},
               "exit_sets_carried": exit_sets, "stage_a": lb_a, "stage_b": lb_b,
-              "best_robust": best_robust, "baselines": baselines, "completed_at": datetime.now().isoformat(),
-              "seconds": round(time.time() - t0)}
+              "best_robust": best_robust, "baselines": baselines, "signal_quality_best": sig_quality,
+              "completed_at": datetime.now().isoformat(), "seconds": round(time.time() - t0)}
     out = os.path.join(ROOT, "tests", "exit_sweep_report.json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump(ob._json_clean(report), f, indent=2)
@@ -159,10 +170,16 @@ def main():
         print(f"  val_sharpe={r['val_sharpe']:<6} val_PF={r['val_pf']:<5} train_PF={r['train_pf']:<5} val_n={r['val_trades']:<5} "
               f"bars={r['val_avg_bars_held']:<4} robust={r['robust']}  {json.dumps(r['params'], separators=(',', ':'))}")
     print(f"\nrobust combos (PF > 1 in BOTH windows, n ≥ 200/100): {len(robust)}")
-    print("\n=== SUMMARY ===")
+    print(f"\nspread model: {spread.get('n_contracts', 0)} contracts measured {spread.get('measured_at', '—')}, "
+          f"overall median round-trip {spread.get('overall_median_pct', '—')}% of premium; buckets {spread.get('buckets', 'built-in fallback')}")
+    print("\n=== SUMMARY (pnl NET of the spread cost) ===")
     for b in baselines:
         if b.get("n"):
             print(fmt_row(b))
+    if sig_quality:
+        print(f"\n=== signal value inside the best robust rule set (net), ≥ 5 trades ===")
+        for r in sig_quality:
+            print(f"  {r['signal']:<28} n={r['count']:5d} win={r['win_rate']:5.1f}% avg={r['avg_pnl']:+6.2f}%")
     print(f"\nreport → {out}  ({time.time()-t0:.0f}s total)")
 
     if args.apply and best_b:

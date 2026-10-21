@@ -307,6 +307,8 @@ MIN_DTE              = 14      # Min days to expiry
 MAX_DTE              = 45      # Max days to expiry
 MIN_OPEN_INTEREST    = 10      # Min OI on selected option
 MIN_VOLUME           = 10      # Min daily volume on selected option (avoid getting stuck in illiquid contracts)
+MAX_SPREAD_PCT       = 100     # Reject a contract whose (ask − bid) / mid exceeds this % (100 = off); the optimizer sets it
+SPREAD_MODEL_FILE    = "spread_model.json"   # today's measured spreads (tests/measure_spreads.py) → the backtest's cost model
 MAX_WORKERS          = 8       # Parallel scan threads (I/O-bound; Yahoo latency is the bottleneck)
 WFO_CPU_WORKERS      = (os.cpu_count() or 8)   # Parallel WFO threads (CPU-bound; use all logical cores)
 PREFETCH_CACHE_FILE      = "prefetch_cache.pkl"   # Disk cache for tkr.info / tkr.calendar
@@ -1614,6 +1616,9 @@ def pick_option(tkr_obj, stock_price, option_type="put",
 
         if not (mid >= 0.01) or not (iv >= 1):
             return None
+        # Liquidity rule (the backtest applies the same cap to each ticker's measured spread)
+        if MAX_SPREAD_PCT < 100 and bid > 0 and ask > bid and (ask - bid) / mid * 100 > MAX_SPREAD_PCT:
+            return None
 
         vol = _as_int(row.get("volume"))
         oi  = _as_int(row.get("openInterest"))
@@ -1925,9 +1930,46 @@ def live_params():
         "garch_mode":           w.get("garch_mode", "off"),
         "put_trend_gate":       w.get("put_trend_gate", "off"),         # off / not_strong_bull / bear_only
         "yield_block_calls":    bool(w.get("yield_block_calls", False)),  # the old inverted-curve block on calls (off by default)
+        "max_spread_pct":       MAX_SPREAD_PCT,                            # liquidity rule (pick_option live / per-ticker in the backtest)
         "require_green_candle": REQUIRE_GREEN_CANDLE,
         "require_red_candle":   REQUIRE_RED_CANDLE,
     }
+
+
+# ── Transaction costs: bid/ask spread as % of the option premium ────────────
+# No historical option quotes exist.  tests/measure_spreads.py measures today's
+# round-trip spread ((ask − bid) / mid) on the ~30-DTE ATM contracts of every
+# focus ticker and writes SPREAD_MODEL_FILE; the backtest charges each trade its
+# ticker's measured spread (premium-bucket medians when a ticker is missing).
+SPREAD_FALLBACK = [(0.5, 16.0), (1.0, 10.0), (3.0, 6.0), (10.0, 4.0), (1e9, 2.5)]   # (premium <, round-trip %)
+_spread_model = None
+
+
+def _get_spread_model():
+    """Lazy per-process load of SPREAD_MODEL_FILE (worker processes read it themselves)."""
+    global _spread_model
+    if _spread_model is None:
+        m = _load_json(SPREAD_MODEL_FILE, {}, "Spread") if os.path.exists(SPREAD_MODEL_FILE) else {}
+        _spread_model = m if isinstance(m, dict) else {}
+    return _spread_model
+
+
+def _ticker_spread_pct(ticker):
+    """Measured median round-trip spread (% of premium) for a ticker's ATM options, or None."""
+    t = (_get_spread_model().get("by_ticker") or {}).get(ticker)
+    return float(t["spread_pct"]) if t and t.get("n", 0) >= 3 else None
+
+
+def _spread_cost_pct(ticker, premium):
+    """Round-trip cost of one trade as % of its entry premium: the ticker's measurement, else by premium level."""
+    t = _ticker_spread_pct(ticker)
+    if t is not None:
+        return t
+    buckets = _get_spread_model().get("buckets") or SPREAD_FALLBACK
+    for lim, pct in buckets:
+        if premium < lim:
+            return float(pct)
+    return float(buckets[-1][1])
 
 
 EXIT_KEYS = ("stop_loss_pct", "profit_target_pct", "trail_activate_pct", "trail_lock_pct",
@@ -4050,6 +4092,7 @@ def _bt_option_price(S, K, T, sigma, option_type):
 BT_DEFAULT_PARAMS = {
     "rsi_oversold": 35, "rsi_overbought": 65, "bull_min": 1, "bear_min": 2,
     "adx_threshold": 30, "garch_mode": "off", "put_trend_gate": "off", "yield_block_calls": False,
+    "max_spread_pct": 100,
     "require_green_candle": False, "require_red_candle": False,
 }
 _CTX_COLS = ("vix", "vix3m", "regime", "vix_ts", "market_trend", "pre_fed", "post_fed",
@@ -4281,11 +4324,18 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
     What the backtest cannot know (and treats as the live gate would at gate time):
     put/call ratio (0), short interest / earnings (score-only live), real quotes
     and liquidity — the sell_put gate uses the modelled premium only (see below).
+    Costs: every trade is charged its ticker's measured round-trip bid/ask spread
+    (_spread_cost_pct; half when the option expires), so pnl_pct is NET and
+    pnl_gross_pct is what the price model alone gave.  params["max_spread_pct"]
+    drops tickers whose measured spread exceeds it (the live pick_option rule).
     """
     p  = {**BT_DEFAULT_PARAMS, **(params or {})}
     xp = {**BT_DEFAULT_EXITS, **(exits or {})}
     if not exits or "hold_days" not in exits:
         xp["hold_days"] = hold_days
+    t_spread = _ticker_spread_pct(ticker)
+    if float(p.get("max_spread_pct", 100)) < 100 and t_spread is not None and t_spread > float(p["max_spread_pct"]):
+        return []                                        # illiquid name: the live scanner would reject its contracts
     if hist is None and precomp is None:
         try:
             _, hist = _fetch_history(ticker, BT_HISTORY_PERIOD)
@@ -4361,6 +4411,13 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                     pnl_path[d] = round(((entry_opt - ex_val) if strategy == "sell_put" else (ex_val - entry_opt))
                                         / entry_opt * 100, 1)
 
+            # Transaction cost: the round-trip spread on this ticker's options; an
+            # expiry settlement has no closing trade, so only the entry half applies.
+            cost = _spread_cost_pct(ticker, float(entry_opt))
+            if ex["exit_reason"] == "expired":
+                cost *= 0.5
+            pnl_net  = round(float(ex["pnl_pct"]) - cost, 1)
+            trig_net = round(float(ex["pnl_trigger_pct"]) - cost, 1)
             trades.append({
                 "ticker":        ticker,
                 "strategy":      strategy,
@@ -4373,9 +4430,11 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                 "exit_opt":      round(float(ex["exit_opt"]), 3),
                 "premium_pct":   round(premium_pct, 2),
                 "proxy_gate":    proxy_gate,
-                "pnl_pct":       float(ex["pnl_pct"]),
-                "pnl_trigger_pct": float(ex["pnl_trigger_pct"]),
-                "win":           bool(ex["pnl_pct"] > 0),
+                "pnl_gross_pct": float(ex["pnl_pct"]),
+                "cost_pct":      round(cost, 2),
+                "pnl_pct":       pnl_net,
+                "pnl_trigger_pct": trig_net,
+                "win":           bool(pnl_net > 0),
                 "exit_reason":   ex["exit_reason"],
                 "bars_held":     ex["exit_offset"],
                 "iv_est":        round(iv_est * 100, 1),
@@ -4685,7 +4744,10 @@ def _apply_wfo_params(suggestion: dict) -> dict:
             globals()[const] = max(0, val); applied[const] = globals()[const]
     if "hold_days" in suggestion:                      # the tracker's max-hold rule — the same cap the backtest walked with
         globals()["HOLD_DAYS"] = max(1, min(_as_int(suggestion["hold_days"], 21), OPTION_DTE_BARS)); applied["HOLD_DAYS"] = HOLD_DAYS
-    live = {k: v for k, v in suggestion.items() if k not in ("rsi_oversold", "rsi_overbought") and k not in EXIT_KEYS}
+    if "max_spread_pct" in suggestion:                 # liquidity rule → pick_option
+        globals()["MAX_SPREAD_PCT"] = max(1.0, min(100.0, _as_float(suggestion["max_spread_pct"], 100.0))); applied["MAX_SPREAD_PCT"] = MAX_SPREAD_PCT
+    live = {k: v for k, v in suggestion.items()
+            if k not in ("rsi_oversold", "rsi_overbought", "max_spread_pct") and k not in EXIT_KEYS}
     with scan_lock:
         scan_state["wfo_params"] = live
     applied.update(live)

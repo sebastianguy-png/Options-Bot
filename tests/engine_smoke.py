@@ -56,6 +56,12 @@ def main():
         check(last_ok, f"hold {hold}: every exit inside the frame")
         if hold == 7:
             check("end_of_hold" in mix, "hold 7: max-hold exits appear")
+            check(all(t["cost_pct"] > 0 and abs(t["pnl_pct"] - round(t["pnl_gross_pct"] - t["cost_pct"], 1)) < 0.11 for t in trades),
+                  f"spread cost charged on every trade (avg {sum(t['cost_pct'] for t in trades)/len(trades):.1f}% of premium)")
+            liquid = []
+            for s, f in pc.items():
+                liquid += ob.run_backtest_ticker(s, hold_days=hold, params={**ob.BT_DEFAULT_PARAMS, "max_spread_pct": 8}, precomp=f)
+            check(len(liquid) <= len(trades), f"liquidity filter (≤ 8% spread) keeps {len(liquid)} of {len(trades)} trades")
 
     # walk-forward style split must not read past idx_end
     s, f = next(iter(pc.items()))
