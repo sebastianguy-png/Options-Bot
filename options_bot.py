@@ -2047,6 +2047,9 @@ def live_params():
         "put_trend_gate":       w.get("put_trend_gate", "off"),         # off / not_strong_bull / bear_only
         "yield_block_calls":    bool(w.get("yield_block_calls", False)),  # the old inverted-curve block on calls (off by default)
         "max_spread_pct":       MAX_SPREAD_PCT,                            # liquidity rule (pick_option live / per-ticker in the backtest)
+        "entry_mode":           w.get("entry_mode", "reversion"),          # reversion (the classic rules) / escape (band-escape classifier)
+        "escape_normal":        w.get("escape_normal", "skip"),            # escape mode, normal-VIX lower escape: skip / call
+        "escape_breakout_vol":  w.get("escape_breakout_vol", 2.0),         # escape mode: volume ratio that makes an upper escape a breakout
         "require_green_candle": REQUIRE_GREEN_CANDLE,
         "require_red_candle":   REQUIRE_RED_CANDLE,
     }
@@ -2234,6 +2237,7 @@ def indicator_frame(hist, spy_closes=None, sym=None, garch="last"):
     iv_hi  = hv21.rolling(252, min_periods=10).max()
     low_52w  = closes.rolling(252, min_periods=1).min()
     high_52w = closes.rolling(252, min_periods=1).max()
+    bb_width = (bb_u - bb_l) / bb_m * 100                             # band width % (squeeze release = width > 1.25× its value 20 bars ago)
 
     macd_bull, macd_bear = _macd_cross_flags((macd_line - macd_sig).values)
     ema_diff = (ema9 - ema21).values
@@ -2314,6 +2318,8 @@ def indicator_frame(hist, spy_closes=None, sym=None, garch="last"):
         "price": closes.values, "open": opens.values,
         "prev_close": np.concatenate([[np.nan], closes.values[:-1]]),
         "rsi": rsi_s.values, "bb_u": bb_u.values, "bb_m": bb_m.values, "bb_l": bb_l.values,
+        "prev_bb_u": bb_u.shift(1).values, "prev_bb_l": bb_l.shift(1).values,
+        "bb_width": bb_width.values, "bb_width_20": bb_width.shift(20).values,
         "dc_u": dc_u.values, "dc_m": dc_m.values, "dc_l": dc_l.values, "mfi": mfi_s.values,
         "ma50": ma50.values, "ma200": ma200.values,
         "adx": np.round(adx_s.values, 1), "pdi": np.round(pdi_s.values, 1), "ndi": np.round(ndi_s.values, 1),
@@ -2353,6 +2359,8 @@ def ind_at(fr, i):
         "i": i, "date": fr["index"][i],
         "price": _f(g("price")), "open": _f(g("open")), "prev_close": _f(g("prev_close")),
         "rsi": _f(g("rsi")), "bb_u": _f(g("bb_u")), "bb_m": _f(g("bb_m")), "bb_l": _f(g("bb_l")),
+        "prev_bb_u": _f(g("prev_bb_u")), "prev_bb_l": _f(g("prev_bb_l")),
+        "bb_width": _f_or_none(g("bb_width")), "bb_width_20": _f_or_none(g("bb_width_20")),
         "dc_u": _f(g("dc_u")), "dc_m": _f(g("dc_m")), "dc_l": _f(g("dc_l")),
         "mfi": 50.0 if mfi != mfi else mfi,
         "ma50": _f_or_none(g("ma50")), "ma200": _f_or_none(g("ma200")),
@@ -2517,6 +2525,39 @@ def evaluate_entry(ind, ctx, params, scan_condors=False):
     has_buy_put      = bool(macro.get("buy_put", True))      and put_trend_ok and (overbought or ind["macd_bear"]) and bear_signals >= bear_min and not melt_up and red_ok and gap_ok_buy_put
     has_covered_call = bool(macro.get("covered_call", True)) and price <= MAX_PRICE_SELL
     has_iron_condor  = bool(macro.get("iron_condor", True))  and (not oversold) and (not overbought) and (35 <= rsi <= 65) and bool(scan_condors)
+
+    # ── Entry mode "escape": classify a FIRST-DAY Bollinger-band escape (tests/band_escape_study.py) ──
+    # Lower escape in a scared market (high-VIX regime / SPY bear trend) snaps back → buy call,
+    # sell put.  Lower escape in a calm market (low VIX) with the vol model expecting expansion
+    # or price under its MA200 keeps falling → buy put.  A ≥3% gap-down is news → no trade.
+    # Upper escape: only a big-volume breakout continues → buy call; a breakout is never shorted.
+    # The macro gate is NOT applied in this mode (its "VIX > 30: no long premium" rule is the
+    # opposite of what the escapes showed).  The GARCH gate below still applies.
+    vol_ratio = (ind["cur_vol"] / ind["avg_vol"]) if (ind.get("cur_vol") and ind.get("avg_vol")) else None
+    bbw, bbw20 = ind.get("bb_width"), ind.get("bb_width_20")
+    squeeze_release = bool(bbw is not None and bbw20 is not None and bbw > bbw20 * 1.25)
+    escape_case = None
+    if p.get("entry_mode", "reversion") == "escape":
+        pbl, pbu = ind.get("prev_bb_l"), ind.get("prev_bb_u")
+        prev_inside  = have_prev and pbl == pbl and pbu == pbu and pbl <= prev_close <= pbu
+        lower_escape = prev_inside and price < ind["bb_l"]
+        upper_escape = prev_inside and price > ind["bb_u"]
+        scared = regime == "high" or str(market_trend).startswith("bear")
+        calm   = regime == "low"
+        if lower_escape and gap_pct > -3.0:
+            if scared:
+                escape_case = "reversion"
+            elif calm and (ind["garch_expand"] or not trend_bull):
+                escape_case = "momentum"
+            elif not calm and p.get("escape_normal", "skip") == "call":
+                escape_case = "reversion"
+        elif upper_escape and vol_ratio is not None and vol_ratio >= float(p.get("escape_breakout_vol", 2.0)):
+            escape_case = "breakout"
+        has_buy_call     = escape_case in ("reversion", "breakout") and gap_ok_buy_call
+        has_buy_put      = escape_case == "momentum" and gap_ok_buy_put
+        has_sell_put     = escape_case == "reversion" and price <= MAX_PRICE_SELL and gap_ok_buy_call
+        has_covered_call = False
+        has_iron_condor  = False
     if garch_mode == "gate":
         # Long premium only when the model expects vol to expand; short premium only when it expects contraction.
         has_buy_call     = has_buy_call     and g_exp
@@ -2541,7 +2582,8 @@ def evaluate_entry(ind, ctx, params, scan_condors=False):
         "green_candle": green_candle, "red_candle": red_candle, "green_ok": green_ok, "red_ok": red_ok,
         "gap_pct": gap_pct, "gap_ok_buy_call": gap_ok_buy_call, "gap_ok_buy_put": gap_ok_buy_put,
         "trend_ok_buy": trend_ok_buy, "put_trend_ok": put_trend_ok, "yield_blocked": yield_blocked,
-        "market_trend": market_trend,
+        "market_trend": market_trend, "entry_mode": p.get("entry_mode", "reversion"), "escape_case": escape_case,
+        "vol_ratio": vol_ratio, "squeeze_release": squeeze_release,
         "has_sell_put": has_sell_put, "has_buy_call": has_buy_call, "has_buy_put": has_buy_put,
         "has_covered_call": has_covered_call, "has_iron_condor": has_iron_condor,
         "any": any([has_sell_put, has_buy_call, has_buy_put, has_covered_call, has_iron_condor]),
@@ -2561,6 +2603,9 @@ def evaluate_entry(ind, ctx, params, scan_condors=False):
             "sig_regime_low": regime_favors_buying,
             "sig_garch_expand": ind["garch_expand"], "sig_garch_contract": ind["garch_contract"],
             "sig_exhaustion": exhaustion_bounce,
+            "sig_squeeze_release": squeeze_release,
+            "sig_escape_reversion": escape_case == "reversion", "sig_escape_momentum": escape_case == "momentum",
+            "sig_escape_breakout": escape_case == "breakout",
         },
     }
 
@@ -2751,7 +2796,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
         closes = hist["Close"]
         prm    = live_params()
         ctx    = live_market_ctx()                  # first: get_market_trend() fills the SPY cache the frame reads
-        need_garch = prm["garch_mode"] != "off"     # the GJR-GARCH fit is the costly part — pre-gate only when a rule reads it
+        need_garch = prm["garch_mode"] != "off" or prm.get("entry_mode") == "escape"   # the GJR-GARCH fit is the costly part — pre-gate only when a rule reads it
         fr     = indicator_frame(hist, spy_closes=_spy_cache.get("closes"), sym=sym,
                                  garch="last" if need_garch else None)
         ind    = ind_at(fr, -1)
@@ -4210,7 +4255,7 @@ def _bt_option_price(S, K, T, sigma, option_type):
 BT_DEFAULT_PARAMS = {
     "rsi_oversold": 35, "rsi_overbought": 65, "bull_min": 1, "bear_min": 2,
     "adx_threshold": 30, "garch_mode": "off", "put_trend_gate": "off", "yield_block_calls": False,
-    "max_spread_pct": 100,
+    "max_spread_pct": 100, "entry_mode": "reversion", "escape_normal": "skip", "escape_breakout_vol": 2.0,
     "require_green_candle": False, "require_red_candle": False,
 }
 _CTX_COLS = ("vix", "vix3m", "regime", "vix_ts", "market_trend", "pre_fed", "post_fed",
@@ -4773,6 +4818,10 @@ SIGNAL_FLAG_LABELS = {
     "sig_regime_low":     "Low VIX Regime (<15)",
     "sig_garch_expand":   "GARCH: Vol Expansion",
     "sig_garch_contract": "GARCH: Vol Contraction",
+    "sig_squeeze_release": "BB Squeeze Release",
+    "sig_escape_reversion": "Band Escape: Reversion",
+    "sig_escape_momentum":  "Band Escape: Momentum",
+    "sig_escape_breakout":  "Band Escape: Breakout",
     "sig_exhaustion":     "Exhaustion Bounce",
 }
 
