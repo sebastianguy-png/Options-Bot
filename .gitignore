@@ -4,9 +4,18 @@ __pycache__/
 
 # Runtime caches / scratch files written by the bot
 prefetch_cache.pkl
+garch_cache.pkl
 *.tmp
 *.corrupt
 backtest_results.json
+logs/
+
+# Autotrader runtime state (the config file with your broker keys is NOT committed either)
+autotrade_config.json
+autotrade_state.json
+autotrade_log.json
+paper_ledger.json
+STOP_AUTOTRADE
 
 # Editor / OS
 .vscode/

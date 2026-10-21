@@ -9,22 +9,25 @@ Strategies analysed on every scan:
   4. COVERED CALLS  – High-IV stocks where selling the call is attractive
 
 Safety guarantees:
-  • Bot NEVER executes anything on its own
-  • Every trade requires you to manually click "Add to Queue"
-  • Every execution requires a final "Confirm & Place Order" in the dashboard
-  • Trades over $1,000 require typing the word CONFIRM as a second factor
-  • The SoFi browser window fills in your order and lands on the Review page;
-    YOU click Submit — or enable AUTO_SUBMIT only if you're comfortable
+  • The bot executes nothing on its own unless the 🤖 Autotrade tab is enabled
+    (autotrader.py: local paper ledger by default, Alpaca paper with keys, real
+    money only with OPTIONS_BOT_ALLOW_LIVE=1 — see that file's header)
+  • Manual trades: "Add to Queue" → "Confirm & Place Order"; over $1,000 you
+    also type CONFIRM; the SoFi window lands on Review and YOU click Submit
+    (or enable AUTO_SUBMIT only if you're comfortable)
 
 Run:
-    python options_bot.py
-    → Opens http://localhost:5000 in your browser automatically
+    py options_bot.py              → opens http://localhost:5000 in your browser
+    py options_bot.py --headless   → no browser (also OPTIONS_BOT_HEADLESS=1);
+                                     run_bot_headless.bat restarts it if it exits,
+                                     install_autostart.ps1 starts it at logon
+    Console output is also written to logs\bot_<date>.log.
 """
 
 # ──────────────────────────────────────────────────────────────
 #  IMPORTS
 # ──────────────────────────────────────────────────────────────
-import os, sys, io, re, json, uuid, threading, webbrowser, time, warnings, pickle
+import os, sys, io, re, json, uuid, threading, webbrowser, time, warnings, pickle, socket
 from datetime import datetime, timedelta, date
 from math import log, sqrt, exp
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
@@ -58,6 +61,8 @@ for _stream in (sys.stdout, sys.stderr):
 # the same tracked positions / performance / calibration files.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(BASE_DIR)
+
+import autotrader        # noqa: E402  broker-driven autotrading — idle until enabled in its dashboard tab
 
 # ── Yahoo Finance rate-limit guard ────────────────────────────
 # All yfinance calls that hit Yahoo's API (options chain, calendar,
@@ -142,6 +147,8 @@ def _clean_hist(df):
     if "Close" not in df.columns:
         return None
     out = df.dropna(subset=["Close"])
+    out = out[out["Close"] > 0]                          # a 0.0 close (delisted / bad row) poisons every return-based window
+    out = out[~out.index.duplicated(keep="last")]        # a duplicated date breaks the rolling windows and the SPY alignment
     return out if not out.empty else None
 
 
@@ -398,6 +405,10 @@ TRAIL_LOCK_PCT       = 8     # Lock minimum (peak − this) once trailing is act
 # Theta bleeds long options; sitting flat is a slow loss.
 STAGNANT_DAYS        = 3     # Trading days held before stagnation check applies
 STAGNANT_RANGE       = 5     # If |option P&L| within ±this after STAGNANT_DAYS → exit
+# Max hold — close a position after this many trading days whatever its P&L.
+# The optimizer's hold_days lands here (via _apply_wfo_params); 21 ≈ the
+# ~30-DTE contract's own life, so the default changes nothing by itself.
+HOLD_DAYS            = 21
 # RSI reversal thresholds — exit when mean reversion is complete:
 SELL_RSI_BULL_TARGET = 52    # Buy Call: RSI back above this → bounce done, take profit (was 55)
 SELL_RSI_BEAR_TARGET = 48    # Buy Put:  RSI back below this → pullback done, take profit (was 45)
@@ -620,14 +631,28 @@ def _load_garch_cache():
         print(f"  [GARCH] Could not load {GARCH_CACHE_FILE}: {e}")
 
 
+_garch_save_lock = threading.Lock()
+
+
 def _save_garch_cache():
+    """Merge this process's fits into the on-disk cache — one writer at a time, unique tmp name."""
     try:
-        with _garch_cache_lock:
-            snapshot = dict(_garch_cache)
-        tmp = GARCH_CACHE_FILE + ".tmp"
-        with open(tmp, "wb") as f:
-            pickle.dump(snapshot, f, protocol=pickle.HIGHEST_PROTOCOL)
-        os.replace(tmp, GARCH_CACHE_FILE)
+        with _garch_save_lock:
+            with _garch_cache_lock:
+                snapshot = dict(_garch_cache)
+            if os.path.exists(GARCH_CACHE_FILE):
+                try:
+                    with open(GARCH_CACHE_FILE, "rb") as f:
+                        on_disk = pickle.load(f)
+                    if isinstance(on_disk, dict):           # a process that never loaded must not shrink the file
+                        on_disk.update(snapshot)
+                        snapshot = on_disk
+                except Exception:
+                    pass                                    # unreadable → overwrite it
+            tmp = f"{GARCH_CACHE_FILE}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "wb") as f:
+                pickle.dump(snapshot, f, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp, GARCH_CACHE_FILE)
     except Exception as e:
         print(f"  [GARCH] Could not save cache: {e}")
 
@@ -638,8 +663,10 @@ def rolling_garch_forecast(sym, closes, window=GARCH_WINDOW, refit_every=GARCH_R
     including each bar (no look-ahead).  The model is refit every `refit_every`
     bars on the trailing `window` returns and the forecast is held in between;
     the last bar is always a fresh fit so it equals calc_garch_vol() on the same
-    history.  NaN for the first 60 bars.  Fits are cached by (sym, window, date)
-    — a past date's forecast never changes — so repeat runs cost nothing.
+    history.  NaN for the first 60 bars.  Fits are cached by (sym, number of
+    returns fitted, date) — a past date's forecast from the same returns never
+    changes — so repeat runs cost nothing.  The final bar is never cached: it
+    may be a partial session while the market is open.
     Returns (np.ndarray aligned to closes, new_cache_entries dict).
     """
     cache = _garch_cache if cache is None else cache
@@ -651,16 +678,18 @@ def rolling_garch_forecast(sym, closes, window=GARCH_WINDOW, refit_every=GARCH_R
     new   = {}
     last  = None
     for i in range(60, n):
-        refit = ((i - 60) % refit_every == 0) or (i == n - 1)
+        last_bar = (i == n - 1)
+        refit = ((i - 60) % refit_every == 0) or last_bar
         if refit:
-            key = (sym, window, dates[i])
-            v = cache.get(key)
+            seg = pd.Series(lr[max(1, i - window + 1): i + 1])      # last `window` returns ending at bar i
+            key = (sym, len(seg), dates[i])                        # keyed by the returns actually fitted
+            v   = None if last_bar else cache.get(key)
             if v is None:
-                seg = pd.Series(lr[max(1, i - window + 1): i + 1])      # last `window` returns ending at bar i
                 v = _garch_fit_forecast(seg)
                 if v is None:
                     v = _hv_fallback(seg / 100.0)
-                new[key] = v
+                if not last_bar:
+                    new[key] = v
             last = v
         out[i] = last if last is not None else np.nan
     if new:
@@ -1090,10 +1119,17 @@ def market_context_history(period="3y", force=False):
         _, h = _fetch_history(sym, period)
         return _naive_daily_index(h["Close"]) if h is not None else pd.Series(dtype=float)
 
-    vix   = _closes("^VIX").reindex(spy.index).ffill()
-    vix3m = _closes("^VIX3M").reindex(spy.index).ffill()
-    irx   = _closes("^IRX").reindex(spy.index).ffill()
-    fvx   = _closes("^FVX").reindex(spy.index).ffill()
+    series = {s: _closes(s) for s in ("^VIX", "^VIX3M", "^IRX", "^FVX")}
+    empty  = [s for s, v in series.items() if v.empty]
+    if empty:            # never build an all-neutral context silently
+        raise RuntimeError(f"market-context series unavailable: {', '.join(empty)}")
+    vix   = series["^VIX"].reindex(spy.index).ffill()
+    vix3m = series["^VIX3M"].reindex(spy.index).ffill()
+    irx   = series["^IRX"].reindex(spy.index).ffill()
+    fvx   = series["^FVX"].reindex(spy.index).ffill()
+    gaps  = {s: int(v.isna().mean() * 100) for s, v in (("^VIX", vix), ("^VIX3M", vix3m), ("^IRX", irx), ("^FVX", fvx))}
+    if any(g > 10 for g in gaps.values()):
+        print(f"  [Context] WARNING — context series have gaps (% of SPY dates without a value): {gaps}")
 
     # SPY trend: price vs 200-day MA, ADX > 25 → "strong" (same as get_market_trend)
     ma200 = spy["Close"].rolling(200).mean()
@@ -1104,12 +1140,14 @@ def market_context_history(period="3y", force=False):
     rows = []
     for d in spy.index:
         v, v3 = float(vix.get(d, np.nan)), float(vix3m.get(d, np.nan))
-        v  = None if v != v else v
-        v3 = None if v3 != v3 else v3
+        v  = None if v != v else round(v, 2)            # the live getters round VIX / VIX3M to 2 dp …
+        v3 = None if v3 != v3 else round(v3, 2)
         regime = vix_regime(v)
         term   = vix_term_structure(v, v3)
         i, f = float(irx.get(d, np.nan)), float(fvx.get(d, np.nan))
-        spread = (f - i) if (i == i and f == f) else None
+        i = None if i != i else round(i, 3)             # … and the yields / spread to 3 dp
+        f = None if f != f else round(f, 3)
+        spread = round(f - i, 3) if (i is not None and f is not None) else None
         yi = spread is not None and spread < 0
         ys = spread is not None and spread > 1.5
         m200 = float(ma200.get(d, np.nan))
@@ -1125,7 +1163,7 @@ def market_context_history(period="3y", force=False):
         macro = macro_rules(v, regime, term, trend, yi)
         rows.append({
             "date": d, "vix": v, "vix3m": v3, "regime": regime, "vix_ts": term,
-            "irx": None if i != i else i, "fvx": None if f != f else f,
+            "irx": i, "fvx": f,
             "yield_inverted": yi, "yield_steep": ys,
             "spy_close": px, "market_trend": trend, "pre_fed": pre, "post_fed": post,
             **{f"macro_{k}": macro[k] for k in ("buy_call", "buy_put", "sell_put", "covered_call", "iron_condor")},
@@ -1828,10 +1866,13 @@ def _prefetch_ticker(sym, tkr=None):
 #    ind_at()           the scalars for one bar (with the live rounding rules)
 #    evaluate_entry()   the entry rules  (gate flags, confluence, thresholds)
 #    _price_exit_core() / _strategy_exit_check()   the exit rules
-#  The live scanner evaluates the LAST bar of a 1-year frame; the backtest
-#  evaluates EVERY bar of a 2-year frame plus a per-date market-context table.
-#  The only things that differ are inputs the past doesn't have: option
-#  quotes (P/C ratio, premium, liquidity), short interest and earnings dates.
+#  The live scanner evaluates the LAST bar of a LIVE_HISTORY_PERIOD frame; the
+#  backtest evaluates every bar from BT_WARMUP_BARS on of a BT_HISTORY_PERIOD
+#  frame plus a per-date market-context table.  Every ranking window (HV rank,
+#  IV range, 52-week range, MA200) is full on both sides, so bar i of a backtest
+#  frame equals a live scan on that date.  The only things that differ are
+#  inputs the past doesn't have: option quotes (P/C ratio, premium, liquidity),
+#  short interest and earnings dates.
 # ══════════════════════════════════════════════════════════════
 
 GARCH_EXPAND_RATIO   = 1.15   # forecast > trailing HV30 × this → volatility expansion expected
@@ -1839,6 +1880,9 @@ GARCH_CONTRACT_RATIO = 0.85   # forecast < trailing HV30 × this → volatility 
 GARCH_MODES          = ("off", "confluence", "gate")
 OPTION_DTE_TARGET    = 30     # the scanner picks the expiry closest to 30 DTE
 OPTION_DTE_BARS      = 21     # ≈ 30 calendar days in trading bars (backtest option lifetime)
+LIVE_HISTORY_PERIOD  = "2y"   # live frame: ≥ 500 bars, so every window below is full at the last bar
+BT_HISTORY_PERIOD    = "3y"   # backtest frame; bars before BT_WARMUP_BARS are warm-up only
+BT_WARMUP_BARS       = 282    # first evaluated bar: HV rank (252 HV30 values = 282 closes), IV range, 52w, MA200 all full
 
 IND_FIELDS = (
     # price / candles
@@ -1965,10 +2009,12 @@ def indicator_frame(hist, spy_closes=None, sym=None, garch="last"):
     garch      : "last" = GJR-GARCH fit at the final bar only (live scan),
                  "all"  = rolling refit every GARCH_REFIT_BARS (backtest, cached),
                  None   = skip (garch_vol = trailing HV fallback)
-    Window-length notes (vs a live 1-year frame): 52-week range and HV rank use a
-    trailing 252-bar window; on a ≤252-bar frame that is the whole frame, exactly
-    as the live code behaves.  EWM-based series (ADX, MACD, EMA) are seeded from
-    the frame start; after ~200 bars the seed effect is < 1e-6.
+    Window-length precondition: HV rank ranks the trailing 252 HV30 values (282
+    closes), the IV range and 52-week range use 252 bars, MA200 needs 200.  Bar i
+    equals a live scan only once all of those are full — i ≥ BT_WARMUP_BARS on a
+    backtest frame, always true at the last bar of a LIVE_HISTORY_PERIOD frame.
+    EWM-based series (ADX, MACD, EMA) are seeded from the frame start; after ~200
+    bars the seed effect is < 1e-6.
     """
     closes  = hist["Close"].astype(float)
     highs   = hist["High"].astype(float) if "High" in hist.columns else closes
@@ -2020,9 +2066,21 @@ def indicator_frame(hist, spy_closes=None, sym=None, garch="last"):
 
     reversal = _rsi_turning_up_flags(rsi_s.values)
 
-    # volume_confirmation(): today's volume ≥ 1.2 × mean of the PRIOR 20 bars (today excluded)
-    avg_vol = volumes.rolling(20).mean().shift(1)
-    vol_ok  = (volumes >= avg_vol * 1.2).values & ~np.isnan(avg_vol.values)
+    # volume_confirmation(): today's volume ≥ 1.2 × mean of the PRIOR 20 bars (today
+    # excluded), on the NaN-dropped series exactly as the helper did — a NaN volume
+    # inside the window is skipped, a NaN volume today repeats the last bar's verdict.
+    vol_vals = volumes.values
+    v_valid  = ~np.isnan(vol_vals)
+    v_ok_s   = pd.Series(vol_vals[v_valid])
+    avg_s    = v_ok_s.rolling(20).mean().shift(1)
+    ok_s     = ((v_ok_s >= avg_s * 1.2) & avg_s.notna()).values
+    v_pos    = np.cumsum(v_valid) - 1                     # position in v_ok_s of the last non-NaN volume ≤ bar i
+    if len(ok_s):
+        vol_ok  = np.where(v_pos >= 0, ok_s[np.clip(v_pos, 0, None)], False)
+        avg_vol = np.where(v_pos >= 0, avg_s.values[np.clip(v_pos, 0, None)], np.nan)
+    else:
+        vol_ok  = np.zeros(n, dtype=bool)
+        avg_vol = np.full(n, np.nan)
 
     # Relative strength vs SPY (calc_rs_vs_spy / calc_beta on common dates)
     rs_ratio  = np.zeros(n); rs_strong = np.zeros(n, dtype=bool)
@@ -2030,6 +2088,7 @@ def indicator_frame(hist, spy_closes=None, sym=None, garch="last"):
     if spy_closes is not None and len(spy_closes) > 0:
         try:
             stk = pd.Series(closes.values, index=idx)
+            stk = stk[~stk.index.duplicated(keep="last")]   # same de-duplication as the SPY side
             spy = _naive_daily_index(spy_closes)
             common = stk.index.intersection(spy.index)
             if len(common) >= 21:
@@ -2041,7 +2100,7 @@ def indicator_frame(hist, spy_closes=None, sym=None, garch="last"):
                 stk_ret = s / s.shift(20) - 1
                 spy_ret = p / p.shift(20) - 1
                 resid   = stk_ret - beta * spy_ret
-                al = pd.DataFrame({"resid": resid, "beta": beta}).reindex(stk.index).ffill()
+                al = pd.DataFrame({"resid": resid, "beta": beta}).reindex(stk.index).ffill().reindex(idx)
                 r = al["resid"].values
                 rs_ratio  = np.where(np.isnan(r), 0.0, np.round(r * 100, 2))
                 rs_strong = np.where(np.isnan(r), False, r >  0.03)
@@ -2082,7 +2141,7 @@ def indicator_frame(hist, spy_closes=None, sym=None, garch="last"):
         "ema_bull": ema_bull, "ema_bear": ema_bear,
         "ema_cross_bull": ema_cross_bull, "ema_cross_bear": ema_cross_bear,
         "reversal_up": reversal, "vol_confirmed": vol_ok,
-        "cur_vol": volumes.values, "avg_vol": avg_vol.values,
+        "cur_vol": volumes.values, "avg_vol": avg_vol,
         "hv_rank": hv_rank, "hv30": hv30_dec, "iv_rank_lo": iv_lo.values, "iv_rank_hi": iv_hi.values,
         "low_52w": low_52w.values, "high_52w": high_52w.values,
         "garch_vol": garch_arr, "garch_expand": g_exp, "garch_contract": g_con,
@@ -2256,7 +2315,10 @@ def evaluate_entry(ind, ctx, params, scan_condors=False):
     red_candle   = price < prev_close if have_prev else True
     green_ok     = (not p.get("require_green_candle", False)) or green_candle or exhaustion_bounce
     red_ok       = (not p.get("require_red_candle", False)) or red_candle
-    gap_pct      = ((ind["open"] - prev_close) / prev_close * 100) if (have_prev and ind["open"] == ind["open"]) else 0.0
+    if have_prev and prev_close != 0:
+        gap_pct = (ind["open"] - prev_close) / prev_close * 100   # a NaN Open gives NaN: both gap filters fail, as the original scanner did
+    else:
+        gap_pct = 0.0
     gap_ok_buy_call = gap_pct >= -3.0
     gap_ok_buy_put  = gap_pct <=  3.0
     trend_ok_buy    = above_ma50 or rsi < 25
@@ -2346,11 +2408,13 @@ def entry_blockers(ev, ind):
 
 # ── Exit rules (shared by the live tracker and the backtest walk) ──────────
 
-def _price_exit_core(pct_change, prev_peak, days_held):
+def _price_exit_core(pct_change, prev_peak, days_held, max_hold=None):
     """
     Price-based exits in the live tracker's order:
-      profit target → stop loss → trailing stop → stagnation.
+      profit target → stop loss → trailing stop → stagnation → max hold.
     days_held: trading days held (np.busday_count live, bars in the backtest).
+    max_hold : close after this many trading days whatever the P&L
+               (HOLD_DAYS live, hold_days in the backtest walk).
     Returns (triggered, reasons, peak_pct, code).
     """
     reasons, triggered, code = [], False, None
@@ -2374,6 +2438,9 @@ def _price_exit_core(pct_change, prev_peak, days_held):
             triggered, code = True, "stagnation"
             reasons.append(f"⏳ Stagnation exit: held {days_held} trading days with P&L {pct_change:+.1f}% "
                            f"(within ±{STAGNANT_RANGE}%) — theta bleed, exit and redeploy")
+        elif max_hold and days_held >= max_hold:
+            triggered, code = True, "end_of_hold"
+            reasons.append(f"⌛ Max hold reached: {days_held} trading days (limit {max_hold}) — close and redeploy")
     return triggered, reasons, round(peak_pct, 2), code
 
 
@@ -2445,7 +2512,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
             hist = pre_hist
             tkr  = tkr or yf.Ticker(sym)
         else:
-            tkr, hist = _fetch_history(sym, "1y")
+            tkr, hist = _fetch_history(sym, LIVE_HISTORY_PERIOD)
 
         if hist is None or len(hist) < 60:
             return None
@@ -2464,12 +2531,26 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
         # applies the rules.  Nothing below this point decides whether a strategy
         # fires — that is all inside evaluate_entry (shared with the backtest).
         closes = hist["Close"]
-        fr     = indicator_frame(hist, spy_closes=_spy_cache.get("closes"), sym=sym, garch="last")
+        prm    = live_params()
+        ctx    = live_market_ctx()                  # first: get_market_trend() fills the SPY cache the frame reads
+        need_garch = prm["garch_mode"] != "off"     # the GJR-GARCH fit is the costly part — pre-gate only when a rule reads it
+        fr     = indicator_frame(hist, spy_closes=_spy_cache.get("closes"), sym=sym,
+                                 garch="last" if need_garch else None)
         ind    = ind_at(fr, -1)
-        ctx    = live_market_ctx()
-        ev     = evaluate_entry(ind, ctx, live_params(), scan_condors=scan_condors)
+        ev     = evaluate_entry(ind, ctx, prm, scan_condors=scan_condors)
         if not ev["any"]:
             return None
+        if not need_garch:                          # gated ticker only: fill the display / signal-log fields
+            try:
+                gv = calc_garch_vol(closes)
+            except Exception:
+                gv = None
+            hv = ind["hv30"]
+            ind["garch_vol"]      = gv
+            ind["garch_expand"]   = bool(gv is not None and hv is not None and gv > hv * GARCH_EXPAND_RATIO)
+            ind["garch_contract"] = bool(gv is not None and hv is not None and gv < hv * GARCH_CONTRACT_RATIO)
+            ev["flags"]["sig_garch_expand"]   = ind["garch_expand"]
+            ev["flags"]["sig_garch_contract"] = ind["garch_contract"]
 
         # ── Unpack for the annotation / scoring code below (names kept) ──
         cur_rsi  = ind["rsi"];   cur_bb_u = ind["bb_u"]; cur_bb_m = ind["bb_m"]; cur_bb_l = ind["bb_l"]
@@ -2562,6 +2643,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
         base = {
             "ticker": sym, "name": name, "sector": sector,
             "price": round(price, 3),
+            "bar_date": str(fr["index"][-1].date()),   # the bar whose close is `price` (the signal log resolves from it)
             "rsi":   round(cur_rsi, 1),
             "bb_upper": round(cur_bb_u, 3),
             "bb_mid":   round(cur_bb_m, 3),
@@ -2922,7 +3004,7 @@ def _score_buy_put(rsi, price, bb_u, rs_weak=False, earnings_soon=False,
     w     = _cal_weights.get("buy_put", {})
     rsi_w = w.get("sig_rsi_ob",    1.0)
     bb_w  = w.get("sig_bb_high",   1.0)
-    rs_w  = w.get("sig_rs_strong", 1.0)
+    rs_w  = w.get("sig_rs_weak",   1.0)      # was reading the bull-side key by mistake
     s = 0
     if rsi > 75:     s += int(40 * rsi_w)
     elif rsi > 65:   s += int(25 * rsi_w)
@@ -3139,7 +3221,7 @@ def _option_price_detail(row_series):
 # to compute (current - entry) regardless of strategy, so a short put that
 # decayed from 1.00 → 0.85 (a win) showed -15% and fired the stop loss.
 SHORT_PREMIUM_STRATS = {"sell_put", "covered_call", "iron_condor"}
-PRICE_EXIT_MARKERS   = ("🎯", "🛑", "📉 Trailing", "⏳")   # reasons produced by _price_exit_check
+PRICE_EXIT_MARKERS   = ("🎯", "🛑", "📉 Trailing", "⏳", "⌛ Max hold")   # reasons produced by _price_exit_check
 
 
 def _position_pnl(strategy, entry_price, current_price, contracts=1):
@@ -3200,7 +3282,7 @@ def _price_exit_check(pct_change, prev_peak, tracked_at):
     trading days held.  Returns (triggered, reasons, peak_pct).
     """
     days_held = _trading_days_since(tracked_at) if tracked_at else None
-    triggered, reasons, peak, _ = _price_exit_core(pct_change, prev_peak, days_held)
+    triggered, reasons, peak, _ = _price_exit_core(pct_change, prev_peak, days_held, max_hold=HOLD_DAYS)
     return triggered, reasons, peak
 
 
@@ -3572,7 +3654,7 @@ def get_sell_signal(position: dict) -> dict:
     }
 
     try:
-        tkr, hist = _fetch_history(sym, "3mo")
+        tkr, hist = _fetch_history(sym, LIVE_HISTORY_PERIOD)   # same frame as the scanner → identical RSI / BB
         if hist is None or len(hist) < 30:
             return result
 
@@ -4000,7 +4082,11 @@ def _precompute_many(hist_map, label="Precompute"):
 def ctx_at(fr, i):
     """Market context for bar i of a backtest frame (same keys as live_market_ctx)."""
     c = fr["ctx"]
-    g = lambda k, d=None: (c[k][i] if k in c else d)
+    def g(k, d=None):
+        if k not in c:
+            return d
+        v = c[k][i]
+        return d if (v is None or v != v) else v        # a NaN cell (bar before the first context row) = missing
     def _b(x):
         return bool(x) if x == x else False
     vix = g("vix"); vix3m = g("vix3m")
@@ -4034,7 +4120,7 @@ def _bt_walk_exit(fr, idx, K, iv_est, hold_days, strategy, entry_opt):
     """
     Walk bar by bar after entry and close at the FIRST exit the live tracker
     would flag, using the same shared rules in the same order:
-      price exits  (_price_exit_core):  target → stop → trailing → stagnation
+      price exits  (_price_exit_core):  target → stop → trailing → stagnation → max hold (hold_days)
       strategy exits (_strategy_exit_check): RSI/Bollinger reversal, BB breach
       expiry: the modelled option is the scanner's ~30-DTE contract — it expires
               after OPTION_DTE_BARS bars and settles at intrinsic value.
@@ -4066,13 +4152,12 @@ def _bt_walk_exit(fr, idx, K, iv_est, hold_days, strategy, entry_opt):
             cur_opt = _bt_option_price(close, K, T_rem, iv_est, opt_type)
         pnl   = _pnl(cur_opt)
         pnl_r = round(pnl, 1)
-        trig, _, peak, code = _price_exit_core(pnl_r, peak, i)
+        # max hold = the live tracker's HOLD_DAYS rule; at the contract's own expiry the label is "expired"
+        trig, _, peak, code = _price_exit_core(pnl_r, peak, i, max_hold=cap if cap < OPTION_DTE_BARS else None)
         if not trig:
             trig, _, _, _, code = _strategy_exit_check(strategy, close, float(rsi[j]), float(bb_u[j]), float(bb_l[j]), strike=K)
         if not trig and i >= OPTION_DTE_BARS:
             trig, code = True, "expired"
-        if not trig and i == cap:
-            trig, code = True, "end_of_hold"
         if trig:
             if code == "stop_loss":
                 pnl_trig = -float(SELL_STOP_LOSS)
@@ -4115,23 +4200,23 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
     """
     Walk history for `ticker` applying the SHARED entry rules (evaluate_entry)
     at every bar and the SHARED exit rules (_bt_walk_exit) to every trade.
-    hold_days   : max bars held (the modelled ~30-DTE option expires after OPTION_DTE_BARS anyway)
+    hold_days   : max bars held — the live tracker's HOLD_DAYS rule (the modelled ~30-DTE
+                  option expires after OPTION_DTE_BARS anyway)
     params      : rule parameters (same keys as live_params()); missing keys take BT_DEFAULT_PARAMS
-    hist        : pre-downloaded 2y DataFrame (fetched if None)
-    idx_start / idx_end : bar window (walk-forward splits)
+    hist        : pre-downloaded BT_HISTORY_PERIOD DataFrame (fetched if None)
+    idx_start / idx_end : bar window (walk-forward splits); never below BT_WARMUP_BARS
     precomp     : dict from _precompute_indicators (built here if None — slow per ticker, use
                   _precompute_many for batches)
     record_path : also record unmanaged hold-to-day-d option P&L at HOLD_SWEEP_INTERVALS (Hold Horizon tool)
     What the backtest cannot know (and treats as the live gate would at gate time):
     put/call ratio (0), short interest / earnings (score-only live), real quotes
-    and liquidity — the sell_put premium gate uses the modelled premium and a
-    modelled IV rank, flagged on each trade as proxy_gate.
+    and liquidity — the sell_put gate uses the modelled premium only (see below).
     """
     p = {**BT_DEFAULT_PARAMS, **(params or {})}
     if hist is None and precomp is None:
         try:
-            _, hist = _fetch_history(ticker, "2y")
-            if hist is None or len(hist) < 60:
+            _, hist = _fetch_history(ticker, BT_HISTORY_PERIOD)
+            if hist is None or len(hist) <= BT_WARMUP_BARS:
                 return []
         except Exception:
             return []
@@ -4141,8 +4226,12 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
     trades  = []
     fr      = precomp
     n_bars  = fr["n"]
-    start   = max(60, idx_start)
-    end     = (idx_end or n_bars)
+    cap     = min(hold_days, OPTION_DTE_BARS)
+    start   = max(BT_WARMUP_BARS, idx_start)
+    # Entries stop `cap` bars before the window end so every trade resolves inside
+    # the window: nothing is dropped for running off the data (which kept only the
+    # fast exits), and a walk-forward training trade can never read validation bars.
+    end     = (idx_end or n_bars) - cap
     T_entry = OPTION_DTE_TARGET / 365.0
     # One open position per strategy at a time (the tracker rejects a duplicate
     # ticker+strategy while one is open).
@@ -4170,11 +4259,14 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
             premium_pct = entry_opt / price * 100
             proxy_gate  = None
             if strategy == "sell_put":
-                # live: (calc_iv_rank >= IV_RANK_THRESHOLD) or (premium_pct >= PREMIUM_PCT_MIN)
-                iv_high   = iv_rank is not None and iv_rank >= IV_RANK_THRESHOLD
-                prem_high = premium_pct >= PREMIUM_PCT_MIN
-                proxy_gate = "iv_rank" if iv_high else ("premium" if prem_high else "blocked")
-                if not (iv_high or prem_high):
+                # live: (calc_iv_rank >= IV_RANK_THRESHOLD) or (premium_pct >= PREMIUM_PCT_MIN).
+                # No historical IV exists, and the modelled IV rank (1.15 × HV inside its
+                # own HV range) would wave almost everything through — so only the premium
+                # leg gates here: stricter than live, never looser.  iv_rank stays on the
+                # trade for information.
+                prem_high  = premium_pct >= PREMIUM_PCT_MIN
+                proxy_gate = "premium" if prem_high else "blocked"
+                if not prem_high:
                     continue
 
             ex = _bt_walk_exit(fr, idx, K, iv_est, hold_days, strategy, entry_opt)
@@ -4337,8 +4429,8 @@ def _run_backtest_job(tickers, hold_days):
                              results=None, stage="Downloading history…")
 
         # ── Bulk download 2y OHLCV for all tickers in one shot ───────
-        print(f"  [Backtest] Bulk downloading 2y history for {len(tickers)} tickers…")
-        hist_map = _bulk_download(tickers, "2y", min_rows=60)
+        print(f"  [Backtest] Bulk downloading {BT_HISTORY_PERIOD} history for {len(tickers)} tickers…")
+        hist_map = _bulk_download(tickers, BT_HISTORY_PERIOD, min_rows=BT_WARMUP_BARS + OPTION_DTE_BARS + 2)
         print(f"  [Backtest] Got data for {len(hist_map)}/{len(tickers)} tickers")
 
         with _bt_lock:
@@ -4470,7 +4562,7 @@ WFO_PARAM_GRID = {
     "bull_min":      [1, 2],              # live caps at 2 — a 3 in the grid was silently clamped
     "bear_min":      [1, 2],
     "adx_threshold": [25, 30, 35],
-    "hold_days":     [7, 14, 21],         # max bars held; the modelled option expires after 21 (≈30 DTE)
+    "hold_days":     [7, 14, 21],         # max trading days held (the tracker's HOLD_DAYS rule); the option expires after 21 anyway
     "garch_mode":    ["off", "confluence", "gate"],   # GJR-GARCH vol-forecast edge: ignored / +1 signal / hard gate
 }
 # → 3·3·2·2·3·3·3 = 972 combinations
@@ -4495,12 +4587,14 @@ def _apply_wfo_params(suggestion: dict) -> dict:
     goes into scan_state["wfo_params"] where scan_ticker reads it.
     Shared by /api/optimizer/apply and the startup restore.
     """
-    global RSI_OVERSOLD, RSI_OVERBOUGHT
+    global RSI_OVERSOLD, RSI_OVERBOUGHT, HOLD_DAYS
     applied = {}
     if "rsi_oversold" in suggestion:
         RSI_OVERSOLD = suggestion["rsi_oversold"];     applied["RSI_OVERSOLD"] = RSI_OVERSOLD
     if "rsi_overbought" in suggestion:
         RSI_OVERBOUGHT = suggestion["rsi_overbought"]; applied["RSI_OVERBOUGHT"] = RSI_OVERBOUGHT
+    if "hold_days" in suggestion:                      # the tracker's max-hold rule — the same cap the backtest walked with
+        HOLD_DAYS = max(1, min(_as_int(suggestion["hold_days"], 21), OPTION_DTE_BARS)); applied["HOLD_DAYS"] = HOLD_DAYS
     live = {k: v for k, v in suggestion.items() if k not in ("rsi_oversold", "rsi_overbought", "hold_days")}
     with scan_lock:
         scan_state["wfo_params"] = live
@@ -4652,11 +4746,12 @@ _WFO_SPLIT_MAP   = None
 _WFO_PRECOMP_MAP = None
 
 
-def _wfo_worker_init(split_map, precomp_map):
+def _wfo_worker_init(split_map, precomp_map, risk_free_rate):
     """Initializer for ProcessPoolExecutor - runs once per worker process."""
-    global _WFO_SPLIT_MAP, _WFO_PRECOMP_MAP
+    global _WFO_SPLIT_MAP, _WFO_PRECOMP_MAP, RISK_FREE_RATE
     _WFO_SPLIT_MAP   = split_map
     _WFO_PRECOMP_MAP = precomp_map
+    RISK_FREE_RATE   = risk_free_rate      # the FRED-updated rate only exists in the main process
 
 
 def _wfo_strategy_stats(trades):
@@ -4743,8 +4838,8 @@ def _run_wfo_job_inner(tickers):
                           results=None, stage="Downloading history…")
 
     # ── Step 1: bulk-download all histories once ────────────────
-    print(f"  [WFO] Downloading 2y history for {len(tickers)} tickers…")
-    hist_map = _bulk_download(tickers, "2y", min_rows=60)     # same 60-bar minimum as the live scanner
+    print(f"  [WFO] Downloading {BT_HISTORY_PERIOD} history for {len(tickers)} tickers…")
+    hist_map = _bulk_download(tickers, BT_HISTORY_PERIOD, min_rows=BT_WARMUP_BARS + OPTION_DTE_BARS + 2)     # same 60-bar minimum as the live scanner
 
     if not hist_map:
         with _wfo_lock:
@@ -4781,7 +4876,7 @@ def _run_wfo_job_inner(tickers):
     with ProcessPoolExecutor(
         max_workers=WFO_CPU_WORKERS,
         initializer=_wfo_worker_init,
-        initargs=(split_map, precomp_map),
+        initargs=(split_map, precomp_map, RISK_FREE_RATE),
     ) as pool:
         train_futures = {pool.submit(_wfo_eval_train_proc, combo): combo for combo in combos}
         train_done = 0
@@ -4923,9 +5018,9 @@ def _run_calibration_job_inner(months, universe):
     # Always download 2y regardless of the signal window — the 200-day MA
     # needs 200 bars of history to be valid.  We restrict which bars we
     # *score* to the last `months` months via idx_start below.
-    print(f"  [CAL] Downloading 2y history for {len(tickers)} tickers "
+    print(f"  [CAL] Downloading {BT_HISTORY_PERIOD} history for {len(tickers)} tickers "
           f"(signal window: last {months}m)…")
-    hist_map = _bulk_download(tickers, "2y", min_rows=120)
+    hist_map = _bulk_download(tickers, BT_HISTORY_PERIOD, min_rows=BT_WARMUP_BARS + OPTION_DTE_BARS + 2)
 
     if not hist_map:
         with _cal_lock:
@@ -4947,7 +5042,7 @@ def _run_calibration_job_inner(months, universe):
             _cal_state["progress"] = i + 1
         try:
             cutoff    = pc["index"][-1] - pd.DateOffset(months=months)
-            start_idx = max(60, int(pc["index"].searchsorted(cutoff)))
+            start_idx = max(BT_WARMUP_BARS, int(pc["index"].searchsorted(cutoff)))
             trades = run_backtest_ticker(sym, hold_days=14, params=params, precomp=pc, idx_start=start_idx)
             all_trades.extend(trades)
         except Exception as e:
@@ -4994,18 +5089,14 @@ def _run_calibration_job_inner(months, universe):
         print(f"  [CAL] Could not read performance.json: {e}")
 
     # ── 5. Build signal weights ───────────────────────────────
-    LABEL_TO_FLAG = {
-        "RSI Oversold":     "sig_rsi_os",
-        "Below BB Lower":   "sig_bb_low",
-        "RSI Turning Up":   "sig_reversal",
-        "MACD Bull Cross":  "sig_macd_bull",
-        "Volume Confirmed": "sig_vol_ok",
-        "RSI Overbought":   "sig_rsi_ob",
-        "Above BB Upper":   "sig_bb_high",
-        "MACD Bear Cross":  "sig_macd_bear",
-    }
-    BULL_FLAGS = {"sig_rsi_os", "sig_bb_low", "sig_reversal", "sig_macd_bull", "sig_vol_ok"}
-    BEAR_FLAGS = {"sig_rsi_ob", "sig_bb_high", "sig_macd_bear"}
+    # Label → flag for every flag the engine records (one table, see SIGNAL_FLAG_LABELS).
+    LABEL_TO_FLAG = {v: k for k, v in SIGNAL_FLAG_LABELS.items()}
+    # The flags the live scorers actually read (_score_sell_put / _score_buy_call /
+    # _score_buy_put).  The old sets produced keys no scorer looked at and
+    # omitted the ones they did, so most calibration weights never took effect.
+    BULL_FLAGS = {"sig_rsi_os", "sig_bb_low", "sig_reversal", "sig_above_ma50",
+                  "sig_hv_low", "sig_hv_high", "sig_rs_strong"}
+    BEAR_FLAGS = {"sig_rsi_ob", "sig_bb_high", "sig_rs_weak"}
 
     # Blend simulated + live signal log win rates.
     # Signal log (real live recs) is weighted 2× vs simulated backtest.
@@ -5276,11 +5367,11 @@ def _run_logistic_calibration(source="signal_log", months=12, universe="focus"):
             else:
                 tickers = list(dict.fromkeys(FOCUS_LIST))
 
-            print(f"  [LR] Downloading 2y history for {len(tickers)} tickers…")
+            print(f"  [LR] Downloading {BT_HISTORY_PERIOD} history for {len(tickers)} tickers…")
             with _lr_lock:
                 _lr_state["stage"] = f"Downloading history for {len(tickers)} tickers…"
 
-            hist_map = _bulk_download(tickers, "2y", min_rows=120)
+            hist_map = _bulk_download(tickers, BT_HISTORY_PERIOD, min_rows=BT_WARMUP_BARS + OPTION_DTE_BARS + 2)
             if not hist_map:
                 with _lr_lock:
                     _lr_state.update(running=False, stage="Download failed — no data")
@@ -5300,7 +5391,7 @@ def _run_logistic_calibration(source="signal_log", months=12, universe="focus"):
                         _lr_state["stage"] = f"Backtesting {i}/{len(precomp_map)} tickers…"
                 try:
                     cutoff    = pc["index"][-1] - pd.DateOffset(months=months)
-                    start_idx = max(60, int(pc["index"].searchsorted(cutoff)))
+                    start_idx = max(BT_WARMUP_BARS, int(pc["index"].searchsorted(cutoff)))
                     trades    = run_backtest_ticker(sym, hold_days=14, params=params, precomp=pc, idx_start=start_idx)
                     all_trades.extend(trades)
                 except Exception as e:
@@ -5423,8 +5514,8 @@ def _run_hold_sweep_job(months=12, universe="focus"):
         # One bulk download instead of ~500 individual history() calls
         # (unadjusted prices — same basis as the calibration/LR jobs).
         with _hs_lock:
-            _hs_state["stage"] = f"Downloading 2y history for {len(tickers)} tickers…"
-        hist_map = _bulk_download(tickers, "2y", min_rows=60)
+            _hs_state["stage"] = f"Downloading {BT_HISTORY_PERIOD} history for {len(tickers)} tickers…"
+        hist_map = _bulk_download(tickers, BT_HISTORY_PERIOD, min_rows=BT_WARMUP_BARS + OPTION_DTE_BARS + 2)
 
         # The live scanner's exact parameters (applied optimizer values + UI
         # toggles) so the analysis covers the setups it would actually trade.
@@ -5599,16 +5690,12 @@ def _log_new_signals(totals: dict):
         entries    = _load_signal_log()
         now_str    = datetime.now().isoformat()
         today      = datetime.now().date()
-        # Strategy-aware resolution windows:
-        # Directional plays (buy call/put) move fast — 7 days captures the initial move.
-        # Premium-selling (sell put, covered call) needs more time to decay — 21 days.
-        HOLD_DAYS_BY_STRAT = {
-            "sell_put":     21,
-            "buy_call":      7,
-            "buy_put":       7,
-            "covered_call": 21,
-            "iron_condor":  14,
-        }
+        # One resolution window for every strategy: the tracker's max-hold rule
+        # (HOLD_DAYS trading days), so a logged signal resolves exactly as a tracked
+        # position would.  check_after is counted in TRADING days — the simulator
+        # needs that many bars after the signal before it can walk the whole hold.
+        hold_days  = HOLD_DAYS
+        check_date = str(np.busday_offset(np.datetime64(today), hold_days + 1, roll="forward"))
 
         # Dedup: skip a ticker+strategy that was already logged within the last
         # 3 trading days (resolved or not).  Same-day-only dedup logged the same
@@ -5633,8 +5720,6 @@ def _log_new_signals(totals: dict):
 
         added = 0
         for bucket, strat_key in STRAT_MAP.items():
-            hold_days  = HOLD_DAYS_BY_STRAT.get(strat_key, 7)
-            check_date = (datetime.now() + pd.DateOffset(days=hold_days)).date().isoformat()
             for rec in totals.get(bucket, []):
                 ticker = rec.get("ticker", "")
                 key    = (ticker, strat_key)
@@ -5645,12 +5730,18 @@ def _log_new_signals(totals: dict):
                     "ticker":       ticker,
                     "strategy":     strat_key,
                     "signal_date":  now_str,
+                    "bar_date":     rec.get("bar_date"),        # the bar whose close is price_at_signal
                     "check_after":  check_date,
                     "hold_days":    hold_days,
                     "price_at_signal": rec.get("price"),
                     "rsi_at_signal":   rec.get("rsi"),
                     "score":           rec.get("score"),
                     "vix_regime":      rec.get("vix_regime"),
+                    # Which rule set produced the flags: 2 = the shared engine (regime-adjusted
+                    # RSI thresholds, recorded here); older entries used literal 30 / 70.
+                    "flags_version":   2,
+                    "rsi_os_thr":      rec.get("rsi_os_thr"),
+                    "rsi_ob_thr":      rec.get("rsi_ob_thr"),
                     # Market IV vs model vol at signal time — the only place the
                     # real IV-vs-GARCH edge can be measured (no historical IV exists)
                     "iv_at_signal":    (rec.get("option") or {}).get("iv"),
@@ -5699,12 +5790,15 @@ def _simulate_signal_exit(entry, hist):
 
     Returns dict with exit_day, exit_reason, exit_option_pct (the option P&L
     that triggered exit), stock_return_pct (actual stock move), exit_price,
-    and win. Falls back to end-of-hold resolution if no trigger hits.
+    and win; the max-hold rule closes it at hold_days if nothing else fires.
+    Returns the string "pending" when the history does not yet reach hold_days
+    bars past the signal (the caller leaves the entry open), and None when the
+    signal bar itself cannot be simulated.
     """
     strat       = entry.get("strategy", "")
     entry_price = _as_float(entry.get("price_at_signal"))
-    signal_date = (entry.get("signal_date") or "")[:10]
-    hold_days   = int(entry.get("hold_days", 7) or 7)
+    signal_date = (entry.get("bar_date") or entry.get("signal_date") or "")[:10]   # the bar whose close is price_at_signal
+    hold_days   = int(entry.get("hold_days", HOLD_DAYS) or HOLD_DAYS)
 
     if entry_price <= 0 or not signal_date or strat not in ("buy_call", "buy_put", "sell_put", "covered_call"):
         return None
@@ -5716,8 +5810,8 @@ def _simulate_signal_exit(entry, hist):
     # Same engine as the backtest: indicator frame on UNADJUSTED daily bars
     # (indices for the RSI/BB exits), the same option model and the same walk.
     fr = indicator_frame(hist, spy_closes=None, sym=entry.get("ticker"), garch=None)
-    pos = int(fr["index"].searchsorted(entry_dt))
-    if pos >= fr["n"] or pos + 1 >= fr["n"]:
+    pos = int(fr["index"].searchsorted(entry_dt, side="right")) - 1   # the last bar ≤ the signal date
+    if pos < 0 or pos + 1 >= fr["n"]:
         return None                                   # signal bar not in history / nothing after it
     hv = pd.Series(fr["hv30"]) * 1.15
     rets = pd.Series(fr["price"]).pct_change()
@@ -5725,14 +5819,14 @@ def _simulate_signal_exit(entry, hist):
     sigma = float(hv.iloc[pos])
 
     opt_type  = "call" if strat in ("buy_call", "covered_call") else "put"
-    K         = _bt_strike(entry_price)
+    K         = _bt_strike(entry_price * (1.05 if strat == "covered_call" else 1.0))   # the scanner's covered call is ~5% OTM
     entry_opt = _bt_option_price(entry_price, K, OPTION_DTE_TARGET / 365.0, sigma, opt_type)
     if entry_opt < 0.01:
         return None
 
     ex = _bt_walk_exit(fr, pos, K, sigma, hold_days, strat, entry_opt)
     if ex is None:
-        return None                                   # hold period not complete yet
+        return "pending"                              # hold period not complete yet (in trading days)
     j = pos + ex["exit_offset"]
     close = float(fr["price"][j])
     return {
@@ -5820,10 +5914,13 @@ def _resolve_signal_log():
                     }
 
                     if past_hold:
-                        # Simulate day-by-day sell-signal exit instead of fixed end-of-hold.
-                        # Triggers: option +30% (SELL_PROFIT_TARGET) or option -15% (SELL_STOP_LOSS).
+                        # Simulate day-by-day sell-signal exit instead of fixed end-of-hold —
+                        # the backtest's walk: target / stop / trailing / stagnation / RSI-BB / max hold.
                         sim = _simulate_signal_exit(e, hist)
-                        if sim is not None:
+                        if sim == "pending":
+                            live_count += 1           # not enough trading days yet — stays open, re-checked next run
+                        elif sim is not None:
+                            resolved_count += 1
                             update.update({
                                 "resolved":          True,
                                 "resolved_at":       datetime.now().isoformat(),
@@ -5837,7 +5934,8 @@ def _resolve_signal_log():
                                 "outcome":           "win" if sim["win"] else "loss",
                             })
                         else:
-                            # Simulator couldn't run (no data) — fall back to fixed-hold logic
+                            # Simulator couldn't run (no history for the signal bar) — fixed-hold fallback on the stock move
+                            resolved_count += 1
                             strat = e.get("strategy", "")
                             if strat == "buy_call":
                                 win = stock_return_pct > 3.0
@@ -5856,7 +5954,6 @@ def _resolve_signal_log():
                                 "win":              win,
                                 "outcome":          "win" if win else "loss",
                             })
-                        resolved_count += 1
                     else:
                         live_count += 1
 
@@ -5975,7 +6072,7 @@ def _live_refresh_loop():
         print(f"  [Live] Refreshing {len(signal_tickers)} signal ticker(s): {', '.join(signal_tickers)}")
 
         # Bulk download for the small signal set (per-ticker fallback inside scan_ticker)
-        bulk_hist = _bulk_download(signal_tickers, "1y")
+        bulk_hist = _bulk_download(signal_tickers, LIVE_HISTORY_PERIOD)
 
         new_totals = {"sell_puts": [], "buy_calls": [], "buy_puts": [],
                       "covered_calls": [], "iron_condors": condors}   # condors come from their own scan — keep them
@@ -6104,8 +6201,8 @@ def _run_scan(mode=None):
         _warm_market_caches()
 
         # ── Bulk OHLCV download (single API call for all tickers) ────────────
-        print(f"  [Bulk download] Fetching 1-year OHLCV for {len(tickers)} tickers…")
-        bulk_hist = _bulk_download(tickers, "1y")
+        print(f"  [Bulk download] Fetching {LIVE_HISTORY_PERIOD} OHLCV for {len(tickers)} tickers…")
+        bulk_hist = _bulk_download(tickers, LIVE_HISTORY_PERIOD)
         print(f"  [Bulk download] Done — {len(bulk_hist)}/{len(tickers)} tickers have data")
 
         # ── Scan ─────────────────────────────────────────────────────────────
@@ -6362,7 +6459,7 @@ def _run_condor_scan():
             _condor_state.update(progress=0, total=len(tickers))
         print(f"  [Condor] Scanning {len(tickers)} tickers for iron condors…")
         _warm_market_caches()
-        bulk_hist = _bulk_download(tickers, "1y")
+        bulk_hist = _bulk_download(tickers, LIVE_HISTORY_PERIOD)
 
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
             futures = {pool.submit(scan_ticker, sym, bulk_hist.get(sym), True, None, _prefetch_ticker): sym
@@ -6423,7 +6520,7 @@ def api_condor_status():
 @app.route("/api/backtest/run", methods=["POST"])
 def api_backtest_run():
     data      = request.get_json(silent=True) or {}
-    hold_days = max(7, min(60, _as_int(data.get("hold_days"), 21)))
+    hold_days = max(1, min(OPTION_DTE_BARS, _as_int(data.get("hold_days"), 21)))   # the contract expires after 21 bars
     ticker    = str(data.get("ticker") or "").strip().upper()
     mode      = data.get("mode", "focus")   # "ticker" | "focus" | "full" | "signals"
     if mode == "ticker" and ticker:
@@ -6811,7 +6908,7 @@ def api_debug_scan(sym):
     """
     sym = sym.upper()
     try:
-        tkr, hist = _fetch_history(sym, "1y")
+        tkr, hist = _fetch_history(sym, LIVE_HISTORY_PERIOD)
         if hist is None or len(hist) < 60:
             return jsonify({"error": "Not enough history data"}), 400
 
@@ -7074,6 +7171,7 @@ def api_search():
     sym = str((request.get_json(silent=True) or {}).get("ticker") or "").strip().upper()
     if not sym or not re.fullmatch(r"[A-Z0-9.\-^=]{1,10}", sym):
         return jsonify({"ok": False, "message": "No valid ticker provided"}), 400
+    _warm_market_caches()                       # SPY / VIX / Fed context before the frame is built (same as a full scan)
     raw     = scan_ticker(sym, prefetch_fn=_prefetch_ticker)
     signals = raw.get("_signals", {}) if raw else {}
     if not signals:
@@ -7459,6 +7557,52 @@ def api_performance_delete(trade_id):
 
 
 # ══════════════════════════════════════════════════════════════
+#  AUTOTRADE ROUTES   (the logic lives in autotrader.py)
+# ══════════════════════════════════════════════════════════════
+
+@app.route("/api/autotrade/status")
+def api_autotrade_status():
+    return jsonify(autotrader.status())
+
+
+@app.route("/api/autotrade/config", methods=["GET", "POST"])
+def api_autotrade_config():
+    if request.method == "POST":
+        cfg = autotrader.set_config(request.get_json(silent=True) or {})
+        return jsonify({"ok": True, "config": autotrader.public_config(cfg)})
+    return jsonify(autotrader.public_config())
+
+
+@app.route("/api/autotrade/toggle", methods=["POST"])
+def api_autotrade_toggle():
+    enabled = bool((request.get_json(silent=True) or {}).get("enabled"))
+    cfg = autotrader.load_config()
+    if enabled and cfg["broker"] == "alpaca" and not cfg["paper"] and os.environ.get("OPTIONS_BOT_ALLOW_LIVE") != "1":
+        return jsonify({"ok": False, "message": "Live Alpaca trading is refused unless OPTIONS_BOT_ALLOW_LIVE=1 "
+                                                "is set in the bot's environment. Use paper, or set it deliberately."}), 400
+    cfg = autotrader.set_config({"enabled": enabled})
+    autotrader._log("enabled" if enabled else "disabled", broker=cfg["broker"], paper=cfg["paper"])
+    return jsonify({"ok": True, "enabled": cfg["enabled"]})
+
+
+@app.route("/api/autotrade/run", methods=["POST"])
+def api_autotrade_run():
+    """One forced cycle now (also runs when disabled / after hours — for testing on paper)."""
+    return jsonify({"ok": True, "result": autotrader.run_now()})
+
+
+@app.route("/api/autotrade/log")
+def api_autotrade_log():
+    return jsonify(autotrader.get_log(_as_int(request.args.get("n"), 100)))
+
+
+@app.route("/api/autotrade/close/<position_id>", methods=["POST"])
+def api_autotrade_close(position_id):
+    ok = autotrader.request_close(position_id)
+    return jsonify({"ok": ok, "message": "" if ok else "No auto position with that id"}), (200 if ok else 404)
+
+
+# ══════════════════════════════════════════════════════════════
 #  HTML DASHBOARD
 # ══════════════════════════════════════════════════════════════
 
@@ -7716,6 +7860,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
   <div class="tab" onclick="switchTab('bsmodel')">⚖️ B-S Model</div>
   <div class="tab" onclick="switchTab('performance')">📊 Performance</div>
   <div class="tab" onclick="switchTab('calibrate')">🎯 Calibrate</div>
+  <div class="tab" onclick="switchTab('autotrade')">🤖 Autotrade</div>
 </div>
 
 <!-- PANELS -->
@@ -7830,10 +7975,9 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
         <select id="bt-hold"
           style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;
                  padding:7px 12px;color:var(--text);font-size:13px;outline:none">
+          <option value="7">7 days</option>
           <option value="14">14 days</option>
-          <option value="21" selected>21 days</option>
-          <option value="30">30 days</option>
-          <option value="45">45 days</option>
+          <option value="21" selected>21 days (to expiry)</option>
         </select>
       </div>
       <button id="bt-run-btn" class="btn btn-primary" onclick="runBacktest()" style="padding:8px 22px">
@@ -7893,7 +8037,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
     <h2 style="color:var(--accent);font-size:18px;margin-bottom:6px">🧬 Walk-Forward Optimizer</h2>
     <p style="color:var(--muted);font-size:13px;margin-bottom:16px">
       Sweeps RSI thresholds, confluence requirements, ADX threshold, and hold period across
-      <b>486 parameter combinations</b>. Trains on the first 75% of history, validates on the last 25%
+      <b>972 parameter combinations</b> (RSI thresholds, confluence minimums, ADX threshold, hold length and the GARCH vol-forecast mode) using the <b>same rules the live scanner runs</b>. Trains on the first 75% of history, validates on the last 25%
       to prevent overfitting. Best settings can be applied to the live scanner.
     </p>
     <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
@@ -8188,6 +8332,40 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
 <!-- ══════════════════════════════════════════════════════════
      CALIBRATE PANEL
      ══════════════════════════════════════════════════════════ -->
+<div class="panel" id="panel-autotrade">
+  <div class="disclaimer">
+    <b>🤖 Autotrade</b> — trades the scanner's signals through a broker on its own, with the same exit rules the backtest was run with
+    (profit target / stop / trailing stop / stagnation / RSI-BB reversal / max hold / expiry).
+    Default broker is a <b>local paper ledger</b> (no account needed). <b>Alpaca</b> runs on its paper endpoint; real money additionally
+    requires <code>OPTIONS_BOT_ALLOW_LIVE=1</code> in the bot's environment. Kill switch: create a file named <code>STOP_AUTOTRADE</code>
+    in the bot folder. Everything it does is in the log below and in 📊 Performance.
+  </div>
+  <div class="stats" id="at-stats"></div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+    <button id="at-toggle" class="btn btn-primary" onclick="atToggle()">▶ Enable autotrading</button>
+    <button class="btn btn-ghost" onclick="atRunNow()">Run one cycle now</button>
+    <button class="btn btn-ghost" onclick="refreshAutotrade()">↻ Refresh</button>
+    <span id="at-msg" style="font-size:12px;color:var(--muted)"></span>
+  </div>
+  <div id="at-skipped" style="margin-bottom:16px"></div>
+  <div class="card" style="padding:16px;margin-bottom:16px">
+    <div style="font-weight:700;margin-bottom:10px">Open auto positions</div>
+    <div id="at-positions"></div>
+  </div>
+  <div class="card" style="padding:16px;margin-bottom:16px">
+    <div style="font-weight:700;margin-bottom:10px">Settings <span style="font-weight:400;color:var(--muted);font-size:12px">(saved to autotrade_config.json)</span></div>
+    <div id="at-config" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px"></div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <button class="btn btn-primary" onclick="atSaveConfig()">💾 Save settings</button>
+      <span id="at-config-msg" style="font-size:12px;color:var(--muted)"></span>
+    </div>
+  </div>
+  <div class="card" style="padding:16px">
+    <div style="font-weight:700;margin-bottom:10px">Activity log</div>
+    <div id="at-log"></div>
+  </div>
+</div>
+
 <div class="panel" id="panel-calibrate">
   <div style="padding:24px;max-width:1000px;margin:0 auto">
     <h2 style="color:var(--accent);font-size:18px;margin-bottom:4px">🎯 Signal Calibration</h2>
@@ -8565,7 +8743,164 @@ function switchTab(tab) {
   if (tab==='history')     refreshHistory();
   if (tab==='tracked')     refreshTracked();
   if (tab==='performance') refreshPerformance();
+  if (tab==='autotrade')   refreshAutotrade();
 }
+
+// ── Autotrade tab ─────────────────────────────────────────────
+const AT_FIELDS = [
+  ['broker','Broker','select',['local_paper','alpaca']],
+  ['paper','Alpaca: paper endpoint','bool'],
+  ['alpaca_key_id','Alpaca key ID','password'],
+  ['alpaca_secret','Alpaca secret','password'],
+  ['allowed_strategies','Strategies (comma-separated)','text'],
+  ['min_score','Min signal score','number'],
+  ['max_open_positions','Max open auto positions','number'],
+  ['max_new_per_cycle','Max new trades per cycle','number'],
+  ['max_position_usd','Max $ premium per long trade','number'],
+  ['max_collateral_usd','Max $ collateral per short put','number'],
+  ['daily_loss_cap_usd','Daily loss cap $ (0 = off)','number'],
+  ['max_spread_pct','Max bid/ask spread %','number'],
+  ['min_dte','Min DTE','number'],
+  ['max_dte','Max DTE','number'],
+  ['market_hours_only','Regular hours only','bool'],
+  ['interval_mins','Cycle every (minutes)','number'],
+  ['scan_if_stale_hours','Rescan when results older than (h)','number'],
+  ['reentry_cooldown_days','Re-entry cooldown (trading days)','number'],
+  ['pending_order_timeout_mins','Cancel unfilled orders after (min)','number'],
+  ['paper_starting_cash','Paper starting cash $','number'],
+  ['paper_slippage_pct','Paper slippage %','number'],
+];
+const AT_INPUT = 'width:100%;padding:7px 10px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;box-sizing:border-box';
+function atField([key, label, type, opts], val) {
+  let ctl;
+  if (type === 'select') {
+    ctl = `<select id="at-f-${key}" style="${AT_INPUT}">${opts.map(o=>`<option value="${o}"${o===val?' selected':''}>${o}</option>`).join('')}</select>`;
+  } else if (type === 'bool') {
+    ctl = `<select id="at-f-${key}" style="${AT_INPUT}"><option value="true"${val?' selected':''}>Yes</option><option value="false"${!val?' selected':''}>No</option></select>`;
+  } else if (type === 'password') {
+    ctl = `<input id="at-f-${key}" type="password" value="" placeholder="${esc(val || '(not set)')}" autocomplete="new-password" style="${AT_INPUT}">`;
+  } else {
+    const v = Array.isArray(val) ? val.join(', ') : (val ?? '');
+    ctl = `<input id="at-f-${key}" type="${type==='number'?'number':'text'}" step="any" value="${esc(v)}" style="${AT_INPUT}">`;
+  }
+  return `<div><label style="font-size:11px;color:var(--muted);display:block;margin-bottom:4px">${label}</label>${ctl}</div>`;
+}
+function atStat(label, val, color) {
+  return `<div class="stat"><div style="font-size:11px;color:var(--muted)">${label}</div><div style="font-size:17px;font-weight:700;color:${color||'var(--text)'}">${val}</div></div>`;
+}
+let atStatus = null;
+async function refreshAutotrade() {
+  let s;
+  try { s = await fetch('/api/autotrade/status').then(r=>r.json()); } catch(e) { return; }
+  atStatus = s;
+  const acct = s.account || {};
+  const money = v => v==null ? '—' : '$' + (+v).toLocaleString('en-US',{maximumFractionDigits:0});
+  const liveTag = s.broker==='alpaca' ? (s.paper ? ' (paper)' : ' ⚠ LIVE') : ' (local paper)';
+  document.getElementById('at-stats').innerHTML =
+    atStat('Status', s.kill_switch ? '⛔ Kill switch' : (s.enabled ? '🟢 Enabled' : '⚪ Disabled'),
+           s.kill_switch ? 'var(--red)' : (s.enabled ? 'var(--green)' : 'var(--muted)')) +
+    atStat('Broker', esc(s.broker) + liveTag, (s.broker==='alpaca' && !s.paper) ? 'var(--red)' : undefined) +
+    atStat('Market', s.market_open ? 'Open' : 'Closed') +
+    atStat('Equity', acct.equity!=null ? money(acct.equity) : (s.account_error ? '⚠ broker error' : '—')) +
+    atStat('Cash', money(acct.cash)) +
+    atStat('Open auto', `${s.open_auto_positions}${s.pending_entries ? ' +'+s.pending_entries+' pending' : ''}`) +
+    atStat('Today realised', (s.today.realized>=0?'+':'') + '$' + (+s.today.realized).toFixed(2) + (s.daily_loss_cap_hit ? ' ⛔ cap' : ''),
+           s.today.realized < 0 ? 'var(--red)' : 'var(--green)') +
+    atStat('Last cycle', s.last_cycle ? new Date(s.last_cycle).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : 'never') +
+    atStat('Next cycle', (s.enabled && s.next_cycle) ? new Date(s.next_cycle).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—') +
+    atStat('Max hold', s.hold_days != null ? s.hold_days + ' days' : '—');
+  const btn = document.getElementById('at-toggle');
+  btn.textContent = s.enabled ? '⏸ Disable autotrading' : '▶ Enable autotrading';
+  btn.className = 'btn ' + (s.enabled ? 'btn-danger' : 'btn-primary');
+  let msg = '';
+  if (s.last_result) {
+    const r = s.last_result;
+    msg = r.ran ? `Last cycle: ${r.exits} exit(s), ${r.entries} entry(ies)` + ((r.skipped||[]).length ? `, ${r.skipped.length} skipped` : '') + (r.scan ? ` · scan: ${r.scan}` : '')
+                : `Last cycle: ${r.reason || 'idle'}`;
+  }
+  if (s.account_error) msg += ` · ⚠ broker: ${s.account_error}`;
+  if (s.last_error)    msg += ` · ⚠ ${s.last_error}`;
+  document.getElementById('at-msg').textContent = msg;
+  const skipped = (s.last_result && s.last_result.skipped) || [];
+  document.getElementById('at-skipped').innerHTML = skipped.length
+    ? `<details><summary style="cursor:pointer;color:var(--muted);font-size:12px">Why ${skipped.length} candidate(s) were skipped last cycle</summary><div style="font-size:12px;color:var(--muted);margin-top:6px">${skipped.map(esc).join('<br>')}</div></details>` : '';
+  const cfgEl = document.getElementById('at-config');
+  if (!cfgEl.dataset.dirty) cfgEl.innerHTML = AT_FIELDS.map(f => atField(f, s.config[f[0]])).join('');
+  cfgEl.oninput = () => { cfgEl.dataset.dirty = '1'; };
+  refreshAutotradePositions();
+  refreshAutotradeLog();
+}
+async function refreshAutotradePositions() {
+  let positions = [];
+  try { positions = (await fetch('/api/tracked').then(r=>r.json())).filter(p => p.auto); } catch(e) { return; }
+  const el = document.getElementById('at-positions');
+  if (!positions.length) { el.innerHTML = '<div style="color:var(--muted);font-size:13px">No open auto positions.</div>'; return; }
+  el.innerHTML = `<table class="queue-table"><thead><tr><th>Ticker</th><th>Strategy</th><th>Contract</th><th>Qty</th><th>Entry</th><th>Now</th><th>P&amp;L</th><th>Status</th><th></th></tr></thead><tbody>
+    ${positions.map(p => { const sig = p.last_signal || {}; const opt = p.option || {};
+      const pnl = sig.pct_change != null ? `${sig.pct_change>=0?'+':''}${(+sig.pct_change).toFixed(1)}%` : '—';
+      const status = p.pending_close ? '⏳ closing' : (sig.triggered ? '🔔 exit due' : (p.force_close ? '⏳ close requested' : 'open'));
+      return `<tr><td><b>${esc(p.ticker)}</b></td><td>${esc(p.strategy_label||p.strategy)}</td>
+        <td style="font-size:12px">${esc(opt.type||'')} $${(+opt.strike||0).toFixed(2)} ${esc(opt.expiration||'')}</td>
+        <td>${p.contracts}</td><td>$${(+p.entry_price||0).toFixed(2)}</td>
+        <td>${sig.current_option_mid!=null ? '$'+(+sig.current_option_mid).toFixed(2) : '—'}</td>
+        <td style="color:${sig.pct_change>=0?'var(--green)':'var(--red)'}">${pnl}</td>
+        <td style="font-size:12px">${status}<br><span style="color:var(--muted);font-size:11px">${esc((sig.reasons||[]).join('; ')).slice(0,160)}</span></td>
+        <td><button class="btn btn-ghost" style="font-size:12px;padding:5px 10px" onclick="atClose('${p.id}')">Close</button></td></tr>`; }).join('')}
+    </tbody></table>`;
+}
+async function refreshAutotradeLog() {
+  let log = [];
+  try { log = await fetch('/api/autotrade/log?n=60').then(r=>r.json()); } catch(e) { return; }
+  const el = document.getElementById('at-log');
+  if (!log.length) { el.innerHTML = '<div style="color:var(--muted);font-size:13px">Nothing logged yet.</div>'; return; }
+  const color = a => /error|rejected|failed|kill/.test(a) ? 'var(--red)' : (a==='entry' ? 'var(--green)' : (a==='exit' ? 'var(--blue)' : 'var(--text)'));
+  el.innerHTML = `<table class="queue-table" style="font-size:12px"><thead><tr><th>Time</th><th>Action</th><th>Details</th></tr></thead><tbody>
+    ${log.map(e => { const {ts, action, detail, ...rest} = e;
+      const kv = Object.entries(rest).map(([k,v]) => `${k}=${v}`).join(' ');
+      return `<tr><td style="white-space:nowrap">${esc(String(ts).replace('T',' '))}</td><td style="color:${color(action)};font-weight:600">${esc(action)}</td><td>${esc(kv)}${detail ? '<br><span style="color:var(--muted)">'+esc(detail).slice(0,300)+'</span>' : ''}</td></tr>`; }).join('')}
+    </tbody></table>`;
+}
+async function atToggle() {
+  if (!atStatus) return;
+  const enabling = !atStatus.enabled;
+  if (enabling && atStatus.broker === 'alpaca' && !atStatus.paper) {
+    if (!confirm('This will trade REAL MONEY through Alpaca. Are you sure?')) return;
+  }
+  const d = await fetch('/api/autotrade/toggle', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({enabled: enabling})}).then(r=>r.json());
+  if (!d.ok) alert(d.message || 'Could not change the autotrader');
+  refreshAutotrade();
+}
+async function atRunNow() {
+  document.getElementById('at-msg').textContent = 'Running one cycle…';
+  try {
+    const d = await fetch('/api/autotrade/run', {method:'POST'}).then(r=>r.json());
+    const r = d.result || {};
+    document.getElementById('at-msg').textContent = r.ran ? `Cycle done: ${r.exits} exit(s), ${r.entries} entry(ies), ${(r.skipped||[]).length} skipped` : `Cycle skipped: ${r.reason}`;
+  } catch(e) { document.getElementById('at-msg').textContent = 'Cycle failed: ' + e; }
+  refreshAutotrade();
+}
+async function atSaveConfig() {
+  const patch = {};
+  for (const [key, , type] of AT_FIELDS) {
+    const el = document.getElementById('at-f-' + key); if (!el) continue;
+    const v = el.value;
+    if (type === 'password') { if (v) patch[key] = v; }
+    else if (type === 'bool') patch[key] = (v === 'true');
+    else if (type === 'number') patch[key] = parseFloat(v);
+    else if (key === 'allowed_strategies') patch[key] = v.split(',').map(s=>s.trim()).filter(Boolean);
+    else patch[key] = v;
+  }
+  const d = await fetch('/api/autotrade/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(patch)}).then(r=>r.json());
+  document.getElementById('at-config-msg').textContent = d.ok ? 'Saved ✓' : ('Error: ' + (d.message||''));
+  delete document.getElementById('at-config').dataset.dirty;
+  refreshAutotrade();
+}
+async function atClose(id) {
+  if (!confirm('Close this position through the broker on the next cycle?')) return;
+  await fetch('/api/autotrade/close/' + id, {method:'POST'});
+  refreshAutotrade();
+}
+setInterval(() => { if (activeTab === 'autotrade') refreshAutotrade(); }, 30000);
 
 // ── Scan mode toggle ─────────────────────────────────────────
 let currentScanMode = 'focus';
@@ -11661,15 +11996,71 @@ function renderHoldSweepResults(r) {
 #  ENTRY POINT
 # ══════════════════════════════════════════════════════════════
 
+HEADLESS = ("--headless" in sys.argv) or os.environ.get("OPTIONS_BOT_HEADLESS") == "1"
+
+
+class _TeeStream:
+    """stdout/stderr → the console AND logs\\bot_<date>.log (a new file each day; never raises)."""
+    def __init__(self, stream):
+        self.stream, self._day, self._fh, self._lock = stream, None, None, threading.Lock()
+
+    def _file(self):
+        day = date.today().isoformat()
+        if day != self._day:
+            try:
+                os.makedirs("logs", exist_ok=True)
+                if self._fh:
+                    self._fh.close()
+                self._fh = open(os.path.join("logs", f"bot_{day}.log"), "a", encoding="utf-8", errors="replace", buffering=1)
+                self._day = day
+            except Exception:
+                self._fh = None
+        return self._fh
+
+    def write(self, s):
+        try:
+            self.stream.write(s)
+        except Exception:
+            pass
+        with self._lock:
+            fh = self._file()
+            if fh:
+                try:
+                    fh.write(s)
+                except Exception:
+                    pass
+        return len(s)
+
+    def flush(self):
+        for f in (self.stream, self._fh):
+            try:
+                f.flush()
+            except Exception:
+                pass
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
 def main():
+    # Refuse to start twice: the second copy would fail to bind the port and the
+    # headless launcher would restart it forever.  Exit code 3 tells it to stop.
+    with socket.socket() as _s:
+        if _s.connect_ex(("127.0.0.1", SERVER_PORT)) == 0:
+            print(f"  Another Options Bot is already listening on port {SERVER_PORT} — exiting.")
+            sys.exit(3)
+    sys.stdout, sys.stderr = _TeeStream(sys.stdout), _TeeStream(sys.stderr)
     print("\n" + "═" * 56)
-    print("  OPTIONS BOT v2.0")
+    print("  OPTIONS BOT v2.0" + ("  (headless)" if HEADLESS else ""))
     print("═" * 56)
     print(f"  Guardrail   : ${GUARDRAIL_LIMIT:,.0f} per trade")
     print(f"  Auto-submit : {'ENABLED ⚠' if AUTO_SUBMIT else 'DISABLED (safe mode)'}")
     print(f"  Dashboard   : http://localhost:{SERVER_PORT}")
     print("═" * 56 + "\n")
     print("  Starting web server…")
+
+    # Cached GJR-GARCH fits (every backtest / optimizer job refits from scratch without them)
+    _load_garch_cache()
 
     # Restore last WFO run from disk (auto-applies best params if found)
     _load_wfo_results()
@@ -11687,6 +12078,13 @@ def main():
     # Restore prefetch cache (info/calendar 24h TTL — saves ~50% of repeat scan calls)
     _load_prefetch_cache()
 
+    # Autotrader loop (does nothing until enabled in the 🤖 Autotrade tab / autotrade_config.json)
+    autotrader.init(sys.modules[__name__])
+    autotrader.start()
+    _at_cfg = autotrader.load_config()
+    print(f"  Autotrade   : {'ENABLED — ' + _at_cfg['broker'] + ('' if _at_cfg['broker'] != 'alpaca' else (' paper' if _at_cfg['paper'] else ' LIVE ⚠')) if _at_cfg['enabled'] else 'disabled'}"
+          + ("  (kill switch file present)" if autotrader.kill_switch_active() else ""))
+
     # Fetch live 6-month T-bill rate from FRED before first scan
     threading.Thread(target=fetch_risk_free_rate, daemon=True).start()
 
@@ -11703,8 +12101,11 @@ def main():
     # but never started before, so the "next rescan" in the UI was always empty)
     threading.Thread(target=_auto_rescan_loop, daemon=True).start()
 
-    # Open browser after short delay so Flask has time to start
-    threading.Timer(1.5, lambda: webbrowser.open(f"http://localhost:{SERVER_PORT}")).start()
+    # Open browser after short delay so Flask has time to start (not when unattended)
+    if HEADLESS:
+        print("  Headless: not opening a browser — the dashboard is still at the URL above")
+    else:
+        threading.Timer(1.5, lambda: webbrowser.open(f"http://localhost:{SERVER_PORT}")).start()
 
     # Bind to localhost only: the dashboard has no authentication and can
     # change config / queue trades, so it must not be reachable from the LAN.

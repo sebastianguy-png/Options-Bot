@@ -113,7 +113,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tickers", nargs="*", default=None)
     ap.add_argument("--bars", type=int, default=6, help="also check this many earlier bars per ticker")
-    ap.add_argument("--ref", default="HEAD", help="git revision holding the ORIGINAL scan_ticker")
+    ap.add_argument("--ref", default="e5a7d0f", help="git revision holding the ORIGINAL scan_ticker (last pre-engine commit)")
     args = ap.parse_args()
 
     legacy, legacy_gate = load_legacy_gate(args.ref)
