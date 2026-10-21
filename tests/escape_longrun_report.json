@@ -1,0 +1,298 @@
+{
+  "period": "6y",
+  "tickers": 99,
+  "first": "2020-10-21",
+  "last": "2026-10-20",
+  "by_year": {
+    "2022": {
+      "n": 509,
+      "net": -12.72,
+      "win": 31.6,
+      "pf": 0.64,
+      "bars": 7.8
+    },
+    "2023": {
+      "n": 287,
+      "net": 9.74,
+      "win": 43.9,
+      "pf": 1.5,
+      "bars": 3.2
+    },
+    "2024": {
+      "n": 332,
+      "net": 0.18,
+      "win": 38.9,
+      "pf": 1.01,
+      "bars": 2.1
+    },
+    "2025": {
+      "n": 230,
+      "net": 11.05,
+      "win": 49.6,
+      "pf": 1.72,
+      "bars": 3.8
+    },
+    "2026": {
+      "n": 169,
+      "net": 5.01,
+      "win": 45.0,
+      "pf": 1.24,
+      "bars": 4.2
+    },
+    "2021": {
+      "n": 11,
+      "net": -26.83,
+      "win": 18.2,
+      "pf": 0.08,
+      "bars": 5.1
+    }
+  },
+  "shipped_by_year": {
+    "2021": {
+      "n": 233,
+      "net": -9.23,
+      "win": 25.3,
+      "pf": 0.49,
+      "bars": 1.9
+    },
+    "2022": {
+      "n": 3768,
+      "net": -3.66,
+      "win": 37.2,
+      "pf": 0.77,
+      "bars": 1.9
+    },
+    "2023": {
+      "n": 3827,
+      "net": -5.95,
+      "win": 34.2,
+      "pf": 0.67,
+      "bars": 1.9
+    },
+    "2024": {
+      "n": 3631,
+      "net": -4.49,
+      "win": 34.8,
+      "pf": 0.74,
+      "bars": 2.0
+    },
+    "2025": {
+      "n": 4311,
+      "net": -6.12,
+      "win": 31.5,
+      "pf": 0.66,
+      "bars": 2.0
+    },
+    "2026": {
+      "n": 3184,
+      "net": -5.88,
+      "win": 35.3,
+      "pf": 0.68,
+      "bars": 1.9
+    }
+  },
+  "by_case": {
+    "sig_escape_reversion": {
+      "n": 699,
+      "net": 3.68,
+      "win": 40.6,
+      "pf": 1.11,
+      "bars": 9.0
+    },
+    "sig_escape_breakout": {
+      "n": 627,
+      "net": -4.81,
+      "win": 36.2,
+      "pf": 0.67,
+      "bars": 1.1
+    },
+    "sig_escape_momentum": {
+      "n": 212,
+      "net": -0.4,
+      "win": 45.8,
+      "pf": 0.96,
+      "bars": 1.1
+    }
+  },
+  "all": {
+    "n": 1538,
+    "net": -0.34,
+    "win": 39.5,
+    "pf": 0.99,
+    "bars": 4.7,
+    "pf_ci90": [
+      0.87,
+      1.11
+    ]
+  },
+  "walk_forward": [
+    {
+      "train": "2021-12-21\u21922023-06-21",
+      "test": "2023-06-21\u21922023-12-21",
+      "fixed": {
+        "n": 145,
+        "net": 32.09,
+        "win": 53.1,
+        "pf": 3.74,
+        "bars": 2.7
+      },
+      "chosen": {
+        "n": 36,
+        "net": 48.24,
+        "win": 52.8,
+        "pf": 4.79,
+        "bars": 3.7
+      },
+      "chosen_params": {
+        "escape_breakout_vol": 99.0,
+        "garch_mode": "gate",
+        "hold_days": 21,
+        "stock_stop_pct": 0
+      },
+      "chosen_train_pf": 0.84
+    },
+    {
+      "train": "2022-06-21\u21922023-12-21",
+      "test": "2023-12-21\u21922024-06-21",
+      "fixed": {
+        "n": 136,
+        "net": -1.31,
+        "win": 41.2,
+        "pf": 0.89,
+        "bars": 1.0
+      },
+      "chosen": {
+        "n": 52,
+        "net": -1.92,
+        "win": 44.2,
+        "pf": 0.81,
+        "bars": 1.0
+      },
+      "chosen_params": {
+        "escape_breakout_vol": 99.0,
+        "garch_mode": "off",
+        "hold_days": 21,
+        "stock_stop_pct": 0
+      },
+      "chosen_train_pf": 1.05
+    },
+    {
+      "train": "2022-12-21\u21922024-06-21",
+      "test": "2024-06-21\u21922024-12-21",
+      "fixed": {
+        "n": 133,
+        "net": 2.25,
+        "win": 36.1,
+        "pf": 1.15,
+        "bars": 2.0
+      },
+      "chosen": {
+        "n": 35,
+        "net": 29.82,
+        "win": 54.3,
+        "pf": 3.28,
+        "bars": 4.6
+      },
+      "chosen_params": {
+        "escape_breakout_vol": 99.0,
+        "garch_mode": "off",
+        "hold_days": 21,
+        "stock_stop_pct": 0
+      },
+      "chosen_train_pf": 2.51
+    },
+    {
+      "train": "2023-06-21\u21922024-12-21",
+      "test": "2024-12-21\u21922025-06-21",
+      "fixed": {
+        "n": 106,
+        "net": 7.37,
+        "win": 49.1,
+        "pf": 1.4,
+        "bars": 5.1
+      },
+      "chosen": {
+        "n": 52,
+        "net": 15.54,
+        "win": 48.1,
+        "pf": 1.53,
+        "bars": 13.1
+      },
+      "chosen_params": {
+        "escape_breakout_vol": 99.0,
+        "garch_mode": "off",
+        "hold_days": 21,
+        "stock_stop_pct": 0
+      },
+      "chosen_train_pf": 4.0
+    },
+    {
+      "train": "2023-12-21\u21922025-06-21",
+      "test": "2025-06-21\u21922025-12-21",
+      "fixed": {
+        "n": 110,
+        "net": 15.6,
+        "win": 49.1,
+        "pf": 2.19,
+        "bars": 3.0
+      },
+      "chosen": {
+        "n": 39,
+        "net": 1.59,
+        "win": 43.6,
+        "pf": 1.1,
+        "bars": 3.2
+      },
+      "chosen_params": {
+        "escape_breakout_vol": 2.0,
+        "garch_mode": "gate",
+        "hold_days": 10,
+        "stock_stop_pct": 0
+      },
+      "chosen_train_pf": 1.77
+    },
+    {
+      "train": "2024-06-21\u21922025-12-21",
+      "test": "2025-12-21\u21922026-06-21",
+      "fixed": {
+        "n": 130,
+        "net": 5.91,
+        "win": 42.3,
+        "pf": 1.25,
+        "bars": 5.1
+      },
+      "chosen": {
+        "n": 71,
+        "net": 13.75,
+        "win": 45.1,
+        "pf": 1.42,
+        "bars": 8.5
+      },
+      "chosen_params": {
+        "escape_breakout_vol": 99.0,
+        "garch_mode": "off",
+        "hold_days": 10,
+        "stock_stop_pct": 0
+      },
+      "chosen_train_pf": 2.38
+    }
+  ],
+  "walk_forward_union": {
+    "fixed": {
+      "n": 760,
+      "net": 10.58,
+      "win": 45.0,
+      "pf": 1.69,
+      "bars": 3.1
+    },
+    "chosen": {
+      "n": 285,
+      "net": 15.89,
+      "win": 47.4,
+      "pf": 1.76,
+      "bars": 6.2
+    }
+  },
+  "completed_at": "2026-10-21T09:02:54.722357",
+  "seconds": 1347
+}

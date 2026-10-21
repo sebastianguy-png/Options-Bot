@@ -2057,6 +2057,7 @@ def live_params():
         "entry_mode":           w.get("entry_mode", "reversion"),          # reversion (the classic rules) / escape (band-escape classifier)
         "escape_normal":        w.get("escape_normal", "skip"),            # escape mode, normal-VIX lower escape: skip / call
         "escape_breakout_vol":  w.get("escape_breakout_vol", 2.0),         # escape mode: volume ratio that makes an upper escape a breakout
+        "escape_breakout_trend": w.get("escape_breakout_trend", "any"),    # any / bull_only: breakout calls only when SPY is in an uptrend
         "otm_factor_call":      w.get("otm_factor_call", 1.0),             # contract selection: strike / stock price for calls (0.97 = slightly ITM)
         "otm_factor_put":       w.get("otm_factor_put", 1.0),              # … for puts (1.03 = slightly ITM put)
         "dte_target":           w.get("dte_target", OPTION_DTE_TARGET),    # expiry closest to this many days
@@ -2579,8 +2580,9 @@ def evaluate_entry(ind, ctx, params, scan_condors=False):
                 escape_case = "momentum"
             elif not calm and p.get("escape_normal", "skip") == "call":
                 escape_case = "reversion"
-        elif upper_escape and vol_ratio is not None and vol_ratio >= float(p.get("escape_breakout_vol", 2.0)):
-            escape_case = "breakout"
+        elif upper_escape and vol_ratio is not None and vol_ratio >= float(p.get("escape_breakout_vol", 2.0)) \
+                and (p.get("escape_breakout_trend", "any") != "bull_only" or str(market_trend).startswith("bull")):
+            escape_case = "breakout"                      # bull_only: no breakout calls while SPY is under its 200-day MA (2022 lesson)
         has_buy_call     = escape_case in ("reversion", "breakout") and gap_ok_buy_call
         has_buy_put      = escape_case == "momentum" and gap_ok_buy_put
         has_sell_put     = escape_case == "reversion" and price <= MAX_PRICE_SELL and gap_ok_buy_call
@@ -4318,7 +4320,7 @@ BT_DEFAULT_PARAMS = {
     "rsi_oversold": 35, "rsi_overbought": 65, "bull_min": 1, "bear_min": 2,
     "adx_threshold": 30, "garch_mode": "off", "put_trend_gate": "off", "yield_block_calls": False,
     "max_spread_pct": 100, "entry_mode": "reversion", "escape_normal": "skip", "escape_breakout_vol": 2.0,
-    "otm_factor_call": 1.0, "otm_factor_put": 1.0, "dte_target": 30,
+    "otm_factor_call": 1.0, "otm_factor_put": 1.0, "dte_target": 30, "escape_breakout_trend": "any",
     "require_green_candle": False, "require_red_candle": False,
 }
 _CTX_COLS = ("vix", "vix3m", "regime", "vix_ts", "market_trend", "pre_fed", "post_fed",
