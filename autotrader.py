@@ -63,6 +63,7 @@ DEFAULT_CONFIG = {
     "max_open_positions":     5,                # auto positions open at once
     "max_new_per_cycle":      2,
     "max_position_usd":       500.0,            # most premium paid per long trade (sets the contract count)
+    "min_one_contract":       True,             # a contract that costs more than the budget is still bought, one lot (paper: never let the cap block a signal)
     "max_collateral_usd":     5000.0,           # most cash secured per short put (strike × 100 × qty)
     "daily_loss_cap_usd":     300.0,            # realised auto P&L today ≤ −this → no new entries until tomorrow
     "max_spread_pct":         15.0,             # (ask − bid) / mid; wider quotes are skipped
@@ -179,6 +180,7 @@ def _coerce(cfg: dict) -> dict:
     cfg["max_open_positions"] = i("max_open_positions", 0, 100)
     cfg["max_new_per_cycle"]  = i("max_new_per_cycle", 0, 20)
     cfg["max_position_usd"]   = f("max_position_usd", 0.0, 1e7)
+    cfg["min_one_contract"]   = bool(cfg.get("min_one_contract", True))
     cfg["max_collateral_usd"] = f("max_collateral_usd", 0.0, 1e8)
     cfg["daily_loss_cap_usd"] = f("daily_loss_cap_usd", 0.0, 1e8)
     cfg["max_spread_pct"]     = f("max_spread_pct", 0.0, 100.0)
@@ -927,9 +929,15 @@ def _size(cand: dict, cfg: dict, account: dict | None) -> tuple[int, float, floa
     budget, note = _budget(cand, cfg)
     cand["budget_note"] = note
     cost = ask * 100
-    if cost <= 0 or cost > budget:
-        return 0, 0.0, mid, f"premium ${cost:,.0f} > budget ${budget:,.0f} per trade" + (f" ({note})" if note else "")
-    qty = int(budget // cost)
+    if cost <= 0:
+        return 0, 0.0, mid, "no ask price"
+    if cost > budget:
+        if not cfg.get("min_one_contract", True):
+            return 0, 0.0, mid, f"premium ${cost:,.0f} > budget ${budget:,.0f} per trade" + (f" ({note})" if note else "")
+        qty = 1                                           # over budget: one lot rather than no trade
+        cand["budget_note"] = (note + " " if note else "") + f"one contract over budget (${cost:,.0f} > ${budget:,.0f})"
+    else:
+        qty = int(budget // cost)
     if account is not None:
         qty = min(qty, int(max(bp, 0) // cost))
     return (qty, ask, mid, None) if qty >= 1 else (0, 0.0, mid, "not enough buying power for one contract")
