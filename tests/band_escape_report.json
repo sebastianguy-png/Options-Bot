@@ -1,0 +1,891 @@
+{
+  "n": 2482,
+  "hold_bars": 10,
+  "split_date": "2026-01-22",
+  "by_side": {
+    "lower": {
+      "all": {
+        "n": 1134,
+        "fwd10": 0.87,
+        "fwd21": 2.18,
+        "back_in_5d": 98.5,
+        "reversion_net": 1.2,
+        "reversion_win": 37.2,
+        "momentum_net": -9.4,
+        "momentum_win": 33.1
+      },
+      "features": {
+        "big volume (\u22652\u00d7 avg)": {
+          "n": 244,
+          "fwd10": 1.02,
+          "fwd21": 2.52,
+          "back_in_5d": 99.2,
+          "reversion_net": -6.3,
+          "reversion_win": 35.7,
+          "momentum_net": -16.9,
+          "momentum_win": 31.6
+        },
+        "quiet volume (<1\u00d7 avg)": {
+          "n": 181,
+          "fwd10": -0.16,
+          "fwd21": 2.08,
+          "back_in_5d": 98.3,
+          "reversion_net": -10.5,
+          "reversion_win": 33.1,
+          "momentum_net": -0.7,
+          "momentum_win": 39.8
+        },
+        "gap \u22653% in the move's direction": {
+          "n": 200,
+          "fwd10": 1.6,
+          "fwd21": 4.1,
+          "back_in_5d": 99.5,
+          "reversion_net": -12.0,
+          "reversion_win": 33.5,
+          "momentum_net": -20.0,
+          "momentum_win": 25.5
+        },
+        "no gap (|gap|<1%)": {
+          "n": 582,
+          "fwd10": 0.31,
+          "fwd21": 1.04,
+          "back_in_5d": 99.0,
+          "reversion_net": 1.6,
+          "reversion_win": 36.9,
+          "momentum_net": -1.2,
+          "momentum_win": 36.4
+        },
+        "below MA200": {
+          "n": 683,
+          "fwd10": 0.74,
+          "fwd21": 2.65,
+          "back_in_5d": 98.8,
+          "reversion_net": 1.7,
+          "reversion_win": 36.5,
+          "momentum_net": -10.0,
+          "momentum_win": 33.1
+        },
+        "above MA200": {
+          "n": 451,
+          "fwd10": 1.07,
+          "fwd21": 1.46,
+          "back_in_5d": 98.0,
+          "reversion_net": 0.3,
+          "reversion_win": 38.4,
+          "momentum_net": -8.5,
+          "momentum_win": 33.0
+        },
+        "ADX \u226530 (trending)": {
+          "n": 161,
+          "fwd10": 1.84,
+          "fwd21": 4.05,
+          "back_in_5d": 98.8,
+          "reversion_net": 8.3,
+          "reversion_win": 39.8,
+          "momentum_net": -9.9,
+          "momentum_win": 26.7
+        },
+        "ADX <20 (ranging)": {
+          "n": 558,
+          "fwd10": 0.5,
+          "fwd21": 1.55,
+          "back_in_5d": 98.2,
+          "reversion_net": -1.5,
+          "reversion_win": 36.6,
+          "momentum_net": -6.1,
+          "momentum_win": 35.4
+        },
+        "far beyond band (\u22653%)": {
+          "n": 118,
+          "fwd10": 2.59,
+          "fwd21": 5.36,
+          "back_in_5d": 100.0,
+          "reversion_net": -2.3,
+          "reversion_win": 38.1,
+          "momentum_net": -27.6,
+          "momentum_win": 26.3
+        },
+        "just beyond (<1%)": {
+          "n": 671,
+          "fwd10": 0.57,
+          "fwd21": 1.54,
+          "back_in_5d": 99.0,
+          "reversion_net": 2.7,
+          "reversion_win": 38.3,
+          "momentum_net": -2.9,
+          "momentum_win": 35.2
+        },
+        "GARCH expects expansion": {
+          "n": 353,
+          "fwd10": -0.07,
+          "fwd21": 0.42,
+          "back_in_5d": 98.9,
+          "reversion_net": 4.5,
+          "reversion_win": 39.1,
+          "momentum_net": 5.0,
+          "momentum_win": 39.5
+        },
+        "GARCH no expansion": {
+          "n": 781,
+          "fwd10": 1.29,
+          "fwd21": 2.97,
+          "back_in_5d": 98.3,
+          "reversion_net": -0.3,
+          "reversion_win": 36.4,
+          "momentum_net": -15.9,
+          "momentum_win": 30.2
+        },
+        "RS weak vs SPY": {
+          "n": 803,
+          "fwd10": 0.71,
+          "fwd21": 1.28,
+          "back_in_5d": 98.6,
+          "reversion_net": -0.1,
+          "reversion_win": 36.9,
+          "momentum_net": -10.1,
+          "momentum_win": 33.3
+        },
+        "RS strong vs SPY": {
+          "n": 47,
+          "fwd10": 6.96,
+          "fwd21": 15.16,
+          "back_in_5d": 97.9,
+          "reversion_net": 59.0,
+          "reversion_win": 57.4,
+          "momentum_net": -45.2,
+          "momentum_win": 21.3
+        },
+        "squeeze release": {
+          "n": 273,
+          "fwd10": 1.45,
+          "fwd21": 2.45,
+          "back_in_5d": 99.3,
+          "reversion_net": 9.2,
+          "reversion_win": 42.1,
+          "momentum_net": -12.0,
+          "momentum_win": 31.5
+        },
+        "VIX high regime": {
+          "n": 261,
+          "fwd10": 3.6,
+          "fwd21": 7.81,
+          "back_in_5d": 99.2,
+          "reversion_net": 24.8,
+          "reversion_win": 46.0,
+          "momentum_net": -34.7,
+          "momentum_win": 21.2
+        },
+        "VIX low regime": {
+          "n": 57,
+          "fwd10": -2.41,
+          "fwd21": -1.81,
+          "back_in_5d": 96.5,
+          "reversion_net": -47.6,
+          "reversion_win": 10.5,
+          "momentum_net": 37.1,
+          "momentum_win": 61.4
+        },
+        "SPY bear trend": {
+          "n": 197,
+          "fwd10": 3.35,
+          "fwd21": 6.54,
+          "back_in_5d": 99.5,
+          "reversion_net": 22.9,
+          "reversion_win": 42.1,
+          "momentum_net": -27.3,
+          "momentum_win": 22.8
+        },
+        "SPY bull_strong": {
+          "n": 265,
+          "fwd10": 1.53,
+          "fwd21": 2.99,
+          "back_in_5d": 98.5,
+          "reversion_net": 16.3,
+          "reversion_win": 46.4,
+          "momentum_net": -24.3,
+          "momentum_win": 25.8
+        },
+        "near 52w low": {
+          "n": 259,
+          "fwd10": 0.26,
+          "fwd21": 2.44,
+          "back_in_5d": 99.2,
+          "reversion_net": -4.2,
+          "reversion_win": 34.4,
+          "momentum_net": 0.6,
+          "momentum_win": 33.3
+        },
+        "near 52w high": {
+          "n": 32,
+          "fwd10": -0.46,
+          "fwd21": 0.63,
+          "back_in_5d": 100.0,
+          "reversion_net": -7.7,
+          "reversion_win": 46.9,
+          "momentum_net": 5.0,
+          "momentum_win": 37.5
+        },
+        "RSI extreme (<25 / >75)": {
+          "n": 232,
+          "fwd10": 0.97,
+          "fwd21": 1.7,
+          "back_in_5d": 99.6,
+          "reversion_net": 9.6,
+          "reversion_win": 40.1,
+          "momentum_net": -11.4,
+          "momentum_win": 32.8
+        }
+      },
+      "pairs_momentum": [
+        [
+          "GARCH expects expansion + squeeze release",
+          {
+            "n": 81,
+            "fwd10": -0.28,
+            "fwd21": 1.09,
+            "back_in_5d": 100.0,
+            "reversion_net": 6.6,
+            "reversion_win": 38.3,
+            "momentum_net": 21.6,
+            "momentum_win": 38.3
+          }
+        ],
+        [
+          "just beyond (<1%) + near 52w low",
+          {
+            "n": 134,
+            "fwd10": -0.39,
+            "fwd21": 1.17,
+            "back_in_5d": 99.3,
+            "reversion_net": -3.1,
+            "reversion_win": 35.8,
+            "momentum_net": 21.3,
+            "momentum_win": 37.3
+          }
+        ],
+        [
+          "squeeze release + near 52w low",
+          {
+            "n": 92,
+            "fwd10": -0.17,
+            "fwd21": 2.89,
+            "back_in_5d": 100.0,
+            "reversion_net": -8.2,
+            "reversion_win": 32.6,
+            "momentum_net": 19.1,
+            "momentum_win": 38.0
+          }
+        ],
+        [
+          "below MA200 + GARCH expects expansion",
+          {
+            "n": 203,
+            "fwd10": -0.6,
+            "fwd21": 0.23,
+            "back_in_5d": 98.5,
+            "reversion_net": 6.1,
+            "reversion_win": 39.9,
+            "momentum_net": 16.1,
+            "momentum_win": 41.1
+          }
+        ],
+        [
+          "no gap (|gap|<1%) + near 52w low",
+          {
+            "n": 127,
+            "fwd10": -0.21,
+            "fwd21": 0.62,
+            "back_in_5d": 99.2,
+            "reversion_net": 1.5,
+            "reversion_win": 34.6,
+            "momentum_net": 14.2,
+            "momentum_win": 38.6
+          }
+        ],
+        [
+          "ADX \u226530 (trending) + just beyond (<1%)",
+          {
+            "n": 86,
+            "fwd10": 0.4,
+            "fwd21": 3.89,
+            "back_in_5d": 100.0,
+            "reversion_net": -1.8,
+            "reversion_win": 36.0,
+            "momentum_net": 13.5,
+            "momentum_win": 32.6
+          }
+        ],
+        [
+          "just beyond (<1%) + GARCH expects expansion",
+          {
+            "n": 250,
+            "fwd10": -0.24,
+            "fwd21": -0.07,
+            "back_in_5d": 99.6,
+            "reversion_net": 5.3,
+            "reversion_win": 38.8,
+            "momentum_net": 11.9,
+            "momentum_win": 40.4
+          }
+        ],
+        [
+          "quiet volume (<1\u00d7 avg) + RS weak vs SPY",
+          {
+            "n": 121,
+            "fwd10": -2.35,
+            "fwd21": -0.99,
+            "back_in_5d": 98.3,
+            "reversion_net": -35.1,
+            "reversion_win": 24.0,
+            "momentum_net": 11.3,
+            "momentum_win": 45.5
+          }
+        ]
+      ],
+      "pairs_reversion": [
+        [
+          "squeeze release + VIX high regime",
+          {
+            "n": 83,
+            "fwd10": 6.59,
+            "fwd21": 7.64,
+            "back_in_5d": 100.0,
+            "reversion_net": 64.1,
+            "reversion_win": 66.3,
+            "momentum_net": -52.1,
+            "momentum_win": 15.7
+          }
+        ],
+        [
+          "above MA200 + VIX high regime",
+          {
+            "n": 86,
+            "fwd10": 5.63,
+            "fwd21": 6.67,
+            "back_in_5d": 98.8,
+            "reversion_net": 41.5,
+            "reversion_win": 52.3,
+            "momentum_net": -43.2,
+            "momentum_win": 17.4
+          }
+        ],
+        [
+          "VIX high regime + SPY bear trend",
+          {
+            "n": 164,
+            "fwd10": 4.24,
+            "fwd21": 8.21,
+            "back_in_5d": 99.4,
+            "reversion_net": 32.7,
+            "reversion_win": 45.1,
+            "momentum_net": -36.8,
+            "momentum_win": 20.1
+          }
+        ],
+        [
+          "GARCH expects expansion + SPY bull_strong",
+          {
+            "n": 122,
+            "fwd10": 1.81,
+            "fwd21": 3.48,
+            "back_in_5d": 99.2,
+            "reversion_net": 30.1,
+            "reversion_win": 52.5,
+            "momentum_net": -29.2,
+            "momentum_win": 23.1
+          }
+        ],
+        [
+          "just beyond (<1%) + VIX high regime",
+          {
+            "n": 135,
+            "fwd10": 3.4,
+            "fwd21": 6.74,
+            "back_in_5d": 99.3,
+            "reversion_net": 27.0,
+            "reversion_win": 48.9,
+            "momentum_net": -34.5,
+            "momentum_win": 20.0
+          }
+        ],
+        [
+          "no gap (|gap|<1%) + VIX high regime",
+          {
+            "n": 96,
+            "fwd10": 2.82,
+            "fwd21": 5.97,
+            "back_in_5d": 99.0,
+            "reversion_net": 23.9,
+            "reversion_win": 42.7,
+            "momentum_net": -32.1,
+            "momentum_win": 21.9
+          }
+        ],
+        [
+          "RS weak vs SPY + VIX high regime",
+          {
+            "n": 118,
+            "fwd10": 3.58,
+            "fwd21": 4.84,
+            "back_in_5d": 99.2,
+            "reversion_net": 22.9,
+            "reversion_win": 48.3,
+            "momentum_net": -33.7,
+            "momentum_win": 22.0
+          }
+        ],
+        [
+          "no gap (|gap|<1%) + SPY bull_strong",
+          {
+            "n": 159,
+            "fwd10": 1.12,
+            "fwd21": 2.24,
+            "back_in_5d": 98.7,
+            "reversion_net": 22.7,
+            "reversion_win": 47.8,
+            "momentum_net": -19.2,
+            "momentum_win": 27.0
+          }
+        ]
+      ]
+    },
+    "upper": {
+      "all": {
+        "n": 1348,
+        "fwd10": 0.68,
+        "fwd21": 1.73,
+        "back_in_5d": 97.8,
+        "reversion_net": -9.0,
+        "reversion_win": 32.5,
+        "momentum_net": -1.9,
+        "momentum_win": 35.6
+      },
+      "features": {
+        "big volume (\u22652\u00d7 avg)": {
+          "n": 240,
+          "fwd10": 1.87,
+          "fwd21": 2.82,
+          "back_in_5d": 97.9,
+          "reversion_net": -16.9,
+          "reversion_win": 30.8,
+          "momentum_net": 6.0,
+          "momentum_win": 38.8
+        },
+        "quiet volume (<1\u00d7 avg)": {
+          "n": 325,
+          "fwd10": 0.56,
+          "fwd21": 1.88,
+          "back_in_5d": 98.5,
+          "reversion_net": -13.7,
+          "reversion_win": 29.8,
+          "momentum_net": -5.8,
+          "momentum_win": 33.5
+        },
+        "gap \u22653% in the move's direction": {
+          "n": 254,
+          "fwd10": 0.08,
+          "fwd21": 1.91,
+          "back_in_5d": 98.0,
+          "reversion_net": -12.0,
+          "reversion_win": 30.3,
+          "momentum_net": -5.3,
+          "momentum_win": 32.7
+        },
+        "no gap (|gap|<1%)": {
+          "n": 697,
+          "fwd10": 0.46,
+          "fwd21": 0.88,
+          "back_in_5d": 97.6,
+          "reversion_net": -3.8,
+          "reversion_win": 34.4,
+          "momentum_net": -6.2,
+          "momentum_win": 34.1
+        },
+        "below MA200": {
+          "n": 305,
+          "fwd10": -0.1,
+          "fwd21": -0.43,
+          "back_in_5d": 98.4,
+          "reversion_net": -2.8,
+          "reversion_win": 37.4,
+          "momentum_net": -12.4,
+          "momentum_win": 27.5
+        },
+        "above MA200": {
+          "n": 1043,
+          "fwd10": 0.91,
+          "fwd21": 2.37,
+          "back_in_5d": 97.6,
+          "reversion_net": -10.8,
+          "reversion_win": 31.1,
+          "momentum_net": 1.2,
+          "momentum_win": 38.0
+        },
+        "ADX \u226530 (trending)": {
+          "n": 255,
+          "fwd10": 0.53,
+          "fwd21": 0.7,
+          "back_in_5d": 99.2,
+          "reversion_net": -4.9,
+          "reversion_win": 32.5,
+          "momentum_net": -2.8,
+          "momentum_win": 36.1
+        },
+        "ADX <20 (ranging)": {
+          "n": 593,
+          "fwd10": 1.15,
+          "fwd21": 2.98,
+          "back_in_5d": 97.3,
+          "reversion_net": -9.5,
+          "reversion_win": 33.4,
+          "momentum_net": 1.0,
+          "momentum_win": 37.6
+        },
+        "far beyond band (\u22653%)": {
+          "n": 126,
+          "fwd10": 1.44,
+          "fwd21": 3.29,
+          "back_in_5d": 97.6,
+          "reversion_net": -13.8,
+          "reversion_win": 30.2,
+          "momentum_net": 0.8,
+          "momentum_win": 34.9
+        },
+        "just beyond (<1%)": {
+          "n": 857,
+          "fwd10": 0.27,
+          "fwd21": 1.25,
+          "back_in_5d": 97.8,
+          "reversion_net": -5.0,
+          "reversion_win": 34.2,
+          "momentum_net": -4.3,
+          "momentum_win": 34.8
+        },
+        "GARCH expects expansion": {
+          "n": 415,
+          "fwd10": 0.15,
+          "fwd21": 1.07,
+          "back_in_5d": 98.1,
+          "reversion_net": 7.4,
+          "reversion_win": 39.8,
+          "momentum_net": -5.0,
+          "momentum_win": 32.5
+        },
+        "GARCH no expansion": {
+          "n": 933,
+          "fwd10": 0.92,
+          "fwd21": 2.03,
+          "back_in_5d": 97.6,
+          "reversion_net": -16.2,
+          "reversion_win": 29.3,
+          "momentum_net": -0.5,
+          "momentum_win": 37.0
+        },
+        "RS weak vs SPY": {
+          "n": 44,
+          "fwd10": 1.63,
+          "fwd21": 4.19,
+          "back_in_5d": 100.0,
+          "reversion_net": 3.3,
+          "reversion_win": 38.6,
+          "momentum_net": 9.5,
+          "momentum_win": 22.7
+        },
+        "RS strong vs SPY": {
+          "n": 958,
+          "fwd10": 0.76,
+          "fwd21": 2.02,
+          "back_in_5d": 97.7,
+          "reversion_net": -9.3,
+          "reversion_win": 32.3,
+          "momentum_net": -0.7,
+          "momentum_win": 37.1
+        },
+        "squeeze release": {
+          "n": 393,
+          "fwd10": 0.78,
+          "fwd21": 1.63,
+          "back_in_5d": 98.2,
+          "reversion_net": -13.3,
+          "reversion_win": 30.5,
+          "momentum_net": 0.1,
+          "momentum_win": 36.6
+        },
+        "VIX high regime": {
+          "n": 38,
+          "fwd10": -1.44,
+          "fwd21": 3.61,
+          "back_in_5d": 100.0,
+          "reversion_net": 26.0,
+          "reversion_win": 50.0,
+          "momentum_net": -27.2,
+          "momentum_win": 34.2
+        },
+        "VIX low regime": {
+          "n": 181,
+          "fwd10": 0.07,
+          "fwd21": 1.04,
+          "back_in_5d": 99.4,
+          "reversion_net": -5.3,
+          "reversion_win": 30.4,
+          "momentum_net": -3.6,
+          "momentum_win": 33.1
+        },
+        "SPY bear trend": {
+          "n": 71,
+          "fwd10": 2.04,
+          "fwd21": 7.49,
+          "back_in_5d": 98.6,
+          "reversion_net": -1.2,
+          "reversion_win": 32.4,
+          "momentum_net": -2.6,
+          "momentum_win": 49.3
+        },
+        "SPY bull_strong": {
+          "n": 416,
+          "fwd10": 1.11,
+          "fwd21": 1.86,
+          "back_in_5d": 97.6,
+          "reversion_net": -8.3,
+          "reversion_win": 33.9,
+          "momentum_net": 4.3,
+          "momentum_win": 35.3
+        },
+        "near 52w high": {
+          "n": 653,
+          "fwd10": 0.75,
+          "fwd21": 1.67,
+          "back_in_5d": 97.9,
+          "reversion_net": -12.1,
+          "reversion_win": 30.8,
+          "momentum_net": 1.9,
+          "momentum_win": 39.4
+        },
+        "RSI extreme (<25 / >75)": {
+          "n": 345,
+          "fwd10": 0.58,
+          "fwd21": 2.31,
+          "back_in_5d": 99.1,
+          "reversion_net": -4.2,
+          "reversion_win": 30.1,
+          "momentum_net": -7.5,
+          "momentum_win": 33.0
+        }
+      },
+      "pairs_momentum": [
+        [
+          "big volume (\u22652\u00d7 avg) + squeeze release",
+          {
+            "n": 92,
+            "fwd10": 1.73,
+            "fwd21": 1.19,
+            "back_in_5d": 96.7,
+            "reversion_net": -23.1,
+            "reversion_win": 28.3,
+            "momentum_net": 11.8,
+            "momentum_win": 38.0
+          }
+        ],
+        [
+          "squeeze release + SPY bull_strong",
+          {
+            "n": 129,
+            "fwd10": 1.97,
+            "fwd21": 3.41,
+            "back_in_5d": 96.9,
+            "reversion_net": -14.5,
+            "reversion_win": 28.7,
+            "momentum_net": 10.6,
+            "momentum_win": 37.2
+          }
+        ],
+        [
+          "big volume (\u22652\u00d7 avg) + ADX <20 (ranging)",
+          {
+            "n": 93,
+            "fwd10": 2.38,
+            "fwd21": 5.71,
+            "back_in_5d": 96.8,
+            "reversion_net": -19.6,
+            "reversion_win": 29.0,
+            "momentum_net": 9.5,
+            "momentum_win": 37.6
+          }
+        ],
+        [
+          "ADX <20 (ranging) + VIX low regime",
+          {
+            "n": 88,
+            "fwd10": 0.17,
+            "fwd21": 1.0,
+            "back_in_5d": 98.9,
+            "reversion_net": 2.0,
+            "reversion_win": 30.7,
+            "momentum_net": 8.6,
+            "momentum_win": 39.8
+          }
+        ],
+        [
+          "SPY bull_strong + RSI extreme (<25 / >75)",
+          {
+            "n": 105,
+            "fwd10": 1.67,
+            "fwd21": 2.35,
+            "back_in_5d": 99.0,
+            "reversion_net": -1.5,
+            "reversion_win": 30.5,
+            "momentum_net": 8.6,
+            "momentum_win": 35.2
+          }
+        ],
+        [
+          "gap \u22653% in the move's direction + squeeze release",
+          {
+            "n": 97,
+            "fwd10": 0.88,
+            "fwd21": 1.49,
+            "back_in_5d": 95.9,
+            "reversion_net": -8.6,
+            "reversion_win": 28.9,
+            "momentum_net": 8.4,
+            "momentum_win": 35.1
+          }
+        ],
+        [
+          "SPY bull_strong + near 52w high",
+          {
+            "n": 184,
+            "fwd10": 1.85,
+            "fwd21": 3.29,
+            "back_in_5d": 98.9,
+            "reversion_net": -20.4,
+            "reversion_win": 28.3,
+            "momentum_net": 8.4,
+            "momentum_win": 40.2
+          }
+        ],
+        [
+          "ADX <20 (ranging) + RS strong vs SPY",
+          {
+            "n": 358,
+            "fwd10": 1.81,
+            "fwd21": 4.09,
+            "back_in_5d": 96.6,
+            "reversion_net": -14.9,
+            "reversion_win": 31.6,
+            "momentum_net": 8.0,
+            "momentum_win": 41.1
+          }
+        ]
+      ],
+      "pairs_reversion": [
+        [
+          "no gap (|gap|<1%) + GARCH expects expansion",
+          {
+            "n": 265,
+            "fwd10": -0.98,
+            "fwd21": -0.36,
+            "back_in_5d": 97.7,
+            "reversion_net": 17.6,
+            "reversion_win": 43.4,
+            "momentum_net": -19.0,
+            "momentum_win": 29.1
+          }
+        ],
+        [
+          "just beyond (<1%) + GARCH expects expansion",
+          {
+            "n": 306,
+            "fwd10": -0.73,
+            "fwd21": 0.38,
+            "back_in_5d": 98.0,
+            "reversion_net": 17.2,
+            "reversion_win": 43.1,
+            "momentum_net": -11.4,
+            "momentum_win": 30.1
+          }
+        ],
+        [
+          "ADX <20 (ranging) + GARCH expects expansion",
+          {
+            "n": 196,
+            "fwd10": 0.12,
+            "fwd21": 1.45,
+            "back_in_5d": 98.0,
+            "reversion_net": 13.3,
+            "reversion_win": 42.3,
+            "momentum_net": -6.5,
+            "momentum_win": 32.7
+          }
+        ],
+        [
+          "GARCH expects expansion + RSI extreme (<25 / >75)",
+          {
+            "n": 104,
+            "fwd10": 0.02,
+            "fwd21": 1.46,
+            "back_in_5d": 100.0,
+            "reversion_net": 10.9,
+            "reversion_win": 35.6,
+            "momentum_net": -3.2,
+            "momentum_win": 39.4
+          }
+        ],
+        [
+          "GARCH expects expansion + RS strong vs SPY",
+          {
+            "n": 271,
+            "fwd10": 0.0,
+            "fwd21": 0.86,
+            "back_in_5d": 98.2,
+            "reversion_net": 10.6,
+            "reversion_win": 41.0,
+            "momentum_net": -6.1,
+            "momentum_win": 33.6
+          }
+        ],
+        [
+          "no gap (|gap|<1%) + ADX \u226530 (trending)",
+          {
+            "n": 129,
+            "fwd10": -0.33,
+            "fwd21": -0.5,
+            "back_in_5d": 98.4,
+            "reversion_net": 10.1,
+            "reversion_win": 38.8,
+            "momentum_net": -15.5,
+            "momentum_win": 34.9
+          }
+        ],
+        [
+          "above MA200 + GARCH expects expansion",
+          {
+            "n": 325,
+            "fwd10": 0.28,
+            "fwd21": 1.88,
+            "back_in_5d": 97.8,
+            "reversion_net": 8.4,
+            "reversion_win": 39.1,
+            "momentum_net": -2.6,
+            "momentum_win": 35.4
+          }
+        ],
+        [
+          "no gap (|gap|<1%) + RSI extreme (<25 / >75)",
+          {
+            "n": 161,
+            "fwd10": -0.48,
+            "fwd21": -0.1,
+            "back_in_5d": 99.4,
+            "reversion_net": 7.6,
+            "reversion_win": 35.4,
+            "momentum_net": -20.3,
+            "momentum_win": 28.0
+          }
+        ]
+      ]
+    }
+  },
+  "features": {},
+  "pairs": {}
+}
