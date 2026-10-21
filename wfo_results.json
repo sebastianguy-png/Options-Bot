@@ -1,446 +1,586 @@
 {
-  "saved_at": "2026-10-21T07:56:24.922194",
+  "saved_at": "2026-10-21T08:55:23.662369",
   "results": {
     "leaderboard": [
       {
         "params": {
-          "entry_mode": "escape",
-          "escape_normal": "skip",
-          "escape_breakout_vol": 99.0,
-          "garch_mode": "gate",
-          "max_spread_pct": 100,
-          "stop_loss_pct": 0,
-          "profit_target_pct": 100,
-          "trail_activate_pct": 0,
-          "stagnant_days": 0,
-          "hold_days": 21,
-          "stock_stop_pct": 0
-        },
-        "train_sharpe": 0.331,
-        "train_trades": 28,
-        "train_pf": 2.27,
-        "train_avg_pnl": 25.09,
-        "train_win_rate": 64.3,
-        "val_sharpe": 0.454,
-        "val_trades": 19,
-        "val_pf": 3.25,
-        "val_win_rate": 63.2,
-        "val_avg_pnl": 47.65,
-        "val_avg_pnl_trigger_fill": 22.45,
-        "val_avg_bars_held": 10.3,
-        "val_by_strategy": {
-          "buy_call": {
-            "n": 14,
-            "win_rate": 64.3,
-            "avg_pnl": 68.1
-          },
-          "buy_put": {
-            "n": 5,
-            "win_rate": 60.0,
-            "avg_pnl": -9.7
-          }
-        },
-        "robust": false
-      },
-      {
-        "params": {
-          "entry_mode": "escape",
-          "escape_normal": "skip",
-          "escape_breakout_vol": 99.0,
-          "garch_mode": "gate",
-          "max_spread_pct": 15,
-          "stop_loss_pct": 0,
-          "profit_target_pct": 100,
-          "trail_activate_pct": 0,
-          "stagnant_days": 0,
-          "hold_days": 21,
-          "stock_stop_pct": 0
-        },
-        "train_sharpe": 0.331,
-        "train_trades": 28,
-        "train_pf": 2.27,
-        "train_avg_pnl": 25.09,
-        "train_win_rate": 64.3,
-        "val_sharpe": 0.454,
-        "val_trades": 19,
-        "val_pf": 3.25,
-        "val_win_rate": 63.2,
-        "val_avg_pnl": 47.65,
-        "val_avg_pnl_trigger_fill": 22.45,
-        "val_avg_bars_held": 10.3,
-        "val_by_strategy": {
-          "buy_call": {
-            "n": 14,
-            "win_rate": 64.3,
-            "avg_pnl": 68.1
-          },
-          "buy_put": {
-            "n": 5,
-            "win_rate": 60.0,
-            "avg_pnl": -9.7
-          }
-        },
-        "robust": false
-      },
-      {
-        "params": {
-          "entry_mode": "escape",
-          "escape_normal": "skip",
-          "escape_breakout_vol": 99.0,
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 1,
+          "bear_min": 2,
+          "adx_threshold": 30,
           "garch_mode": "off",
-          "max_spread_pct": 100,
+          "put_trend_gate": "off",
+          "yield_block_calls": false,
+          "max_spread_pct": 15,
+          "entry_mode": "escape",
+          "escape_normal": "skip",
+          "escape_breakout_vol": 2.0,
+          "otm_factor_call": 0.95,
+          "otm_factor_put": 1.0,
+          "dte_target": 60,
+          "require_green_candle": false,
+          "require_red_candle": false,
           "stop_loss_pct": 0,
           "profit_target_pct": 0,
           "trail_activate_pct": 0,
           "stagnant_days": 0,
-          "hold_days": 10,
-          "stock_stop_pct": 0
+          "hold_days": 21,
+          "stock_stop_pct": 0,
+          "stock_trail_pct": 0
         },
-        "train_sharpe": 0.277,
-        "train_trades": 138,
-        "train_pf": 2.11,
-        "train_avg_pnl": 18.46,
-        "train_win_rate": 54.3,
-        "val_sharpe": 0.117,
-        "val_trades": 78,
-        "val_pf": 1.38,
-        "val_win_rate": 48.7,
-        "val_avg_pnl": 11.88,
-        "val_avg_pnl_trigger_fill": 11.88,
-        "val_avg_bars_held": 7.9,
+        "train_sharpe": 0.172,
+        "train_trades": 278,
+        "train_pf": 1.62,
+        "train_avg_pnl": 5.94,
+        "train_win_rate": 50.4,
+        "val_sharpe": 0.165,
+        "val_trades": 136,
+        "val_pf": 1.68,
+        "val_win_rate": 49.3,
+        "val_avg_pnl": 7.76,
+        "val_avg_pnl_trigger_fill": 7.76,
+        "val_avg_bars_held": 6.8,
         "val_by_strategy": {
           "buy_call": {
-            "n": 61,
-            "win_rate": 45.9,
-            "avg_pnl": 15.5
+            "n": 124,
+            "win_rate": 49.2,
+            "avg_pnl": 8.7
           },
           "buy_put": {
-            "n": 14,
-            "win_rate": 57.1,
-            "avg_pnl": -6.0
+            "n": 9,
+            "win_rate": 44.4,
+            "avg_pnl": -13.0
           },
           "sell_put": {
             "n": 3,
             "win_rate": 66.7,
-            "avg_pnl": 22.4
+            "avg_pnl": 32.3
           }
         },
-        "robust": false
+        "robust": true
       },
       {
         "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 1,
+          "bear_min": 2,
+          "adx_threshold": 30,
+          "garch_mode": "off",
+          "put_trend_gate": "off",
+          "yield_block_calls": false,
+          "max_spread_pct": 15,
           "entry_mode": "escape",
           "escape_normal": "skip",
-          "escape_breakout_vol": 99.0,
-          "garch_mode": "off",
-          "max_spread_pct": 100,
+          "escape_breakout_vol": 2.0,
+          "otm_factor_call": 0.95,
+          "otm_factor_put": 1.0,
+          "dte_target": 30,
+          "require_green_candle": false,
+          "require_red_candle": false,
           "stop_loss_pct": 0,
-          "profit_target_pct": 100,
-          "trail_activate_pct": 15,
+          "profit_target_pct": 0,
+          "trail_activate_pct": 0,
           "stagnant_days": 0,
-          "hold_days": 5,
-          "stock_stop_pct": 0
+          "hold_days": 21,
+          "stock_stop_pct": 0,
+          "stock_trail_pct": 7
         },
-        "train_sharpe": 0.289,
-        "train_trades": 142,
-        "train_pf": 2.23,
-        "train_avg_pnl": 15.46,
-        "train_win_rate": 60.6,
-        "val_sharpe": 0.089,
-        "val_trades": 95,
-        "val_pf": 1.29,
-        "val_win_rate": 51.6,
-        "val_avg_pnl": 4.89,
-        "val_avg_pnl_trigger_fill": 1.34,
-        "val_avg_bars_held": 3.6,
+        "train_sharpe": 0.153,
+        "train_trades": 282,
+        "train_pf": 1.52,
+        "train_avg_pnl": 7.14,
+        "train_win_rate": 50.0,
+        "val_sharpe": 0.161,
+        "val_trades": 143,
+        "val_pf": 1.62,
+        "val_win_rate": 48.3,
+        "val_avg_pnl": 11.73,
+        "val_avg_pnl_trigger_fill": 11.73,
+        "val_avg_bars_held": 5.3,
         "val_by_strategy": {
           "buy_call": {
-            "n": 77,
-            "win_rate": 50.6,
-            "avg_pnl": 6.2
+            "n": 131,
+            "win_rate": 48.1,
+            "avg_pnl": 13.0
           },
           "buy_put": {
-            "n": 15,
-            "win_rate": 53.3,
-            "avg_pnl": -7.2
+            "n": 9,
+            "win_rate": 44.4,
+            "avg_pnl": -10.8
           },
           "sell_put": {
             "n": 3,
             "win_rate": 66.7,
-            "avg_pnl": 30.8
+            "avg_pnl": 24.0
           }
         },
-        "robust": false
+        "robust": true
       },
       {
         "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 1,
+          "bear_min": 2,
+          "adx_threshold": 30,
+          "garch_mode": "off",
+          "put_trend_gate": "off",
+          "yield_block_calls": false,
+          "max_spread_pct": 15,
           "entry_mode": "escape",
           "escape_normal": "skip",
-          "escape_breakout_vol": 99.0,
-          "garch_mode": "off",
-          "max_spread_pct": 15,
+          "escape_breakout_vol": 2.0,
+          "otm_factor_call": 0.95,
+          "otm_factor_put": 1.0,
+          "dte_target": 45,
+          "require_green_candle": false,
+          "require_red_candle": false,
           "stop_loss_pct": 0,
-          "profit_target_pct": 100,
-          "trail_activate_pct": 15,
-          "stagnant_days": 0,
-          "hold_days": 5,
-          "stock_stop_pct": 0
-        },
-        "train_sharpe": 0.289,
-        "train_trades": 142,
-        "train_pf": 2.23,
-        "train_avg_pnl": 15.46,
-        "train_win_rate": 60.6,
-        "val_sharpe": 0.089,
-        "val_trades": 95,
-        "val_pf": 1.29,
-        "val_win_rate": 51.6,
-        "val_avg_pnl": 4.89,
-        "val_avg_pnl_trigger_fill": 1.34,
-        "val_avg_bars_held": 3.6,
-        "val_by_strategy": {
-          "buy_call": {
-            "n": 77,
-            "win_rate": 50.6,
-            "avg_pnl": 6.2
-          },
-          "buy_put": {
-            "n": 15,
-            "win_rate": 53.3,
-            "avg_pnl": -7.2
-          },
-          "sell_put": {
-            "n": 3,
-            "win_rate": 66.7,
-            "avg_pnl": 30.8
-          }
-        },
-        "robust": false
-      },
-      {
-        "params": {
-          "entry_mode": "escape",
-          "escape_normal": "skip",
-          "escape_breakout_vol": 99.0,
-          "garch_mode": "off",
-          "max_spread_pct": 100,
-          "stop_loss_pct": 50,
-          "profit_target_pct": 100,
+          "profit_target_pct": 0,
           "trail_activate_pct": 0,
           "stagnant_days": 0,
-          "hold_days": 10,
-          "stock_stop_pct": 4
+          "hold_days": 21,
+          "stock_stop_pct": 0,
+          "stock_trail_pct": 0
         },
-        "train_sharpe": 0.295,
-        "train_trades": 146,
-        "train_pf": 2.1,
-        "train_avg_pnl": 19.24,
-        "train_win_rate": 54.1,
-        "val_sharpe": 0.051,
-        "val_trades": 90,
-        "val_pf": 1.13,
-        "val_win_rate": 46.7,
-        "val_avg_pnl": 3.78,
-        "val_avg_pnl_trigger_fill": 2.26,
-        "val_avg_bars_held": 5.6,
+        "train_sharpe": 0.176,
+        "train_trades": 278,
+        "train_pf": 1.63,
+        "train_avg_pnl": 6.86,
+        "train_win_rate": 51.1,
+        "val_sharpe": 0.161,
+        "val_trades": 136,
+        "val_pf": 1.67,
+        "val_win_rate": 48.5,
+        "val_avg_pnl": 8.72,
+        "val_avg_pnl_trigger_fill": 8.72,
+        "val_avg_bars_held": 6.8,
         "val_by_strategy": {
           "buy_call": {
-            "n": 73,
-            "win_rate": 43.8,
-            "avg_pnl": 3.5
+            "n": 124,
+            "win_rate": 48.4,
+            "avg_pnl": 9.8
           },
           "buy_put": {
-            "n": 14,
-            "win_rate": 57.1,
-            "avg_pnl": -3.7
+            "n": 9,
+            "win_rate": 44.4,
+            "avg_pnl": -12.6
           },
           "sell_put": {
             "n": 3,
             "win_rate": 66.7,
-            "avg_pnl": 45.2
+            "avg_pnl": 29.6
           }
         },
-        "robust": false
+        "robust": true
       },
       {
         "params": {
-          "entry_mode": "escape",
-          "escape_normal": "skip",
-          "escape_breakout_vol": 99.0,
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 1,
+          "bear_min": 2,
+          "adx_threshold": 30,
           "garch_mode": "off",
+          "put_trend_gate": "off",
+          "yield_block_calls": false,
           "max_spread_pct": 15,
-          "stop_loss_pct": 50,
-          "profit_target_pct": 100,
+          "entry_mode": "escape",
+          "escape_normal": "skip",
+          "escape_breakout_vol": 2.0,
+          "otm_factor_call": 0.95,
+          "otm_factor_put": 1.0,
+          "dte_target": 30,
+          "require_green_candle": false,
+          "require_red_candle": false,
+          "stop_loss_pct": 0,
+          "profit_target_pct": 0,
           "trail_activate_pct": 0,
           "stagnant_days": 0,
-          "hold_days": 10,
-          "stock_stop_pct": 4
+          "hold_days": 21,
+          "stock_stop_pct": 0,
+          "stock_trail_pct": 0
         },
-        "train_sharpe": 0.295,
-        "train_trades": 146,
-        "train_pf": 2.1,
-        "train_avg_pnl": 19.24,
-        "train_win_rate": 54.1,
-        "val_sharpe": 0.051,
-        "val_trades": 90,
-        "val_pf": 1.13,
-        "val_win_rate": 46.7,
-        "val_avg_pnl": 3.78,
-        "val_avg_pnl_trigger_fill": 2.26,
-        "val_avg_bars_held": 5.6,
+        "train_sharpe": 0.184,
+        "train_trades": 278,
+        "train_pf": 1.67,
+        "train_avg_pnl": 8.55,
+        "train_win_rate": 51.1,
+        "val_sharpe": 0.158,
+        "val_trades": 136,
+        "val_pf": 1.66,
+        "val_win_rate": 50.7,
+        "val_avg_pnl": 10.47,
+        "val_avg_pnl_trigger_fill": 10.47,
+        "val_avg_bars_held": 6.8,
         "val_by_strategy": {
           "buy_call": {
-            "n": 73,
-            "win_rate": 43.8,
-            "avg_pnl": 3.5
+            "n": 124,
+            "win_rate": 50.8,
+            "avg_pnl": 11.6
           },
           "buy_put": {
-            "n": 14,
-            "win_rate": 57.1,
-            "avg_pnl": -3.7
+            "n": 9,
+            "win_rate": 44.4,
+            "avg_pnl": -12.0
           },
           "sell_put": {
             "n": 3,
             "win_rate": 66.7,
-            "avg_pnl": 45.2
+            "avg_pnl": 29.4
           }
         },
-        "robust": false
+        "robust": true
       },
       {
         "params": {
-          "entry_mode": "escape",
-          "escape_normal": "skip",
-          "escape_breakout_vol": 99.0,
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 1,
+          "bear_min": 2,
+          "adx_threshold": 30,
           "garch_mode": "off",
-          "max_spread_pct": 100,
-          "stop_loss_pct": 50,
-          "profit_target_pct": 100,
-          "trail_activate_pct": 15,
-          "stagnant_days": 0,
-          "hold_days": 5,
-          "stock_stop_pct": 0
-        },
-        "train_sharpe": 0.277,
-        "train_trades": 148,
-        "train_pf": 2.14,
-        "train_avg_pnl": 14.65,
-        "train_win_rate": 60.1,
-        "val_sharpe": 0.05,
-        "val_trades": 98,
-        "val_pf": 1.15,
-        "val_win_rate": 48.0,
-        "val_avg_pnl": 2.82,
-        "val_avg_pnl_trigger_fill": 1.48,
-        "val_avg_bars_held": 3.4,
-        "val_by_strategy": {
-          "buy_call": {
-            "n": 80,
-            "win_rate": 46.2,
-            "avg_pnl": 3.4
-          },
-          "buy_put": {
-            "n": 15,
-            "win_rate": 53.3,
-            "avg_pnl": -6.0
-          },
-          "sell_put": {
-            "n": 3,
-            "win_rate": 66.7,
-            "avg_pnl": 30.8
-          }
-        },
-        "robust": false
-      },
-      {
-        "params": {
-          "entry_mode": "escape",
-          "escape_normal": "skip",
-          "escape_breakout_vol": 99.0,
-          "garch_mode": "off",
-          "max_spread_pct": 100,
-          "stop_loss_pct": 50,
-          "profit_target_pct": 100,
-          "trail_activate_pct": 0,
-          "stagnant_days": 0,
-          "hold_days": 10,
-          "stock_stop_pct": 0
-        },
-        "train_sharpe": 0.302,
-        "train_trades": 146,
-        "train_pf": 2.13,
-        "train_avg_pnl": 19.92,
-        "train_win_rate": 55.5,
-        "val_sharpe": 0.046,
-        "val_trades": 88,
-        "val_pf": 1.11,
-        "val_win_rate": 46.6,
-        "val_avg_pnl": 3.44,
-        "val_avg_pnl_trigger_fill": 2.48,
-        "val_avg_bars_held": 5.8,
-        "val_by_strategy": {
-          "buy_call": {
-            "n": 71,
-            "win_rate": 43.7,
-            "avg_pnl": 4.1
-          },
-          "buy_put": {
-            "n": 14,
-            "win_rate": 57.1,
-            "avg_pnl": -3.7
-          },
-          "sell_put": {
-            "n": 3,
-            "win_rate": 66.7,
-            "avg_pnl": 22.4
-          }
-        },
-        "robust": false
-      },
-      {
-        "params": {
-          "entry_mode": "escape",
-          "escape_normal": "skip",
-          "escape_breakout_vol": 99.0,
-          "garch_mode": "off",
+          "put_trend_gate": "off",
+          "yield_block_calls": false,
           "max_spread_pct": 15,
-          "stop_loss_pct": 50,
-          "profit_target_pct": 100,
+          "entry_mode": "escape",
+          "escape_normal": "skip",
+          "escape_breakout_vol": 2.0,
+          "otm_factor_call": 0.97,
+          "otm_factor_put": 1.0,
+          "dte_target": 60,
+          "require_green_candle": false,
+          "require_red_candle": false,
+          "stop_loss_pct": 0,
+          "profit_target_pct": 0,
           "trail_activate_pct": 0,
           "stagnant_days": 0,
-          "hold_days": 10,
-          "stock_stop_pct": 0
+          "hold_days": 21,
+          "stock_stop_pct": 0,
+          "stock_trail_pct": 0
         },
-        "train_sharpe": 0.302,
-        "train_trades": 146,
-        "train_pf": 2.13,
-        "train_avg_pnl": 19.92,
-        "train_win_rate": 55.5,
-        "val_sharpe": 0.046,
-        "val_trades": 88,
-        "val_pf": 1.11,
-        "val_win_rate": 46.6,
-        "val_avg_pnl": 3.44,
-        "val_avg_pnl_trigger_fill": 2.48,
-        "val_avg_bars_held": 5.8,
+        "train_sharpe": 0.166,
+        "train_trades": 278,
+        "train_pf": 1.59,
+        "train_avg_pnl": 6.1,
+        "train_win_rate": 50.0,
+        "val_sharpe": 0.158,
+        "val_trades": 136,
+        "val_pf": 1.63,
+        "val_win_rate": 48.5,
+        "val_avg_pnl": 7.72,
+        "val_avg_pnl_trigger_fill": 7.72,
+        "val_avg_bars_held": 6.8,
         "val_by_strategy": {
           "buy_call": {
-            "n": 71,
-            "win_rate": 43.7,
-            "avg_pnl": 4.1
+            "n": 124,
+            "win_rate": 48.4,
+            "avg_pnl": 8.6
           },
           "buy_put": {
-            "n": 14,
-            "win_rate": 57.1,
-            "avg_pnl": -3.7
+            "n": 9,
+            "win_rate": 44.4,
+            "avg_pnl": -13.0
           },
           "sell_put": {
             "n": 3,
             "win_rate": 66.7,
-            "avg_pnl": 22.4
+            "avg_pnl": 32.3
           }
         },
-        "robust": false
+        "robust": true
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 1,
+          "bear_min": 2,
+          "adx_threshold": 30,
+          "garch_mode": "off",
+          "put_trend_gate": "off",
+          "yield_block_calls": false,
+          "max_spread_pct": 15,
+          "entry_mode": "escape",
+          "escape_normal": "skip",
+          "escape_breakout_vol": 2.0,
+          "otm_factor_call": 0.97,
+          "otm_factor_put": 1.0,
+          "dte_target": 30,
+          "require_green_candle": false,
+          "require_red_candle": false,
+          "stop_loss_pct": 0,
+          "profit_target_pct": 0,
+          "trail_activate_pct": 0,
+          "stagnant_days": 0,
+          "hold_days": 21,
+          "stock_stop_pct": 0,
+          "stock_trail_pct": 7
+        },
+        "train_sharpe": 0.143,
+        "train_trades": 282,
+        "train_pf": 1.48,
+        "train_avg_pnl": 7.3,
+        "train_win_rate": 48.9,
+        "val_sharpe": 0.157,
+        "val_trades": 143,
+        "val_pf": 1.6,
+        "val_win_rate": 47.6,
+        "val_avg_pnl": 12.29,
+        "val_avg_pnl_trigger_fill": 12.29,
+        "val_avg_bars_held": 5.3,
+        "val_by_strategy": {
+          "buy_call": {
+            "n": 131,
+            "win_rate": 47.3,
+            "avg_pnl": 13.6
+          },
+          "buy_put": {
+            "n": 9,
+            "win_rate": 44.4,
+            "avg_pnl": -10.8
+          },
+          "sell_put": {
+            "n": 3,
+            "win_rate": 66.7,
+            "avg_pnl": 24.0
+          }
+        },
+        "robust": true
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 1,
+          "bear_min": 2,
+          "adx_threshold": 30,
+          "garch_mode": "off",
+          "put_trend_gate": "off",
+          "yield_block_calls": false,
+          "max_spread_pct": 15,
+          "entry_mode": "escape",
+          "escape_normal": "skip",
+          "escape_breakout_vol": 2.0,
+          "otm_factor_call": 0.95,
+          "otm_factor_put": 1.0,
+          "dte_target": 45,
+          "require_green_candle": false,
+          "require_red_candle": false,
+          "stop_loss_pct": 0,
+          "profit_target_pct": 0,
+          "trail_activate_pct": 0,
+          "stagnant_days": 0,
+          "hold_days": 21,
+          "stock_stop_pct": 0,
+          "stock_trail_pct": 7
+        },
+        "train_sharpe": 0.14,
+        "train_trades": 282,
+        "train_pf": 1.46,
+        "train_avg_pnl": 5.51,
+        "train_win_rate": 49.6,
+        "val_sharpe": 0.153,
+        "val_trades": 143,
+        "val_pf": 1.57,
+        "val_win_rate": 46.2,
+        "val_avg_pnl": 9.25,
+        "val_avg_pnl_trigger_fill": 9.25,
+        "val_avg_bars_held": 5.3,
+        "val_by_strategy": {
+          "buy_call": {
+            "n": 131,
+            "win_rate": 45.8,
+            "avg_pnl": 10.1
+          },
+          "buy_put": {
+            "n": 9,
+            "win_rate": 44.4,
+            "avg_pnl": -10.5
+          },
+          "sell_put": {
+            "n": 3,
+            "win_rate": 66.7,
+            "avg_pnl": 29.5
+          }
+        },
+        "robust": true
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 1,
+          "bear_min": 2,
+          "adx_threshold": 30,
+          "garch_mode": "off",
+          "put_trend_gate": "off",
+          "yield_block_calls": false,
+          "max_spread_pct": 15,
+          "entry_mode": "escape",
+          "escape_normal": "skip",
+          "escape_breakout_vol": 2.0,
+          "otm_factor_call": 0.97,
+          "otm_factor_put": 1.0,
+          "dte_target": 45,
+          "require_green_candle": false,
+          "require_red_candle": false,
+          "stop_loss_pct": 0,
+          "profit_target_pct": 0,
+          "trail_activate_pct": 0,
+          "stagnant_days": 0,
+          "hold_days": 21,
+          "stock_stop_pct": 0,
+          "stock_trail_pct": 0
+        },
+        "train_sharpe": 0.168,
+        "train_trades": 278,
+        "train_pf": 1.59,
+        "train_avg_pnl": 7.03,
+        "train_win_rate": 50.7,
+        "val_sharpe": 0.151,
+        "val_trades": 136,
+        "val_pf": 1.61,
+        "val_win_rate": 48.5,
+        "val_avg_pnl": 8.58,
+        "val_avg_pnl_trigger_fill": 8.58,
+        "val_avg_bars_held": 6.8,
+        "val_by_strategy": {
+          "buy_call": {
+            "n": 124,
+            "win_rate": 48.4,
+            "avg_pnl": 9.6
+          },
+          "buy_put": {
+            "n": 9,
+            "win_rate": 44.4,
+            "avg_pnl": -12.6
+          },
+          "sell_put": {
+            "n": 3,
+            "win_rate": 66.7,
+            "avg_pnl": 29.6
+          }
+        },
+        "robust": true
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 1,
+          "bear_min": 2,
+          "adx_threshold": 30,
+          "garch_mode": "off",
+          "put_trend_gate": "off",
+          "yield_block_calls": false,
+          "max_spread_pct": 15,
+          "entry_mode": "escape",
+          "escape_normal": "skip",
+          "escape_breakout_vol": 2.0,
+          "otm_factor_call": 1.0,
+          "otm_factor_put": 1.0,
+          "dte_target": 60,
+          "require_green_candle": false,
+          "require_red_candle": false,
+          "stop_loss_pct": 0,
+          "profit_target_pct": 0,
+          "trail_activate_pct": 0,
+          "stagnant_days": 0,
+          "hold_days": 21,
+          "stock_stop_pct": 0,
+          "stock_trail_pct": 0
+        },
+        "train_sharpe": 0.157,
+        "train_trades": 278,
+        "train_pf": 1.55,
+        "train_avg_pnl": 6.27,
+        "train_win_rate": 50.0,
+        "val_sharpe": 0.144,
+        "val_trades": 136,
+        "val_pf": 1.56,
+        "val_win_rate": 47.1,
+        "val_avg_pnl": 7.57,
+        "val_avg_pnl_trigger_fill": 7.57,
+        "val_avg_bars_held": 6.8,
+        "val_by_strategy": {
+          "buy_call": {
+            "n": 124,
+            "win_rate": 46.8,
+            "avg_pnl": 8.5
+          },
+          "buy_put": {
+            "n": 9,
+            "win_rate": 44.4,
+            "avg_pnl": -13.0
+          },
+          "sell_put": {
+            "n": 3,
+            "win_rate": 66.7,
+            "avg_pnl": 32.3
+          }
+        },
+        "robust": true
+      },
+      {
+        "params": {
+          "rsi_oversold": 35,
+          "rsi_overbought": 65,
+          "bull_min": 1,
+          "bear_min": 2,
+          "adx_threshold": 30,
+          "garch_mode": "off",
+          "put_trend_gate": "off",
+          "yield_block_calls": false,
+          "max_spread_pct": 15,
+          "entry_mode": "escape",
+          "escape_normal": "skip",
+          "escape_breakout_vol": 2.0,
+          "otm_factor_call": 0.97,
+          "otm_factor_put": 1.0,
+          "dte_target": 30,
+          "require_green_candle": false,
+          "require_red_candle": false,
+          "stop_loss_pct": 0,
+          "profit_target_pct": 0,
+          "trail_activate_pct": 0,
+          "stagnant_days": 0,
+          "hold_days": 21,
+          "stock_stop_pct": 0,
+          "stock_trail_pct": 0
+        },
+        "train_sharpe": 0.166,
+        "train_trades": 278,
+        "train_pf": 1.59,
+        "train_avg_pnl": 8.52,
+        "train_win_rate": 50.4,
+        "val_sharpe": 0.143,
+        "val_trades": 136,
+        "val_pf": 1.57,
+        "val_win_rate": 49.3,
+        "val_avg_pnl": 10.04,
+        "val_avg_pnl_trigger_fill": 10.04,
+        "val_avg_bars_held": 6.8,
+        "val_by_strategy": {
+          "buy_call": {
+            "n": 124,
+            "win_rate": 49.2,
+            "avg_pnl": 11.2
+          },
+          "buy_put": {
+            "n": 9,
+            "win_rate": 44.4,
+            "avg_pnl": -12.0
+          },
+          "sell_put": {
+            "n": 3,
+            "win_rate": 66.7,
+            "avg_pnl": 29.4
+          }
+        },
+        "robust": true
       }
     ],
     "best": {
@@ -457,20 +597,49 @@
         "entry_mode": "escape",
         "escape_normal": "skip",
         "escape_breakout_vol": 2.0,
+        "otm_factor_call": 0.97,
+        "otm_factor_put": 1.0,
+        "dte_target": 30,
         "require_green_candle": false,
         "require_red_candle": false,
         "stop_loss_pct": 0,
         "profit_target_pct": 0,
         "trail_activate_pct": 0,
         "stagnant_days": 0,
-        "hold_days": 10,
-        "stock_stop_pct": 0
+        "hold_days": 21,
+        "stock_stop_pct": 0,
+        "stock_trail_pct": 7
       },
-      "val_sharpe": 0.08,
-      "val_pf": 1.27,
-      "train_pf": 1.51,
-      "val_trades": 147,
-      "train_trades": 290
+      "train_sharpe": 0.143,
+      "train_trades": 282,
+      "train_pf": 1.48,
+      "train_avg_pnl": 7.3,
+      "train_win_rate": 48.9,
+      "val_sharpe": 0.157,
+      "val_trades": 143,
+      "val_pf": 1.6,
+      "val_win_rate": 47.6,
+      "val_avg_pnl": 12.29,
+      "val_avg_pnl_trigger_fill": 12.29,
+      "val_avg_bars_held": 5.3,
+      "val_by_strategy": {
+        "buy_call": {
+          "n": 131,
+          "win_rate": 47.3,
+          "avg_pnl": 13.6
+        },
+        "buy_put": {
+          "n": 9,
+          "win_rate": 44.4,
+          "avg_pnl": -10.8
+        },
+        "sell_put": {
+          "n": 3,
+          "win_rate": 66.7,
+          "avg_pnl": 24.0
+        }
+      },
+      "robust": true
     },
     "suggestion": {
       "rsi_oversold": 35,
@@ -485,156 +654,889 @@
       "entry_mode": "escape",
       "escape_normal": "skip",
       "escape_breakout_vol": 2.0,
+      "otm_factor_call": 0.97,
+      "otm_factor_put": 1.0,
+      "dte_target": 30,
       "require_green_candle": false,
       "require_red_candle": false,
       "stop_loss_pct": 0,
       "profit_target_pct": 0,
       "trail_activate_pct": 0,
       "stagnant_days": 0,
-      "hold_days": 10,
-      "stock_stop_pct": 0
+      "hold_days": 21,
+      "stock_stop_pct": 0,
+      "stock_trail_pct": 7
     },
     "split_date": "2026-01-22",
     "tickers_used": [],
-    "completed_at": "2026-10-21T07:56:24.922179",
+    "completed_at": "2026-10-21T08:55:23.662354",
     "force_apply": true,
-    "note": "band-escape classifier, calls only: big-volume breakouts + scared-market reversions, no momentum puts, no premium stop/target, 10-day max hold, 15% spread cap (handoff 7e: PF 1.51 train / 1.27 validation net of spread)",
-    "baseline_evidence": [
+    "note": "band-escape classifier, calls only; contract/exit sweep (handoff 7g): slightly ITM calls (0.97), 21-day max hold, 7% stock-based trailing exit; no premium stop/target, GARCH off, spread cap 15",
+    "singles_evidence": [
       {
-        "label": "escape default (skip normal, breakout vol 2, garch off, no stop, hold 10) [train]",
-        "n": 290,
-        "win_rate": 46.9,
-        "avg_pnl": 7.8,
-        "avg_pnl_gross": 12.64,
-        "avg_cost_pct": 4.85,
-        "avg_pnl_trigger_fill": 7.8,
-        "profit_factor": 1.51,
-        "sharpe": 0.15,
-        "sortino": 0.29,
-        "max_drawdown_pct": 183.2,
-        "avg_bars_held": 4.0,
-        "exit_mix": {
-          "end_of_hold": 82,
-          "rsi_target": 207,
-          "bb_breach": 1
+        "knob": "otm_factor_call",
+        "value": 0.95,
+        "train": {
+          "label": "otm_factor_call=0.95 [train]",
+          "n": 290,
+          "win_rate": 51.4,
+          "avg_pnl": 7.1,
+          "avg_pnl_gross": 11.45,
+          "avg_cost_pct": 4.35,
+          "avg_pnl_trigger_fill": 7.1,
+          "profit_factor": 1.59,
+          "sharpe": 0.17,
+          "sortino": 0.31,
+          "max_drawdown_pct": 123.8,
+          "avg_bars_held": 4.0,
+          "exit_mix": {
+            "end_of_hold": 82,
+            "rsi_target": 207,
+            "bb_breach": 1
+          },
+          "tickers": 95,
+          "by_strategy": {
+            "buy_call": {
+              "count": 261,
+              "win_rate": 51.3,
+              "avg_pnl": 7.8,
+              "profit_factor": 1.63,
+              "sharpe": 0.18,
+              "avg_bars_held": 4.3
+            },
+            "buy_put": {
+              "count": 27,
+              "win_rate": 51.9,
+              "avg_pnl": -0.8,
+              "profit_factor": 0.91,
+              "sharpe": -0.04,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 2,
+              "win_rate": 50.0,
+              "avg_pnl": 18.8,
+              "profit_factor": 2.38,
+              "sharpe": 0.41,
+              "avg_bars_held": 5.5
+            }
+          }
         },
-        "tickers": 95,
-        "by_strategy": {
-          "buy_call": {
-            "count": 261,
-            "win_rate": 46.4,
-            "avg_pnl": 8.6,
-            "profit_factor": 1.55,
-            "sharpe": 0.16,
-            "avg_bars_held": 4.3
+        "val": {
+          "label": "otm_factor_call=0.95 [val]",
+          "n": 147,
+          "win_rate": 45.6,
+          "avg_pnl": 5.3,
+          "avg_pnl_gross": 9.52,
+          "avg_cost_pct": 4.26,
+          "avg_pnl_trigger_fill": 5.3,
+          "profit_factor": 1.29,
+          "sharpe": 0.08,
+          "sortino": 0.16,
+          "max_drawdown_pct": 0.0,
+          "avg_bars_held": 4.7,
+          "exit_mix": {
+            "end_of_hold": 50,
+            "rsi_target": 96,
+            "bb_breach": 1
           },
-          "buy_put": {
-            "count": 27,
-            "win_rate": 51.9,
-            "avg_pnl": -0.8,
-            "profit_factor": 0.91,
-            "sharpe": -0.04,
-            "avg_bars_held": 1.0
-          },
-          "sell_put": {
-            "count": 2,
-            "win_rate": 50.0,
-            "avg_pnl": 18.8,
-            "profit_factor": 2.38,
-            "sharpe": 0.41,
-            "avg_bars_held": 5.5
+          "tickers": 81,
+          "by_strategy": {
+            "buy_call": {
+              "count": 130,
+              "win_rate": 43.8,
+              "avg_pnl": 6.1,
+              "profit_factor": 1.33,
+              "sharpe": 0.09,
+              "avg_bars_held": 4.9
+            },
+            "buy_put": {
+              "count": 14,
+              "win_rate": 57.1,
+              "avg_pnl": -6.0,
+              "profit_factor": 0.62,
+              "sharpe": -0.17,
+              "avg_bars_held": 1.6
+            },
+            "sell_put": {
+              "count": 3,
+              "win_rate": 66.7,
+              "avg_pnl": 22.4,
+              "profit_factor": 1.7,
+              "sharpe": 0.27,
+              "avg_bars_held": 9.7
+            }
           }
         }
       },
       {
-        "label": "escape default (skip normal, breakout vol 2, garch off, no stop, hold 10) [val]",
-        "n": 147,
-        "win_rate": 45.6,
-        "avg_pnl": 5.9,
-        "avg_pnl_gross": 10.57,
-        "avg_cost_pct": 4.67,
-        "avg_pnl_trigger_fill": 5.9,
-        "profit_factor": 1.27,
-        "sharpe": 0.08,
-        "sortino": 0.16,
-        "max_drawdown_pct": 0.0,
-        "avg_bars_held": 4.7,
-        "exit_mix": {
-          "end_of_hold": 50,
-          "rsi_target": 96,
-          "bb_breach": 1
+        "knob": "otm_factor_call",
+        "value": 0.97,
+        "train": {
+          "label": "otm_factor_call=0.97 [train]",
+          "n": 290,
+          "win_rate": 50.0,
+          "avg_pnl": 7.5,
+          "avg_pnl_gross": 12.03,
+          "avg_cost_pct": 4.48,
+          "avg_pnl_trigger_fill": 7.5,
+          "profit_factor": 1.57,
+          "sharpe": 0.16,
+          "sortino": 0.31,
+          "max_drawdown_pct": 135.8,
+          "avg_bars_held": 4.0,
+          "exit_mix": {
+            "end_of_hold": 82,
+            "rsi_target": 207,
+            "bb_breach": 1
+          },
+          "tickers": 95,
+          "by_strategy": {
+            "buy_call": {
+              "count": 261,
+              "win_rate": 49.8,
+              "avg_pnl": 8.3,
+              "profit_factor": 1.62,
+              "sharpe": 0.17,
+              "avg_bars_held": 4.3
+            },
+            "buy_put": {
+              "count": 27,
+              "win_rate": 51.9,
+              "avg_pnl": -0.8,
+              "profit_factor": 0.91,
+              "sharpe": -0.04,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 2,
+              "win_rate": 50.0,
+              "avg_pnl": 18.8,
+              "profit_factor": 2.38,
+              "sharpe": 0.41,
+              "avg_bars_held": 5.5
+            }
+          }
         },
-        "tickers": 81,
-        "by_strategy": {
-          "buy_call": {
-            "count": 130,
-            "win_rate": 43.8,
-            "avg_pnl": 6.8,
-            "profit_factor": 1.3,
-            "sharpe": 0.08,
-            "avg_bars_held": 4.9
+        "val": {
+          "label": "otm_factor_call=0.97 [val]",
+          "n": 147,
+          "win_rate": 45.6,
+          "avg_pnl": 5.5,
+          "avg_pnl_gross": 9.88,
+          "avg_cost_pct": 4.33,
+          "avg_pnl_trigger_fill": 5.5,
+          "profit_factor": 1.28,
+          "sharpe": 0.08,
+          "sortino": 0.16,
+          "max_drawdown_pct": 0.0,
+          "avg_bars_held": 4.7,
+          "exit_mix": {
+            "end_of_hold": 50,
+            "rsi_target": 96,
+            "bb_breach": 1
           },
-          "buy_put": {
-            "count": 14,
-            "win_rate": 57.1,
-            "avg_pnl": -6.0,
-            "profit_factor": 0.62,
-            "sharpe": -0.17,
-            "avg_bars_held": 1.6
-          },
-          "sell_put": {
-            "count": 3,
-            "win_rate": 66.7,
-            "avg_pnl": 22.4,
-            "profit_factor": 1.7,
-            "sharpe": 0.27,
-            "avg_bars_held": 9.7
+          "tickers": 81,
+          "by_strategy": {
+            "buy_call": {
+              "count": 130,
+              "win_rate": 43.8,
+              "avg_pnl": 6.4,
+              "profit_factor": 1.32,
+              "sharpe": 0.09,
+              "avg_bars_held": 4.9
+            },
+            "buy_put": {
+              "count": 14,
+              "win_rate": 57.1,
+              "avg_pnl": -6.0,
+              "profit_factor": 0.62,
+              "sharpe": -0.17,
+              "avg_bars_held": 1.6
+            },
+            "sell_put": {
+              "count": 3,
+              "win_rate": 66.7,
+              "avg_pnl": 22.4,
+              "profit_factor": 1.7,
+              "sharpe": 0.27,
+              "avg_bars_held": 9.7
+            }
           }
         }
       },
       {
-        "label": "escape default (skip normal, breakout vol 2, garch off, no stop, hold 10) [all]",
-        "n": 452,
-        "win_rate": 46.5,
-        "avg_pnl": 7.0,
-        "avg_pnl_gross": 11.8,
-        "avg_cost_pct": 4.77,
-        "avg_pnl_trigger_fill": 7.0,
-        "profit_factor": 1.41,
-        "sharpe": 0.11,
-        "sortino": 0.23,
-        "max_drawdown_pct": 64.4,
-        "avg_bars_held": 4.1,
-        "exit_mix": {
-          "end_of_hold": 132,
-          "rsi_target": 318,
-          "bb_breach": 2
+        "knob": "otm_factor_call",
+        "value": 1.03,
+        "train": {
+          "label": "otm_factor_call=1.03 [train]",
+          "n": 290,
+          "win_rate": 44.8,
+          "avg_pnl": 7.3,
+          "avg_pnl_gross": 12.94,
+          "avg_cost_pct": 5.63,
+          "avg_pnl_trigger_fill": 7.3,
+          "profit_factor": 1.41,
+          "sharpe": 0.12,
+          "sortino": 0.24,
+          "max_drawdown_pct": 371.6,
+          "avg_bars_held": 4.0,
+          "exit_mix": {
+            "end_of_hold": 82,
+            "rsi_target": 207,
+            "bb_breach": 1
+          },
+          "tickers": 95,
+          "by_strategy": {
+            "buy_call": {
+              "count": 261,
+              "win_rate": 44.1,
+              "avg_pnl": 8.1,
+              "profit_factor": 1.43,
+              "sharpe": 0.13,
+              "avg_bars_held": 4.3
+            },
+            "buy_put": {
+              "count": 27,
+              "win_rate": 51.9,
+              "avg_pnl": -0.8,
+              "profit_factor": 0.91,
+              "sharpe": -0.04,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 2,
+              "win_rate": 50.0,
+              "avg_pnl": 18.8,
+              "profit_factor": 2.38,
+              "sharpe": 0.41,
+              "avg_bars_held": 5.5
+            }
+          }
         },
-        "tickers": 99,
-        "by_strategy": {
-          "buy_call": {
-            "count": 405,
-            "win_rate": 45.7,
-            "avg_pnl": 7.9,
-            "profit_factor": 1.44,
-            "sharpe": 0.12,
-            "avg_bars_held": 4.4
+        "val": {
+          "label": "otm_factor_call=1.03 [val]",
+          "n": 147,
+          "win_rate": 42.9,
+          "avg_pnl": 6.5,
+          "avg_pnl_gross": 11.47,
+          "avg_cost_pct": 5.0,
+          "avg_pnl_trigger_fill": 6.5,
+          "profit_factor": 1.26,
+          "sharpe": 0.07,
+          "sortino": 0.16,
+          "max_drawdown_pct": 0.0,
+          "avg_bars_held": 4.7,
+          "exit_mix": {
+            "end_of_hold": 50,
+            "rsi_target": 96,
+            "bb_breach": 1
           },
-          "buy_put": {
-            "count": 42,
-            "win_rate": 52.4,
-            "avg_pnl": -2.7,
-            "profit_factor": 0.76,
-            "sharpe": -0.1,
-            "avg_bars_held": 1.2
+          "tickers": 81,
+          "by_strategy": {
+            "buy_call": {
+              "count": 130,
+              "win_rate": 40.8,
+              "avg_pnl": 7.4,
+              "profit_factor": 1.29,
+              "sharpe": 0.08,
+              "avg_bars_held": 4.9
+            },
+            "buy_put": {
+              "count": 14,
+              "win_rate": 57.1,
+              "avg_pnl": -6.0,
+              "profit_factor": 0.62,
+              "sharpe": -0.17,
+              "avg_bars_held": 1.6
+            },
+            "sell_put": {
+              "count": 3,
+              "win_rate": 66.7,
+              "avg_pnl": 22.4,
+              "profit_factor": 1.7,
+              "sharpe": 0.27,
+              "avg_bars_held": 9.7
+            }
+          }
+        }
+      },
+      {
+        "knob": "dte_target",
+        "value": 45,
+        "train": {
+          "label": "dte_target=45 [train]",
+          "n": 290,
+          "win_rate": 48.6,
+          "avg_pnl": 6.2,
+          "avg_pnl_gross": 10.74,
+          "avg_cost_pct": 4.54,
+          "avg_pnl_trigger_fill": 6.2,
+          "profit_factor": 1.5,
+          "sharpe": 0.14,
+          "sortino": 0.27,
+          "max_drawdown_pct": 156.1,
+          "avg_bars_held": 4.0,
+          "exit_mix": {
+            "end_of_hold": 82,
+            "rsi_target": 207,
+            "bb_breach": 1
           },
-          "sell_put": {
-            "count": 5,
-            "win_rate": 60.0,
-            "avg_pnl": 21.0,
-            "profit_factor": 1.85,
-            "sharpe": 0.3,
-            "avg_bars_held": 8.0
+          "tickers": 95,
+          "by_strategy": {
+            "buy_call": {
+              "count": 261,
+              "win_rate": 48.3,
+              "avg_pnl": 6.9,
+              "profit_factor": 1.54,
+              "sharpe": 0.15,
+              "avg_bars_held": 4.3
+            },
+            "buy_put": {
+              "count": 27,
+              "win_rate": 51.9,
+              "avg_pnl": -1.3,
+              "profit_factor": 0.84,
+              "sharpe": -0.07,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 2,
+              "win_rate": 50.0,
+              "avg_pnl": 13.0,
+              "profit_factor": 2.08,
+              "sharpe": 0.35,
+              "avg_bars_held": 5.5
+            }
+          }
+        },
+        "val": {
+          "label": "dte_target=45 [val]",
+          "n": 147,
+          "win_rate": 43.5,
+          "avg_pnl": 4.4,
+          "avg_pnl_gross": 8.69,
+          "avg_cost_pct": 4.26,
+          "avg_pnl_trigger_fill": 4.4,
+          "profit_factor": 1.24,
+          "sharpe": 0.07,
+          "sortino": 0.14,
+          "max_drawdown_pct": 0.0,
+          "avg_bars_held": 4.7,
+          "exit_mix": {
+            "end_of_hold": 50,
+            "rsi_target": 96,
+            "bb_breach": 1
+          },
+          "tickers": 81,
+          "by_strategy": {
+            "buy_call": {
+              "count": 130,
+              "win_rate": 41.5,
+              "avg_pnl": 5.2,
+              "profit_factor": 1.28,
+              "sharpe": 0.08,
+              "avg_bars_held": 4.9
+            },
+            "buy_put": {
+              "count": 14,
+              "win_rate": 57.1,
+              "avg_pnl": -6.5,
+              "profit_factor": 0.54,
+              "sharpe": -0.21,
+              "avg_bars_held": 1.6
+            },
+            "sell_put": {
+              "count": 3,
+              "win_rate": 66.7,
+              "avg_pnl": 24.0,
+              "profit_factor": 1.91,
+              "sharpe": 0.33,
+              "avg_bars_held": 9.7
+            }
+          }
+        }
+      },
+      {
+        "knob": "dte_target",
+        "value": 60,
+        "train": {
+          "label": "dte_target=60 [train]",
+          "n": 290,
+          "win_rate": 49.3,
+          "avg_pnl": 5.2,
+          "avg_pnl_gross": 9.52,
+          "avg_cost_pct": 4.35,
+          "avg_pnl_trigger_fill": 5.2,
+          "profit_factor": 1.48,
+          "sharpe": 0.14,
+          "sortino": 0.25,
+          "max_drawdown_pct": 152.3,
+          "avg_bars_held": 4.0,
+          "exit_mix": {
+            "end_of_hold": 82,
+            "rsi_target": 207,
+            "bb_breach": 1
+          },
+          "tickers": 95,
+          "by_strategy": {
+            "buy_call": {
+              "count": 261,
+              "win_rate": 49.8,
+              "avg_pnl": 5.8,
+              "profit_factor": 1.52,
+              "sharpe": 0.15,
+              "avg_bars_held": 4.3
+            },
+            "buy_put": {
+              "count": 27,
+              "win_rate": 44.4,
+              "avg_pnl": -1.7,
+              "profit_factor": 0.76,
+              "sharpe": -0.11,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 2,
+              "win_rate": 50.0,
+              "avg_pnl": 9.6,
+              "profit_factor": 1.87,
+              "sharpe": 0.3,
+              "avg_bars_held": 5.5
+            }
+          }
+        },
+        "val": {
+          "label": "dte_target=60 [val]",
+          "n": 147,
+          "win_rate": 43.5,
+          "avg_pnl": 3.5,
+          "avg_pnl_gross": 7.53,
+          "avg_cost_pct": 4.07,
+          "avg_pnl_trigger_fill": 3.5,
+          "profit_factor": 1.22,
+          "sharpe": 0.07,
+          "sortino": 0.13,
+          "max_drawdown_pct": 0.0,
+          "avg_bars_held": 4.7,
+          "exit_mix": {
+            "end_of_hold": 50,
+            "rsi_target": 96,
+            "bb_breach": 1
+          },
+          "tickers": 81,
+          "by_strategy": {
+            "buy_call": {
+              "count": 130,
+              "win_rate": 41.5,
+              "avg_pnl": 4.1,
+              "profit_factor": 1.26,
+              "sharpe": 0.08,
+              "avg_bars_held": 4.9
+            },
+            "buy_put": {
+              "count": 14,
+              "win_rate": 57.1,
+              "avg_pnl": -6.8,
+              "profit_factor": 0.48,
+              "sharpe": -0.23,
+              "avg_bars_held": 1.6
+            },
+            "sell_put": {
+              "count": 3,
+              "win_rate": 66.7,
+              "avg_pnl": 23.1,
+              "profit_factor": 2.0,
+              "sharpe": 0.35,
+              "avg_bars_held": 9.7
+            }
+          }
+        }
+      },
+      {
+        "knob": "stock_trail_pct",
+        "value": 4,
+        "train": {
+          "label": "stock_trail_pct=4 [train]",
+          "n": 299,
+          "win_rate": 45.5,
+          "avg_pnl": 6.5,
+          "avg_pnl_gross": 11.39,
+          "avg_cost_pct": 4.88,
+          "avg_pnl_trigger_fill": 6.5,
+          "profit_factor": 1.42,
+          "sharpe": 0.13,
+          "sortino": 0.25,
+          "max_drawdown_pct": 200.0,
+          "avg_bars_held": 3.4,
+          "exit_mix": {
+            "stock_trail": 62,
+            "rsi_target": 186,
+            "end_of_hold": 50,
+            "bb_breach": 1
+          },
+          "tickers": 95,
+          "by_strategy": {
+            "buy_call": {
+              "count": 270,
+              "win_rate": 44.8,
+              "avg_pnl": 7.2,
+              "profit_factor": 1.44,
+              "sharpe": 0.13,
+              "avg_bars_held": 3.7
+            },
+            "buy_put": {
+              "count": 27,
+              "win_rate": 51.9,
+              "avg_pnl": -0.8,
+              "profit_factor": 0.91,
+              "sharpe": -0.04,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 2,
+              "win_rate": 50.0,
+              "avg_pnl": 18.8,
+              "profit_factor": 2.38,
+              "sharpe": 0.41,
+              "avg_bars_held": 5.5
+            }
+          }
+        },
+        "val": {
+          "label": "stock_trail_pct=4 [val]",
+          "n": 159,
+          "win_rate": 42.8,
+          "avg_pnl": 7.9,
+          "avg_pnl_gross": 12.6,
+          "avg_cost_pct": 4.69,
+          "avg_pnl_trigger_fill": 7.9,
+          "profit_factor": 1.38,
+          "sharpe": 0.1,
+          "sortino": 0.24,
+          "max_drawdown_pct": 0.0,
+          "avg_bars_held": 3.8,
+          "exit_mix": {
+            "end_of_hold": 15,
+            "stock_trail": 52,
+            "rsi_target": 92
+          },
+          "tickers": 81,
+          "by_strategy": {
+            "buy_call": {
+              "count": 142,
+              "win_rate": 40.8,
+              "avg_pnl": 8.3,
+              "profit_factor": 1.38,
+              "sharpe": 0.1,
+              "avg_bars_held": 4.0
+            },
+            "buy_put": {
+              "count": 14,
+              "win_rate": 57.1,
+              "avg_pnl": -3.7,
+              "profit_factor": 0.72,
+              "sharpe": -0.13,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 3,
+              "win_rate": 66.7,
+              "avg_pnl": 45.3,
+              "profit_factor": 10.63,
+              "sharpe": 1.06,
+              "avg_bars_held": 6.7
+            }
+          }
+        }
+      },
+      {
+        "knob": "stock_trail_pct",
+        "value": 7,
+        "train": {
+          "label": "stock_trail_pct=7 [train]",
+          "n": 293,
+          "win_rate": 46.8,
+          "avg_pnl": 7.2,
+          "avg_pnl_gross": 12.09,
+          "avg_cost_pct": 4.88,
+          "avg_pnl_trigger_fill": 7.2,
+          "profit_factor": 1.46,
+          "sharpe": 0.13,
+          "sortino": 0.26,
+          "max_drawdown_pct": 229.6,
+          "avg_bars_held": 3.8,
+          "exit_mix": {
+            "stock_trail": 29,
+            "rsi_target": 199,
+            "end_of_hold": 64,
+            "bb_breach": 1
+          },
+          "tickers": 95,
+          "by_strategy": {
+            "buy_call": {
+              "count": 264,
+              "win_rate": 46.2,
+              "avg_pnl": 7.9,
+              "profit_factor": 1.48,
+              "sharpe": 0.14,
+              "avg_bars_held": 4.1
+            },
+            "buy_put": {
+              "count": 27,
+              "win_rate": 51.9,
+              "avg_pnl": -0.8,
+              "profit_factor": 0.91,
+              "sharpe": -0.04,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 2,
+              "win_rate": 50.0,
+              "avg_pnl": 18.8,
+              "profit_factor": 2.38,
+              "sharpe": 0.41,
+              "avg_bars_held": 5.5
+            }
+          }
+        },
+        "val": {
+          "label": "stock_trail_pct=7 [val]",
+          "n": 151,
+          "win_rate": 47.0,
+          "avg_pnl": 10.2,
+          "avg_pnl_gross": 14.96,
+          "avg_cost_pct": 4.72,
+          "avg_pnl_trigger_fill": 10.2,
+          "profit_factor": 1.48,
+          "sharpe": 0.12,
+          "sortino": 0.28,
+          "max_drawdown_pct": 0.0,
+          "avg_bars_held": 4.4,
+          "exit_mix": {
+            "end_of_hold": 34,
+            "rsi_target": 95,
+            "stock_trail": 22
+          },
+          "tickers": 81,
+          "by_strategy": {
+            "buy_call": {
+              "count": 134,
+              "win_rate": 45.5,
+              "avg_pnl": 11.6,
+              "profit_factor": 1.53,
+              "sharpe": 0.14,
+              "avg_bars_held": 4.6
+            },
+            "buy_put": {
+              "count": 14,
+              "win_rate": 57.1,
+              "avg_pnl": -5.2,
+              "profit_factor": 0.65,
+              "sharpe": -0.16,
+              "avg_bars_held": 1.1
+            },
+            "sell_put": {
+              "count": 3,
+              "win_rate": 66.7,
+              "avg_pnl": 22.4,
+              "profit_factor": 1.7,
+              "sharpe": 0.27,
+              "avg_bars_held": 9.7
+            }
+          }
+        }
+      },
+      {
+        "knob": "hold_days",
+        "value": 21,
+        "train": {
+          "label": "hold_days=21 [train]",
+          "n": 278,
+          "win_rate": 48.2,
+          "avg_pnl": 8.0,
+          "avg_pnl_gross": 12.73,
+          "avg_cost_pct": 4.75,
+          "avg_pnl_trigger_fill": 8.0,
+          "profit_factor": 1.46,
+          "sharpe": 0.14,
+          "sortino": 0.25,
+          "max_drawdown_pct": 566.1,
+          "avg_bars_held": 5.6,
+          "exit_mix": {
+            "rsi_target": 265,
+            "expired": 11,
+            "bb_breach": 2
+          },
+          "tickers": 94,
+          "by_strategy": {
+            "buy_call": {
+              "count": 255,
+              "win_rate": 47.8,
+              "avg_pnl": 8.8,
+              "profit_factor": 1.48,
+              "sharpe": 0.14,
+              "avg_bars_held": 6.0
+            },
+            "buy_put": {
+              "count": 21,
+              "win_rate": 57.1,
+              "avg_pnl": 0.2,
+              "profit_factor": 1.02,
+              "sharpe": 0.01,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 2,
+              "win_rate": 0.0,
+              "avg_pnl": -17.9,
+              "profit_factor": 0.0,
+              "sharpe": -1.91,
+              "avg_bars_held": 8.0
+            }
+          }
+        },
+        "val": {
+          "label": "hold_days=21 [val]",
+          "n": 136,
+          "win_rate": 46.3,
+          "avg_pnl": 8.7,
+          "avg_pnl_gross": 13.1,
+          "avg_cost_pct": 4.39,
+          "avg_pnl_trigger_fill": 8.7,
+          "profit_factor": 1.41,
+          "sharpe": 0.11,
+          "sortino": 0.22,
+          "max_drawdown_pct": 0.0,
+          "avg_bars_held": 6.8,
+          "exit_mix": {
+            "rsi_target": 124,
+            "expired": 11,
+            "bb_breach": 1
+          },
+          "tickers": 78,
+          "by_strategy": {
+            "buy_call": {
+              "count": 124,
+              "win_rate": 46.0,
+              "avg_pnl": 9.7,
+              "profit_factor": 1.46,
+              "sharpe": 0.12,
+              "avg_bars_held": 6.8
+            },
+            "buy_put": {
+              "count": 9,
+              "win_rate": 44.4,
+              "avg_pnl": -12.0,
+              "profit_factor": 0.46,
+              "sharpe": -0.3,
+              "avg_bars_held": 3.2
+            },
+            "sell_put": {
+              "count": 3,
+              "win_rate": 66.7,
+              "avg_pnl": 29.4,
+              "profit_factor": 1.92,
+              "sharpe": 0.33,
+              "avg_bars_held": 17.0
+            }
+          }
+        }
+      },
+      {
+        "knob": "stock_stop_pct",
+        "value": 4,
+        "train": {
+          "label": "stock_stop_pct=4 [train]",
+          "n": 298,
+          "win_rate": 46.3,
+          "avg_pnl": 7.4,
+          "avg_pnl_gross": 12.25,
+          "avg_cost_pct": 4.86,
+          "avg_pnl_trigger_fill": 7.4,
+          "profit_factor": 1.47,
+          "sharpe": 0.14,
+          "sortino": 0.27,
+          "max_drawdown_pct": 204.1,
+          "avg_bars_held": 3.7,
+          "exit_mix": {
+            "stock_stop": 43,
+            "rsi_target": 188,
+            "end_of_hold": 66,
+            "bb_breach": 1
+          },
+          "tickers": 95,
+          "by_strategy": {
+            "buy_call": {
+              "count": 269,
+              "win_rate": 45.7,
+              "avg_pnl": 8.1,
+              "profit_factor": 1.49,
+              "sharpe": 0.15,
+              "avg_bars_held": 3.9
+            },
+            "buy_put": {
+              "count": 27,
+              "win_rate": 51.9,
+              "avg_pnl": -0.8,
+              "profit_factor": 0.91,
+              "sharpe": -0.04,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 2,
+              "win_rate": 50.0,
+              "avg_pnl": 18.8,
+              "profit_factor": 2.38,
+              "sharpe": 0.41,
+              "avg_bars_held": 5.5
+            }
+          }
+        },
+        "val": {
+          "label": "stock_stop_pct=4 [val]",
+          "n": 155,
+          "win_rate": 45.8,
+          "avg_pnl": 7.4,
+          "avg_pnl_gross": 12.13,
+          "avg_cost_pct": 4.72,
+          "avg_pnl_trigger_fill": 7.4,
+          "profit_factor": 1.33,
+          "sharpe": 0.09,
+          "sortino": 0.2,
+          "max_drawdown_pct": 0.0,
+          "avg_bars_held": 4.1,
+          "exit_mix": {
+            "end_of_hold": 26,
+            "stock_stop": 38,
+            "rsi_target": 91
+          },
+          "tickers": 81,
+          "by_strategy": {
+            "buy_call": {
+              "count": 138,
+              "win_rate": 44.2,
+              "avg_pnl": 7.7,
+              "profit_factor": 1.33,
+              "sharpe": 0.09,
+              "avg_bars_held": 4.3
+            },
+            "buy_put": {
+              "count": 14,
+              "win_rate": 57.1,
+              "avg_pnl": -3.7,
+              "profit_factor": 0.72,
+              "sharpe": -0.13,
+              "avg_bars_held": 1.0
+            },
+            "sell_put": {
+              "count": 3,
+              "win_rate": 66.7,
+              "avg_pnl": 45.2,
+              "profit_factor": 5.89,
+              "sharpe": 0.88,
+              "avg_bars_held": 9.0
+            }
           }
         }
       }
