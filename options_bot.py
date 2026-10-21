@@ -408,6 +408,12 @@ TRACK_PRICE_REFRESH_MINS = 3    # How often (minutes) to refresh just the option
 # Source: federalreserve.gov/monetarypolicy/fomccalendars.htm
 # Update each December when the Fed publishes the following year's schedule.
 FOMC_DATES = [
+    # 2023 (needed so the backtest's 2-3 year window has Fed context)
+    "2023-02-01", "2023-03-22", "2023-05-03", "2023-06-14",
+    "2023-07-26", "2023-09-20", "2023-11-01", "2023-12-13",
+    # 2024
+    "2024-01-31", "2024-03-20", "2024-05-01", "2024-06-12",
+    "2024-07-31", "2024-09-18", "2024-11-07", "2024-12-18",
     # 2025
     "2025-01-29", "2025-03-19", "2025-05-07", "2025-06-18",
     "2025-07-30", "2025-09-17", "2025-10-29", "2025-12-10",
@@ -517,93 +523,150 @@ def calc_garch_vol(closes, fallback_window=20):
       3. 20% flat default                               (last resort)
 
     Returns annualised vol as a decimal (e.g. 0.32 = 32%).
+
+    NOTE: until Oct 2026 the `arch` package was not installed in the bot's
+    Python, so this silently returned the 20-day HV fallback every time —
+    every "GJR-GARCH" figure the dashboard showed was plain historical vol.
+    The fit now uses the last GARCH_WINDOW returns, the same window the
+    backtest's rolling forecast uses, so the two are directly comparable.
     """
+    log_ret = (np.log(closes / closes.shift(1)).dropna() * 100).iloc[-GARCH_WINDOW:]   # % returns
+    v = _garch_fit_forecast(log_ret)
+    if v is not None:
+        return v
+    return _hv_fallback(log_ret / 100.0, fallback_window)
+
+
+GARCH_WINDOW      = 240      # returns used per fit — a 1y download has ~249, so live and backtest fit the same window
+GARCH_REFIT_BARS  = 5        # backtest: refit every N bars, hold the forecast in between
+GARCH_CACHE_FILE  = "garch_cache.pkl"
+_garch_cache      = {}       # (sym, window, date_str) → annualised forecast (float)
+_garch_cache_lock = threading.Lock()
+_garch_available  = None     # None = not checked yet
+
+
+def _hv_fallback(log_ret, window=20):
+    """Trailing realised vol (annualised, decimal) with the same clamps as the GARCH path."""
     try:
-        log_ret = np.log(closes / closes.shift(1)).dropna() * 100  # % returns
-        if len(log_ret) < 60:
-            raise ValueError("insufficient data")
-
-        from arch import arch_model
-
-        def _fit_and_validate(am, max_daily_vol=0.08):
-            """
-            Fit an arch model and validate the result is financially sensible.
-            Returns (annual_vol, ok) where ok=False means the fit is suspect.
-            max_daily_vol: reject fits implying > this daily vol (8% = ~127% annual)
-            """
-            res = am.fit(disp="off", show_warning=False,
-                         options={"maxiter": 300})
-            fc       = res.forecast(horizon=1, reindex=False)
-            var_pct2 = float(fc.variance.iloc[-1, 0])
-
-            # Reject non-finite or negative variance
-            if not np.isfinite(var_pct2) or var_pct2 <= 0:
-                return None, False
-
-            daily_vol  = (var_pct2 ** 0.5) / 100
-            annual_vol = daily_vol * (252 ** 0.5)
-
-            # Reject if daily vol is implausibly high (model diverged)
-            if daily_vol > max_daily_vol:
-                return None, False
-
-            # For GJR: check stationarity condition α + γ/2 + β < 1
-            p = res.params
-            if "gamma[1]" in p.index:
-                persistence = (p.get("alpha[1]", 0) +
-                               p.get("gamma[1]", 0) / 2 +
-                               p.get("beta[1]", 0))
-                if persistence >= 1.0:
-                    return None, False
-
-            # For Student-t: degrees of freedom < 4 means variance is unreliable
-            if "nu" in p.index and float(p["nu"]) < 4:
-                return None, False
-
-            return float(np.clip(annual_vol, 0.05, 2.0)), True
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-
-            annual_vol = None
-
-            # ── Primary: GJR-GARCH(1,1,1) with Student-t ─────────
-            try:
-                am  = arch_model(log_ret, vol="Garch", p=1, o=1, q=1,
-                                 dist="t", rescale=False)
-                annual_vol, ok = _fit_and_validate(am)
-                if not ok:
-                    annual_vol = None
-            except Exception:
-                annual_vol = None
-
-            # ── Fallback 1: plain GARCH(1,1) with normal ──────────
-            if annual_vol is None:
-                try:
-                    am  = arch_model(log_ret, vol="Garch", p=1, q=1,
-                                     dist="normal", rescale=False)
-                    annual_vol, ok = _fit_and_validate(am)
-                    if not ok:
-                        annual_vol = None
-                except Exception:
-                    annual_vol = None
-
-        if annual_vol is not None:
-            return annual_vol
-
-        # Both GARCH fits failed or diverged — fall through to HV fallback
-        raise ValueError("GARCH fits did not produce sensible estimates")
-
+        hv = float(pd.Series(log_ret).rolling(window).std().iloc[-1]) * (252 ** 0.5)
+        if hv != hv:
+            return 0.20
+        return float(np.clip(hv, 0.05, 2.0))
     except Exception:
-        # ── Fallback 2: rolling historical vol ────────────────────
-        try:
-            log_ret = np.log(closes / closes.shift(1)).dropna()
-            hv = float(log_ret.rolling(fallback_window).std().iloc[-1]) * (252 ** 0.5)
-            if hv != hv:                       # NaN when fewer than `fallback_window` returns
-                return 0.20
-            return float(np.clip(hv, 0.05, 2.0))
-        except Exception:
-            return 0.20   # last-resort default
+        return 0.20
+
+
+def _garch_fit_forecast(log_ret_pct):
+    """
+    One-step-ahead annualised vol forecast from GJR-GARCH(1,1,1)-t, falling
+    back to GARCH(1,1)-normal; None when neither fit is financially sensible
+    (diverged, non-stationary, nu < 4) or `arch` is unavailable.
+    log_ret_pct: pandas Series of log returns in PERCENT (≥ 60 values).
+    """
+    global _garch_available
+    if len(log_ret_pct) < 60:
+        return None
+    if _garch_available is False:
+        return None
+    try:
+        from arch import arch_model
+        _garch_available = True
+    except ImportError:
+        if _garch_available is None:
+            print("  [GARCH] `arch` package not installed — run: pip install arch   (using HV fallback)")
+        _garch_available = False
+        return None
+
+    def _fit_and_validate(am, max_daily_vol=0.08):
+        res = am.fit(disp="off", show_warning=False, options={"maxiter": 300})
+        fc       = res.forecast(horizon=1, reindex=False)
+        var_pct2 = float(fc.variance.iloc[-1, 0])
+        if not np.isfinite(var_pct2) or var_pct2 <= 0:
+            return None
+        daily_vol  = (var_pct2 ** 0.5) / 100
+        if daily_vol > max_daily_vol:                      # model diverged
+            return None
+        p = res.params
+        if "gamma[1]" in p.index:                          # GJR stationarity α + γ/2 + β < 1
+            if p.get("alpha[1]", 0) + p.get("gamma[1]", 0) / 2 + p.get("beta[1]", 0) >= 1.0:
+                return None
+        if "nu" in p.index and float(p["nu"]) < 4:         # fat-tail df too low → variance unreliable
+            return None
+        return float(np.clip(daily_vol * (252 ** 0.5), 0.05, 2.0))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for kwargs in (dict(vol="Garch", p=1, o=1, q=1, dist="t"),
+                       dict(vol="Garch", p=1, q=1, dist="normal")):
+            try:
+                v = _fit_and_validate(arch_model(log_ret_pct, rescale=False, **kwargs))
+                if v is not None:
+                    return v
+            except Exception:
+                continue
+    return None
+
+
+def _load_garch_cache():
+    if not os.path.exists(GARCH_CACHE_FILE):
+        return
+    try:
+        with open(GARCH_CACHE_FILE, "rb") as f:
+            data = pickle.load(f)
+        with _garch_cache_lock:
+            _garch_cache.update(data)
+        print(f"  [GARCH] Loaded {len(data):,} cached forecasts from {GARCH_CACHE_FILE}")
+    except Exception as e:
+        print(f"  [GARCH] Could not load {GARCH_CACHE_FILE}: {e}")
+
+
+def _save_garch_cache():
+    try:
+        with _garch_cache_lock:
+            snapshot = dict(_garch_cache)
+        tmp = GARCH_CACHE_FILE + ".tmp"
+        with open(tmp, "wb") as f:
+            pickle.dump(snapshot, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, GARCH_CACHE_FILE)
+    except Exception as e:
+        print(f"  [GARCH] Could not save cache: {e}")
+
+
+def rolling_garch_forecast(sym, closes, window=GARCH_WINDOW, refit_every=GARCH_REFIT_BARS, cache=None):
+    """
+    Per-bar GJR-GARCH forecast for the backtest, using ONLY returns up to and
+    including each bar (no look-ahead).  The model is refit every `refit_every`
+    bars on the trailing `window` returns and the forecast is held in between;
+    the last bar is always a fresh fit so it equals calc_garch_vol() on the same
+    history.  NaN for the first 60 bars.  Fits are cached by (sym, window, date)
+    — a past date's forecast never changes — so repeat runs cost nothing.
+    Returns (np.ndarray aligned to closes, new_cache_entries dict).
+    """
+    cache = _garch_cache if cache is None else cache
+    c     = pd.Series(np.asarray(closes, dtype=float))
+    lr    = (np.log(c / c.shift(1)) * 100).values            # lr[i] = return INTO bar i (NaN at 0)
+    n     = len(c)
+    dates = [str(d)[:10] for d in closes.index] if hasattr(closes, "index") else [str(i) for i in range(n)]
+    out   = np.full(n, np.nan)
+    new   = {}
+    last  = None
+    for i in range(60, n):
+        refit = ((i - 60) % refit_every == 0) or (i == n - 1)
+        if refit:
+            key = (sym, window, dates[i])
+            v = cache.get(key)
+            if v is None:
+                seg = pd.Series(lr[max(1, i - window + 1): i + 1])      # last `window` returns ending at bar i
+                v = _garch_fit_forecast(seg)
+                if v is None:
+                    v = _hv_fallback(seg / 100.0)
+                new[key] = v
+            last = v
+        out[i] = last if last is not None else np.nan
+    if new:
+        with _garch_cache_lock:
+            cache.update(new)
+    return out, new
 
 
 def black_scholes(S, K, T, r, sigma, option_type="call"):
@@ -912,15 +975,6 @@ def get_macro_regime():
     if _macro_cache["value"] is not None and now - _macro_cache["ts"] < 300:
         return dict(_macro_cache["value"])
 
-    enabled = {
-        "buy_call":     True,
-        "buy_put":      True,
-        "sell_put":     True,
-        "covered_call": True,
-        "iron_condor":  True,
-    }
-    reasons = []
-    label_parts = []
     try:
         vix      = get_vix() or 18.0
         regime   = vix_regime(vix)        # "low" / "normal" / "high"
@@ -928,45 +982,158 @@ def get_macro_regime():
         fed_ctx  = get_fed_context() or {}
         trend    = get_market_trend()      # "bull_strong" / "bull_weak" / ...
         yi       = fed_ctx.get("yield_inverted", False)
-
-        # --- Panic regime: VIX > 30 ---
-        if vix > 30:
-            enabled["buy_call"] = False
-            enabled["buy_put"]  = False
-            reasons.append(f"VIX {vix:.1f} > 30 — panic regime, no long premium")
-            label_parts.append("panic")
-
-        # --- High VIX + backwardation: defensive ---
-        elif regime == "high" and term == "backwardation":
-            enabled["buy_call"] = False
-            reasons.append("High VIX in backwardation — disable Buy Call (downside risk)")
-            label_parts.append("def")
-
-        # --- Yield curve inverted: recession risk ---
-        if yi and enabled["buy_call"]:
-            enabled["buy_call"] = False
-            reasons.append("Yield curve inverted — disable Buy Call (recession lean)")
-            label_parts.append("inv")
-
-        # --- Bear-strong trend: don't fight downtrend with calls ---
-        if trend == "bear_strong" and enabled["buy_call"]:
-            enabled["buy_call"] = False
-            reasons.append("Bear-strong trend — disable Buy Call")
-            label_parts.append("bear")
-
-        # --- Bull-strong + low VIX: no edge buying puts ---
-        if trend == "bull_strong" and regime == "low" and enabled["buy_put"]:
-            enabled["buy_put"] = False
-            reasons.append("Bull-strong + low VIX — disable Buy Put (no shorting edge)")
-            label_parts.append("bull")
-
+        enabled  = macro_rules(vix, regime, term, trend, yi)
     except Exception as _e:
-        reasons.append(f"regime lookup error ({_e}) — all strategies enabled by default")
+        enabled = macro_rules(None, "normal", "flat", "neutral", False)
+        enabled["reason"] = f"regime lookup error ({_e}) — all strategies enabled by default"
+
+    _macro_cache.update(value=dict(enabled), ts=now)
+    return enabled
+
+
+def macro_rules(vix, regime, term, trend, yield_inverted):
+    """
+    The macro gate as a pure function of its inputs — shared by the live
+    scanner (get_macro_regime) and the backtest (market_context_history), so
+    both apply exactly the same rule at every date.
+    """
+    enabled = {"buy_call": True, "buy_put": True, "sell_put": True,
+               "covered_call": True, "iron_condor": True}
+    reasons, label_parts = [], []
+    vix = vix if vix is not None else 18.0
+
+    # --- Panic regime: VIX > 30 ---
+    if vix > 30:
+        enabled["buy_call"] = False
+        enabled["buy_put"]  = False
+        reasons.append(f"VIX {vix:.1f} > 30 — panic regime, no long premium")
+        label_parts.append("panic")
+    # --- High VIX + backwardation: defensive ---
+    elif regime == "high" and term == "backwardation":
+        enabled["buy_call"] = False
+        reasons.append("High VIX in backwardation — disable Buy Call (downside risk)")
+        label_parts.append("def")
+
+    # --- Yield curve inverted: recession risk ---
+    if yield_inverted and enabled["buy_call"]:
+        enabled["buy_call"] = False
+        reasons.append("Yield curve inverted — disable Buy Call (recession lean)")
+        label_parts.append("inv")
+
+    # --- Bear-strong trend: don't fight downtrend with calls ---
+    if trend == "bear_strong" and enabled["buy_call"]:
+        enabled["buy_call"] = False
+        reasons.append("Bear-strong trend — disable Buy Call")
+        label_parts.append("bear")
+
+    # --- Bull-strong + low VIX: no edge buying puts ---
+    if trend == "bull_strong" and regime == "low" and enabled["buy_put"]:
+        enabled["buy_put"] = False
+        reasons.append("Bull-strong + low VIX — disable Buy Put (no shorting edge)")
+        label_parts.append("bull")
 
     enabled["reason"] = "; ".join(reasons) if reasons else "Normal regime — all strategies enabled"
     enabled["label"]  = "+".join(label_parts) if label_parts else "normal"
-    _macro_cache.update(value=dict(enabled), ts=now)
     return enabled
+
+
+def _fed_windows(d, fomc_dates):
+    """(pre_fed, post_fed, yield-independent) for calendar date d — same rule as get_fed_context."""
+    past   = [x for x in fomc_dates if x <= d]
+    future = [x for x in fomc_dates if x >  d]
+    days_to    = (future[0] - d).days if future else None
+    days_since = (d - past[-1]).days  if past   else None
+    pre_fed  = days_to    is not None and 0 < days_to    <= 5
+    post_fed = days_since is not None and 0 < days_since <= 2
+    return pre_fed, post_fed
+
+
+def _naive_daily_index(s):
+    """Return a Series re-indexed to tz-naive, normalised dates with duplicates dropped."""
+    idx = pd.DatetimeIndex(s.index)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)
+    out = pd.Series(np.asarray(s.values, dtype=float), index=idx.normalize())
+    return out[~out.index.duplicated(keep="last")]
+
+
+_ctx_hist_cache = {"df": None, "ts": 0.0, "spy_closes": None}
+
+
+def market_context_history(period="3y", force=False):
+    """
+    Per-DATE market context for the backtest — the historical counterpart of
+    get_vix / get_vix3m / get_fed_context / get_market_trend / get_macro_regime,
+    built from the same yfinance series and the same pure rules.
+
+    Returns a DataFrame indexed by trading date with columns:
+      vix, vix3m, regime, vix_ts, irx, fvx, yield_inverted, yield_steep,
+      spy_close, market_trend, pre_fed, post_fed,
+      macro_buy_call, macro_buy_put, macro_sell_put, macro_covered_call, macro_iron_condor
+    Cached for an hour.  Also stores the SPY close series for beta / RS.
+    """
+    now = time.time()
+    if not force and _ctx_hist_cache["df"] is not None and now - _ctx_hist_cache["ts"] < 3600:
+        return _ctx_hist_cache["df"]
+
+    _, spy = _fetch_history("SPY", period)
+    if spy is None or len(spy) < 220:
+        raise RuntimeError("SPY history unavailable — cannot build market context")
+    spy_idx = pd.DatetimeIndex(spy.index)
+    if spy_idx.tz is not None:
+        spy_idx = spy_idx.tz_localize(None)
+    spy = spy.copy()
+    spy.index = spy_idx.normalize()
+    spy = spy[~spy.index.duplicated(keep="last")]
+
+    def _closes(sym):
+        _, h = _fetch_history(sym, period)
+        return _naive_daily_index(h["Close"]) if h is not None else pd.Series(dtype=float)
+
+    vix   = _closes("^VIX").reindex(spy.index).ffill()
+    vix3m = _closes("^VIX3M").reindex(spy.index).ffill()
+    irx   = _closes("^IRX").reindex(spy.index).ffill()
+    fvx   = _closes("^FVX").reindex(spy.index).ffill()
+
+    # SPY trend: price vs 200-day MA, ADX > 25 → "strong" (same as get_market_trend)
+    ma200 = spy["Close"].rolling(200).mean()
+    adx_s, _, _ = calc_adx(spy)
+    adx_s = adx_s if adx_s is not None else pd.Series(0.0, index=spy.index)
+
+    fomc = sorted(date.fromisoformat(x) for x in FOMC_DATES)
+    rows = []
+    for d in spy.index:
+        v, v3 = float(vix.get(d, np.nan)), float(vix3m.get(d, np.nan))
+        v  = None if v != v else v
+        v3 = None if v3 != v3 else v3
+        regime = vix_regime(v)
+        term   = vix_term_structure(v, v3)
+        i, f = float(irx.get(d, np.nan)), float(fvx.get(d, np.nan))
+        spread = (f - i) if (i == i and f == f) else None
+        yi = spread is not None and spread < 0
+        ys = spread is not None and spread > 1.5
+        m200 = float(ma200.get(d, np.nan))
+        px   = float(spy["Close"].get(d))
+        a    = float(adx_s.get(d, 0.0) or 0.0)
+        if m200 != m200:
+            trend = "neutral"
+        else:
+            above, strong = px > m200, a > 25
+            trend = ("bull_strong" if above and strong else "bull_weak" if above
+                     else "bear_strong" if strong else "bear_weak")
+        pre, post = _fed_windows(d.date(), fomc)
+        macro = macro_rules(v, regime, term, trend, yi)
+        rows.append({
+            "date": d, "vix": v, "vix3m": v3, "regime": regime, "vix_ts": term,
+            "irx": None if i != i else i, "fvx": None if f != f else f,
+            "yield_inverted": yi, "yield_steep": ys,
+            "spy_close": px, "market_trend": trend, "pre_fed": pre, "post_fed": post,
+            **{f"macro_{k}": macro[k] for k in ("buy_call", "buy_put", "sell_put", "covered_call", "iron_condor")},
+        })
+    df = pd.DataFrame(rows).set_index("date")
+    _ctx_hist_cache.update(df=df, ts=now, spy_closes=spy["Close"])
+    print(f"  [Context] Market-context history built: {len(df)} dates ({df.index.min().date()} → {df.index.max().date()})")
+    return df
 
 
 def get_market_trend():
@@ -1014,81 +1181,9 @@ def get_market_trend():
         return _spy_cache["trend"] or "neutral"
 
 
-def _spy_aligned(stock_closes):
-    """
-    Return (stk_closes, spy_closes) restricted to their common trading days,
-    with both indexes normalized to tz-naive dates. yf.download (the bulk scan
-    path) and yf.Ticker().history (the SPY cache) can hand back indexes with
-    different timezones; without normalizing, .intersection() comes back empty
-    and every beta / RS silently falls back to its neutral default.
-    Returns (None, None) when the SPY cache is missing or there's no overlap.
-    """
-    spy_cls = _spy_cache.get("closes")
-    if spy_cls is None or len(spy_cls) == 0:
-        return None, None
-    def _norm(s):
-        idx = pd.DatetimeIndex(s.index)
-        if idx.tz is not None:
-            idx = idx.tz_localize(None)
-        return pd.Series(s.values, index=idx.normalize())
-    stk = _norm(stock_closes)
-    spy = _norm(spy_cls)
-    common = stk.index.intersection(spy.index)
-    if len(common) == 0:
-        return None, None
-    return stk.loc[common], spy.loc[common]
-
-
-def calc_beta(stock_closes, window=60):
-    """
-    Rolling beta of the stock vs SPY over `window` trading days.
-    beta = cov(stock_ret, spy_ret) / var(spy_ret) on daily returns.
-    Uses cached SPY closes from get_market_trend(). Clamped to [-3, 3];
-    returns 1.0 (market-neutral fallback) when data is thin or SPY is flat.
-    """
-    try:
-        stk, spy = _spy_aligned(stock_closes)
-        if stk is None or len(stk) < window + 1:
-            return 1.0
-        stk = stk.iloc[-(window + 1):]
-        spy = spy.iloc[-(window + 1):]
-        sr  = stk.pct_change().dropna()
-        mr  = spy.pct_change().dropna()
-        var = float(mr.var())
-        if var == 0:
-            return 1.0
-        beta = float(sr.cov(mr) / var)
-        return round(max(-3.0, min(3.0, beta)), 2)
-    except Exception:
-        return 1.0
-
-
-def calc_rs_vs_spy(stock_closes, window=20):
-    """
-    Beta-adjusted relative strength vs SPY over `window` trading days.
-    Instead of the (unstable) stock_return / spy_return ratio, this measures
-    the residual return the stock made beyond what its beta + the market move
-    would predict:  resid = stock_ret - beta * spy_ret.
-    Returns (rs_value, rs_strong, rs_weak, beta):
-      rs_value  : residual (alpha) over the window, in %  (0.0 = moved exactly as beta predicts)
-      rs_strong : residual > +3%  → genuine outperformance  → bullish filter
-      rs_weak   : residual < -3%  → genuine underperformance → bearish filter
-      beta      : rolling beta vs SPY (see calc_beta)
-    Uses cached SPY closes from get_market_trend().
-    """
-    try:
-        stk, spy = _spy_aligned(stock_closes)
-        if stk is None or len(stk) < window + 1:
-            return 0.0, False, False, 1.0
-        stk_ret = float(stk.iloc[-1] / stk.iloc[-(window + 1)] - 1)   # exactly `window` bars of return
-        spy_ret = float(spy.iloc[-1] / spy.iloc[-(window + 1)] - 1)
-        beta    = calc_beta(stock_closes)
-        resid   = stk_ret - beta * spy_ret      # market-neutral excess return
-        rs_strong = resid >  0.03               # +3% beta-adjusted outperformance
-        rs_weak   = resid < -0.03               # -3% beta-adjusted underperformance
-        return round(resid * 100, 2), rs_strong, rs_weak, beta
-    except Exception:
-        return 0.0, False, False, 1.0
+# Beta / relative strength vs SPY are computed per bar inside indicator_frame()
+# (the shared signal engine) — the previous last-bar-only helpers were removed
+# so there is exactly one implementation.
 
 
 def calc_mfi(hist, period=14):
@@ -1725,6 +1820,612 @@ def _prefetch_ticker(sym, tkr=None):
     return result
 
 
+# ══════════════════════════════════════════════════════════════
+#  SHARED SIGNAL ENGINE
+#  One set of pure functions decides entries and exits for BOTH the live
+#  scanner and the backtest / optimizer:
+#    indicator_frame()  per-bar arrays for every indicator the rules read
+#    ind_at()           the scalars for one bar (with the live rounding rules)
+#    evaluate_entry()   the entry rules  (gate flags, confluence, thresholds)
+#    _price_exit_core() / _strategy_exit_check()   the exit rules
+#  The live scanner evaluates the LAST bar of a 1-year frame; the backtest
+#  evaluates EVERY bar of a 2-year frame plus a per-date market-context table.
+#  The only things that differ are inputs the past doesn't have: option
+#  quotes (P/C ratio, premium, liquidity), short interest and earnings dates.
+# ══════════════════════════════════════════════════════════════
+
+GARCH_EXPAND_RATIO   = 1.15   # forecast > trailing HV30 × this → volatility expansion expected
+GARCH_CONTRACT_RATIO = 0.85   # forecast < trailing HV30 × this → volatility contraction expected
+GARCH_MODES          = ("off", "confluence", "gate")
+OPTION_DTE_TARGET    = 30     # the scanner picks the expiry closest to 30 DTE
+OPTION_DTE_BARS      = 21     # ≈ 30 calendar days in trading bars (backtest option lifetime)
+
+IND_FIELDS = (
+    # price / candles
+    "price", "open", "prev_close",
+    # oscillators & bands
+    "rsi", "bb_u", "bb_m", "bb_l", "dc_u", "dc_m", "dc_l", "mfi",
+    # trend
+    "ma50", "ma200", "adx", "pdi", "ndi", "ema9", "ema21",
+    "macd", "macd_sig", "macd_hist", "macd_bull", "macd_bear",
+    "ema_bull", "ema_bear", "ema_cross_bull", "ema_cross_bear",
+    "reversal_up", "vol_confirmed", "cur_vol", "avg_vol",
+    # ranges / vol
+    "hv_rank", "hv30", "iv_rank_lo", "iv_rank_hi", "low_52w", "high_52w",
+    "garch_vol", "garch_expand", "garch_contract",
+    # relative strength
+    "rs_ratio", "rs_strong", "rs_weak", "beta",
+)
+
+
+def live_params():
+    """
+    The rule parameters the live scanner runs with: the WFO-applied values
+    (scan_state["wfo_params"]) plus the UI toggles.  The backtest receives the
+    same dict shape, so a parameter can't exist in one place and not the other.
+    """
+    w = scan_state.get("wfo_params", {}) or {}
+    return {
+        "rsi_oversold":         RSI_OVERSOLD,
+        "rsi_overbought":       RSI_OVERBOUGHT,
+        "bull_min":             w.get("bull_min", 1),
+        "bear_min":             w.get("bear_min", 2),
+        "adx_threshold":        w.get("adx_threshold", 30),
+        "garch_mode":           w.get("garch_mode", "off"),
+        "require_green_candle": REQUIRE_GREEN_CANDLE,
+        "require_red_candle":   REQUIRE_RED_CANDLE,
+    }
+
+
+def live_market_ctx():
+    """Market context for the live scanner, same keys as ctx_at() builds for a past bar."""
+    vix   = get_vix()
+    vix3m = get_vix3m()
+    fed   = get_fed_context() or {}
+    return {
+        "vix":            vix,
+        "vix3m":          vix3m,
+        "regime":         vix_regime(vix),
+        "vix_ts":         vix_term_structure(vix, vix3m),
+        "market_trend":   get_market_trend(),
+        "pre_fed":        bool(fed.get("pre_fed_window")),
+        "post_fed":       bool(fed.get("post_fed_window")),
+        "yield_inverted": bool(fed.get("yield_inverted")),
+        "yield_steep":    bool(fed.get("yield_steep")),
+        "irx":            fed.get("irx"),
+        "fvx":            fed.get("fvx"),
+        "yield_spread":   fed.get("yield_spread"),
+        "days_to_next_fed": fed.get("days_to_next_fed"),
+        "next_fed_date":  fed.get("next_fed_date"),
+        "macro":          get_macro_regime(),
+    }
+
+
+def _macd_cross_flags(diff):
+    """
+    Vectorised macd_crossover(lookback=3): for each bar look at the three newest
+    transitions, newest first; the first bull (prev<0, curr>=0) or bear
+    (prev>0, curr<=0) cross wins.  Bars 0-2 are False (fewer than 4 values).
+    """
+    n = len(diff)
+    bull = np.zeros(n, dtype=bool)
+    bear = np.zeros(n, dtype=bool)
+    for i in range(3, n):
+        for k in range(0, 3):
+            p, c = diff[i - k - 1], diff[i - k]
+            if p < 0 and c >= 0:
+                bull[i] = True
+                break
+            if p > 0 and c <= 0:
+                bear[i] = True
+                break
+    return bull, bear
+
+
+def _rsi_turning_up_flags(rsi):
+    """Vectorised rsi_turning_up(lookback=5): last of the 5 newest non-NaN RSI values > min(previous 4) + 1.5."""
+    n   = len(rsi)
+    out = np.zeros(n, dtype=bool)
+    tail = []                               # the newest ≤5 non-NaN values up to bar i
+    for i in range(n):
+        v = rsi[i]
+        if v == v:
+            tail.append(float(v))
+            if len(tail) > 5:
+                tail.pop(0)
+        if len(tail) >= 3:
+            out[i] = tail[-1] > min(tail[:-1]) + 1.5
+    return out
+
+
+def _hv_rank_array(hv30, window=252, min_values=60):
+    """Fraction (×100) of the trailing `window` HV values strictly below the current one — the live formula."""
+    n   = len(hv30)
+    out = np.full(n, 50.0)
+    valid = np.where(~np.isnan(hv30))[0]
+    if len(valid) == 0:
+        return out
+    first = valid[0]
+    for i in range(first, n):
+        seg = hv30[max(first, i - window + 1): i + 1]
+        if len(seg) >= min_values and hv30[i] == hv30[i]:
+            out[i] = float((seg < hv30[i]).mean() * 100)
+    return out
+
+
+def indicator_frame(hist, spy_closes=None, sym=None, garch="last"):
+    """
+    Every per-bar indicator the entry/exit rules read, as numpy arrays aligned
+    to hist.index (tz-naive, normalised dates).  Computed exactly as the live
+    scanner's helpers did at the last bar — rounding, windows and warm-up
+    behaviour included — so evaluating bar i here equals a live scan on a frame
+    ending at bar i.
+
+    spy_closes : SPY Close series (for beta / relative strength); None → RS neutral
+    garch      : "last" = GJR-GARCH fit at the final bar only (live scan),
+                 "all"  = rolling refit every GARCH_REFIT_BARS (backtest, cached),
+                 None   = skip (garch_vol = trailing HV fallback)
+    Window-length notes (vs a live 1-year frame): 52-week range and HV rank use a
+    trailing 252-bar window; on a ≤252-bar frame that is the whole frame, exactly
+    as the live code behaves.  EWM-based series (ADX, MACD, EMA) are seeded from
+    the frame start; after ~200 bars the seed effect is < 1e-6.
+    """
+    closes  = hist["Close"].astype(float)
+    highs   = hist["High"].astype(float) if "High" in hist.columns else closes
+    lows    = hist["Low"].astype(float)  if "Low"  in hist.columns else closes
+    opens   = hist["Open"].astype(float) if "Open" in hist.columns else closes
+    volumes = hist["Volume"].astype(float) if "Volume" in hist.columns else pd.Series(np.nan, index=hist.index)
+    n = len(closes)
+
+    idx = pd.DatetimeIndex(hist.index)
+    if idx.tz is not None:
+        idx = idx.tz_localize(None)
+    idx = idx.normalize()
+
+    rsi_s = calc_rsi(closes, RSI_PERIOD)
+    bb_u, bb_m, bb_l = calc_bb(closes, BB_PERIOD, BB_STD_DEV)
+    dc_u, dc_m, dc_l = calc_donchian(hist, DC_PERIOD)
+    mfi_s = calc_mfi(hist, period=14)
+    ma50  = closes.rolling(50).mean()
+    ma200 = closes.rolling(200).mean()
+    adx_s, pdi_s, ndi_s = calc_adx(hist)
+    nan_s = pd.Series(np.nan, index=closes.index)
+    if adx_s is None:
+        adx_s, pdi_s, ndi_s = nan_s, nan_s, nan_s
+    macd_line, macd_sig, macd_hist = calc_macd(closes)
+    ema9  = closes.ewm(span=9,  adjust=False).mean()
+    ema21 = closes.ewm(span=21, adjust=False).mean()
+
+    rets   = closes.pct_change()
+    hv30_pct = rets.rolling(30).std() * np.sqrt(252) * 100           # annualised %, like the live code
+    hv_rank  = _hv_rank_array(hv30_pct.values)
+    # calc_iv_rank's range: min/max of 21-day realised vol over the trailing year
+    lret   = np.log(closes / closes.shift(1))
+    hv21   = lret.rolling(21).std() * np.sqrt(252) * 100
+    iv_lo  = hv21.rolling(252, min_periods=10).min()
+    iv_hi  = hv21.rolling(252, min_periods=10).max()
+    low_52w  = closes.rolling(252, min_periods=1).min()
+    high_52w = closes.rolling(252, min_periods=1).max()
+
+    macd_bull, macd_bear = _macd_cross_flags((macd_line - macd_sig).values)
+    ema_diff = (ema9 - ema21).values
+    ema_bull = np.zeros(n, dtype=bool); ema_bear = np.zeros(n, dtype=bool)
+    ema_cross_bull = np.zeros(n, dtype=bool); ema_cross_bear = np.zeros(n, dtype=bool)
+    if n >= 21:
+        ema_bull[20:] = (ema9.values > ema21.values)[20:]
+        ema_bear[20:] = (ema9.values < ema21.values)[20:]
+    if n >= 3:
+        ema_cross_bull[2:] = (ema_diff[:-2] <= 0) & (ema_diff[2:] > 0)
+        ema_cross_bear[2:] = (ema_diff[:-2] >= 0) & (ema_diff[2:] < 0)
+
+    reversal = _rsi_turning_up_flags(rsi_s.values)
+
+    # volume_confirmation(): today's volume ≥ 1.2 × mean of the PRIOR 20 bars (today excluded)
+    avg_vol = volumes.rolling(20).mean().shift(1)
+    vol_ok  = (volumes >= avg_vol * 1.2).values & ~np.isnan(avg_vol.values)
+
+    # Relative strength vs SPY (calc_rs_vs_spy / calc_beta on common dates)
+    rs_ratio  = np.zeros(n); rs_strong = np.zeros(n, dtype=bool)
+    rs_weak   = np.zeros(n, dtype=bool); beta_arr = np.ones(n)
+    if spy_closes is not None and len(spy_closes) > 0:
+        try:
+            stk = pd.Series(closes.values, index=idx)
+            spy = _naive_daily_index(spy_closes)
+            common = stk.index.intersection(spy.index)
+            if len(common) >= 21:
+                s = stk.loc[common]; p = spy.loc[common]
+                sr, mr = s.pct_change(), p.pct_change()
+                cov = sr.rolling(60).cov(mr); var = mr.rolling(60).var()
+                beta = (cov / var).clip(-3.0, 3.0).round(2)
+                beta = beta.where(~(var == 0), 1.0).fillna(1.0)
+                stk_ret = s / s.shift(20) - 1
+                spy_ret = p / p.shift(20) - 1
+                resid   = stk_ret - beta * spy_ret
+                al = pd.DataFrame({"resid": resid, "beta": beta}).reindex(stk.index).ffill()
+                r = al["resid"].values
+                rs_ratio  = np.where(np.isnan(r), 0.0, np.round(r * 100, 2))
+                rs_strong = np.where(np.isnan(r), False, r >  0.03)
+                rs_weak   = np.where(np.isnan(r), False, r < -0.03)
+                beta_arr  = al["beta"].fillna(1.0).values
+        except Exception as e:
+            print(f"  [RS] {sym or ''} relative-strength calc failed: {e}")
+
+    # GARCH forecast vs trailing realised vol
+    hv30_dec = (hv30_pct / 100.0).values
+    garch_new = {}
+    try:
+        if garch == "all":
+            garch_arr, garch_new = rolling_garch_forecast(sym or "?", pd.Series(closes.values, index=idx))
+        elif garch == "last" and n >= 61:
+            garch_arr = np.full(n, np.nan)
+            garch_arr[-1] = calc_garch_vol(closes)
+        else:
+            garch_arr = np.full(n, np.nan)
+    except Exception as e:                       # a GARCH failure must never kill a scan
+        print(f"  [GARCH] {sym or ''} forecast failed: {e}")
+        garch_arr = np.full(n, np.nan)
+    with np.errstate(invalid="ignore"):
+        g_exp = (garch_arr > hv30_dec * GARCH_EXPAND_RATIO)
+        g_con = (garch_arr < hv30_dec * GARCH_CONTRACT_RATIO)
+
+    return {
+        "index": idx, "n": n, "sym": sym,
+        "price": closes.values, "open": opens.values,
+        "prev_close": np.concatenate([[np.nan], closes.values[:-1]]),
+        "rsi": rsi_s.values, "bb_u": bb_u.values, "bb_m": bb_m.values, "bb_l": bb_l.values,
+        "dc_u": dc_u.values, "dc_m": dc_m.values, "dc_l": dc_l.values, "mfi": mfi_s.values,
+        "ma50": ma50.values, "ma200": ma200.values,
+        "adx": np.round(adx_s.values, 1), "pdi": np.round(pdi_s.values, 1), "ndi": np.round(ndi_s.values, 1),
+        "ema9": ema9.values, "ema21": ema21.values,
+        "macd": macd_line.values, "macd_sig": macd_sig.values, "macd_hist": macd_hist.values,
+        "macd_bull": macd_bull, "macd_bear": macd_bear,
+        "ema_bull": ema_bull, "ema_bear": ema_bear,
+        "ema_cross_bull": ema_cross_bull, "ema_cross_bear": ema_cross_bear,
+        "reversal_up": reversal, "vol_confirmed": vol_ok,
+        "cur_vol": volumes.values, "avg_vol": avg_vol.values,
+        "hv_rank": hv_rank, "hv30": hv30_dec, "iv_rank_lo": iv_lo.values, "iv_rank_hi": iv_hi.values,
+        "low_52w": low_52w.values, "high_52w": high_52w.values,
+        "garch_vol": garch_arr, "garch_expand": g_exp, "garch_contract": g_con,
+        "rs_ratio": rs_ratio, "rs_strong": rs_strong, "rs_weak": rs_weak, "beta": beta_arr,
+        "volume": volumes.values,
+        "_garch_new": garch_new,          # fresh GARCH fits (worker processes hand these back to the main cache)
+    }
+
+
+def _f(x):
+    """numpy scalar → float, NaN stays NaN (comparisons on NaN are False, like the live code)."""
+    return float(x)
+
+
+def _f_or_none(x):
+    v = float(x)
+    return None if v != v else v
+
+
+def ind_at(fr, i):
+    """The indicator scalars for bar i of an indicator_frame, with the live rounding/None rules."""
+    i = i if i >= 0 else fr["n"] + i
+    g = lambda k: fr[k][i]
+    mfi = _f(g("mfi"))
+    hv  = _f(g("hv_rank"))
+    return {
+        "i": i, "date": fr["index"][i],
+        "price": _f(g("price")), "open": _f(g("open")), "prev_close": _f(g("prev_close")),
+        "rsi": _f(g("rsi")), "bb_u": _f(g("bb_u")), "bb_m": _f(g("bb_m")), "bb_l": _f(g("bb_l")),
+        "dc_u": _f(g("dc_u")), "dc_m": _f(g("dc_m")), "dc_l": _f(g("dc_l")),
+        "mfi": 50.0 if mfi != mfi else mfi,
+        "ma50": _f_or_none(g("ma50")), "ma200": _f_or_none(g("ma200")),
+        "adx": _f_or_none(g("adx")), "pdi": _f_or_none(g("pdi")), "ndi": _f_or_none(g("ndi")),
+        "macd": _f(g("macd")), "macd_sig": _f(g("macd_sig")), "macd_hist": _f(g("macd_hist")),
+        "macd_bull": bool(g("macd_bull")), "macd_bear": bool(g("macd_bear")),
+        "ema_bull": bool(g("ema_bull")), "ema_bear": bool(g("ema_bear")),
+        "ema_cross_bull": bool(g("ema_cross_bull")), "ema_cross_bear": bool(g("ema_cross_bear")),
+        "reversal_up": bool(g("reversal_up")), "vol_confirmed": bool(g("vol_confirmed")),
+        "cur_vol": _f_or_none(g("cur_vol")), "avg_vol": _f_or_none(g("avg_vol")),
+        "hv_rank": 50.0 if hv != hv else hv, "hv30": _f_or_none(g("hv30")),
+        "iv_rank_lo": _f_or_none(g("iv_rank_lo")), "iv_rank_hi": _f_or_none(g("iv_rank_hi")),
+        "low_52w": _f(g("low_52w")), "high_52w": _f(g("high_52w")),
+        "garch_vol": _f_or_none(g("garch_vol")),
+        "garch_expand": bool(g("garch_expand")), "garch_contract": bool(g("garch_contract")),
+        "rs_ratio": _f(g("rs_ratio")), "rs_strong": bool(g("rs_strong")), "rs_weak": bool(g("rs_weak")),
+        "beta": _f(g("beta")),
+    }
+
+
+def evaluate_entry(ind, ctx, params, scan_condors=False):
+    """
+    THE entry rules.  Pure function of one bar's indicators (`ind`), the market
+    context for that date (`ctx`) and the rule parameters (`params`).
+    Returns every intermediate boolean the dashboard shows plus the five
+    has_* gate flags.  pc_bullish / pc_bearish are NOT inputs: the live scanner
+    only knows the put/call ratio after the gate, so it never affects whether a
+    strategy fires (it is added to the confluence counts for scoring afterwards).
+    """
+    p        = params
+    price    = ind["price"]
+    rsi      = ind["rsi"]
+    regime   = ctx.get("regime", "normal")
+    macro    = ctx.get("macro") or {}
+    rsi_os_base = p.get("rsi_oversold", RSI_OVERSOLD)
+    rsi_ob_base = p.get("rsi_overbought", RSI_OVERBOUGHT)
+
+    # VIX-regime adjusted RSI thresholds
+    if regime == "high":
+        rsi_os_thr = max(rsi_os_base - 5, 20)
+        rsi_ob_thr = min(rsi_ob_base + 5, 80)
+    elif regime == "low":
+        rsi_os_thr = rsi_os_base + 2
+        rsi_ob_thr = rsi_ob_base - 2
+    else:
+        rsi_os_thr = rsi_os_base
+        rsi_ob_thr = rsi_ob_base
+
+    dc_at_lower  = price <= ind["dc_l"] * 1.01
+    dc_at_upper  = price >= ind["dc_u"] * 0.99
+    dc_range_pct = (ind["dc_u"] - ind["dc_l"]) / price * 100 if price > 0 else 0
+    dc_squeeze   = dc_range_pct < 8
+
+    oversold   = rsi < rsi_os_thr or price < ind["bb_l"] or dc_at_lower
+    overbought = rsi > rsi_ob_thr or price > ind["bb_u"] or dc_at_upper
+
+    ma50, ma200 = ind["ma50"], ind["ma200"]
+    above_ma50 = ma50  is not None and price > ma50
+    trend_bull = ma200 is not None and price > ma200
+    trend_bear = ma200 is not None and price < ma200
+
+    adx, pdi, ndi = ind["adx"], ind["pdi"], ind["ndi"]
+    adx_thr      = float(p.get("adx_threshold", 30))
+    strong_trend = adx is not None and adx > adx_thr
+    adx_mode     = ("ranging" if (adx or 0) < 20 else "trending" if (adx or 0) > 30 else "normal")
+
+    near_52w_low  = price <= ind["low_52w"]  * 1.05
+    near_52w_high = price >= ind["high_52w"] * 0.95
+
+    reversal_up       = ind["reversal_up"]
+    _raw_knife        = trend_bear and strong_trend and (ndi or 0) > (pdi or 0)
+    exhaustion_bounce = rsi < 30 and reversal_up
+    falling_knife     = _raw_knife and not exhaustion_bounce
+    melt_up           = trend_bull and strong_trend and (pdi or 0) > (ndi or 0)
+
+    hv_rank = ind["hv_rank"]
+    hv_high = hv_rank >= 60
+    hv_low  = hv_rank <= 40
+    sig_mfi_os = ind["mfi"] < 20
+    sig_mfi_ob = ind["mfi"] > 80
+
+    regime_favors_buying = regime == "low"
+    vix_backw    = ctx.get("vix_ts") == "backwardation"
+    vix_contango = ctx.get("vix_ts") == "contango"
+
+    garch_mode = p.get("garch_mode", "off")
+    g_exp = ind["garch_expand"] if garch_mode != "off" else False
+    g_con = ind["garch_contract"] if garch_mode != "off" else False
+
+    _rng = adx_mode == "ranging"
+    _trd = adx_mode == "trending"
+    bull_signals = sum([
+        rsi < 30,
+        rsi < 30 and _rng,
+        price < ind["bb_l"],
+        price < ind["bb_l"] and _rng,
+        dc_at_lower,
+        reversal_up,
+        ind["macd_bull"],
+        ind["macd_bull"] and _trd,
+        ind["vol_confirmed"],
+        regime_favors_buying,
+        False,                              # pc_bullish — unknown at gate time (see docstring)
+        ind["rs_strong"],
+        hv_low,
+        near_52w_low,
+        vix_backw,
+        sig_mfi_os,
+        ind["ema_bull"],
+        ind["ema_cross_bull"],
+        g_exp and garch_mode == "confluence",   # vol expansion expected → long options favoured
+    ])
+    bear_signals = sum([
+        rsi > rsi_ob_thr,
+        rsi > rsi_ob_thr and _rng,
+        price > ind["bb_u"],
+        price > ind["bb_u"] and _rng,
+        dc_at_upper,
+        ind["macd_bear"],
+        ind["macd_bear"] and _trd,
+        ind["vol_confirmed"],
+        False,                              # pc_bearish — unknown at gate time
+        ind["rs_weak"],
+        near_52w_high,
+        sig_mfi_ob,
+        ind["ema_bear"],
+        ind["ema_cross_bear"],
+        g_exp and garch_mode == "confluence",
+    ])
+
+    bull_min = min(int(p.get("bull_min", 1)), 2)
+    bear_min = min(int(p.get("bear_min", 2)), 2)
+    market_trend = ctx.get("market_trend", "neutral")
+    if market_trend == "bull_strong":
+        bear_min = min(bear_min + 1, 3)
+    elif market_trend == "bear_strong":
+        bear_min = max(1, bear_min - 1)
+
+    prev_close   = ind["prev_close"]
+    have_prev    = prev_close == prev_close
+    green_candle = price > prev_close if have_prev else True
+    red_candle   = price < prev_close if have_prev else True
+    green_ok     = (not p.get("require_green_candle", False)) or green_candle or exhaustion_bounce
+    red_ok       = (not p.get("require_red_candle", False)) or red_candle
+    gap_pct      = ((ind["open"] - prev_close) / prev_close * 100) if (have_prev and ind["open"] == ind["open"]) else 0.0
+    gap_ok_buy_call = gap_pct >= -3.0
+    gap_ok_buy_put  = gap_pct <=  3.0
+    trend_ok_buy    = above_ma50 or rsi < 25
+
+    has_sell_put     = bool(macro.get("sell_put", True))     and (oversold or ind["macd_bear"]) and price <= MAX_PRICE_SELL and not falling_knife and gap_ok_buy_call
+    has_buy_call     = bool(macro.get("buy_call", True))     and oversold and bull_signals >= bull_min and not falling_knife and green_ok and trend_ok_buy and gap_ok_buy_call
+    has_buy_put      = bool(macro.get("buy_put", True))      and (overbought or ind["macd_bear"]) and bear_signals >= bear_min and not melt_up and red_ok and gap_ok_buy_put
+    has_covered_call = bool(macro.get("covered_call", True)) and price <= MAX_PRICE_SELL
+    has_iron_condor  = bool(macro.get("iron_condor", True))  and (not oversold) and (not overbought) and (35 <= rsi <= 65) and bool(scan_condors)
+    if garch_mode == "gate":
+        # Long premium only when the model expects vol to expand; short premium only when it expects contraction.
+        has_buy_call     = has_buy_call     and g_exp
+        has_buy_put      = has_buy_put      and g_exp
+        has_sell_put     = has_sell_put     and g_con
+        has_covered_call = has_covered_call and g_con
+
+    return {
+        "rsi_os_thr": rsi_os_thr, "rsi_ob_thr": rsi_ob_thr,
+        "dc_at_lower": dc_at_lower, "dc_at_upper": dc_at_upper,
+        "dc_range_pct": dc_range_pct, "dc_squeeze": dc_squeeze,
+        "oversold": oversold, "overbought": overbought,
+        "above_ma50": above_ma50, "trend_bull": trend_bull, "trend_bear": trend_bear,
+        "adx_thr": adx_thr, "strong_trend": strong_trend, "adx_mode": adx_mode,
+        "near_52w_low": near_52w_low, "near_52w_high": near_52w_high,
+        "exhaustion_bounce": exhaustion_bounce, "falling_knife": falling_knife, "melt_up": melt_up,
+        "hv_high": hv_high, "hv_low": hv_low, "sig_mfi_os": sig_mfi_os, "sig_mfi_ob": sig_mfi_ob,
+        "regime_favors_buying": regime_favors_buying, "vix_backw": vix_backw, "vix_contango": vix_contango,
+        "garch_mode": garch_mode, "garch_expand": g_exp, "garch_contract": g_con,
+        "bull_signals": bull_signals, "bear_signals": bear_signals,
+        "bull_min": bull_min, "bear_min": bear_min,
+        "green_candle": green_candle, "red_candle": red_candle, "green_ok": green_ok, "red_ok": red_ok,
+        "gap_pct": gap_pct, "gap_ok_buy_call": gap_ok_buy_call, "gap_ok_buy_put": gap_ok_buy_put,
+        "trend_ok_buy": trend_ok_buy,
+        "has_sell_put": has_sell_put, "has_buy_call": has_buy_call, "has_buy_put": has_buy_put,
+        "has_covered_call": has_covered_call, "has_iron_condor": has_iron_condor,
+        "any": any([has_sell_put, has_buy_call, has_buy_put, has_covered_call, has_iron_condor]),
+        # Individual flags recorded on signal-log entries and backtest trades (calibration inputs)
+        "flags": {
+            "sig_rsi_os": rsi < rsi_os_thr, "sig_bb_low": price < ind["bb_l"], "sig_dc_low": dc_at_lower,
+            "sig_reversal": reversal_up, "sig_macd_bull": ind["macd_bull"], "sig_vol_ok": ind["vol_confirmed"],
+            "sig_rsi_ob": rsi > rsi_ob_thr, "sig_bb_high": price > ind["bb_u"], "sig_dc_high": dc_at_upper,
+            "sig_macd_bear": ind["macd_bear"], "sig_above_ma50": above_ma50,
+            "sig_hv_high": hv_high, "sig_hv_low": hv_low,
+            "sig_rs_strong": ind["rs_strong"], "sig_rs_weak": ind["rs_weak"],
+            "sig_near_52w_low": near_52w_low, "sig_near_52w_high": near_52w_high,
+            "sig_mfi_os": sig_mfi_os, "sig_mfi_ob": sig_mfi_ob,
+            "sig_ema_bull": ind["ema_bull"], "sig_ema_bear": ind["ema_bear"],
+            "sig_ema_cross_bull": ind["ema_cross_bull"], "sig_ema_cross_bear": ind["ema_cross_bear"],
+            "sig_vix_backw": vix_backw, "sig_vix_contango": vix_contango,
+            "sig_regime_low": regime_favors_buying,
+            "sig_garch_expand": ind["garch_expand"], "sig_garch_contract": ind["garch_contract"],
+            "sig_exhaustion": exhaustion_bounce,
+        },
+    }
+
+
+def entry_blockers(ev, ind):
+    """Human-readable reason each strategy did NOT fire (for the debug endpoint)."""
+    price = ind["price"]
+    out = {}
+    out["sell_put"] = (
+        f"price > ${MAX_PRICE_SELL:.0f} limit" if price > MAX_PRICE_SELL
+        else "falling_knife" if ev["falling_knife"]
+        else "not oversold or no macd_bear" if not (ev["oversold"] or ind["macd_bear"])
+        else "gap down > 3%" if not ev["gap_ok_buy_call"]
+        else "garch gate (no contraction)" if ev["garch_mode"] == "gate" and not ev["garch_contract"]
+        else None if ev["has_sell_put"] else "macro regime disabled")
+    out["buy_call"] = (
+        "falling_knife (not exhaustion_bounce)" if ev["falling_knife"]
+        else "not oversold" if not ev["oversold"]
+        else f"bull_signals {ev['bull_signals']} < min {ev['bull_min']}" if ev["bull_signals"] < ev["bull_min"]
+        else "green_candle filter ON — needs green day or exhaustion bounce" if not ev["green_ok"]
+        else "below MA50 and RSI ≥ 25 (trend_ok_buy)" if not ev["trend_ok_buy"]
+        else "gap down > 3%" if not ev["gap_ok_buy_call"]
+        else "garch gate (no expansion)" if ev["garch_mode"] == "gate" and not ev["garch_expand"]
+        else None if ev["has_buy_call"] else "macro regime disabled")
+    out["buy_put"] = (
+        "melt_up" if ev["melt_up"]
+        else "not overbought or no macd_bear" if not (ev["overbought"] or ind["macd_bear"])
+        else f"bear_signals {ev['bear_signals']} < min {ev['bear_min']}" if ev["bear_signals"] < ev["bear_min"]
+        else "red_candle filter" if not ev["red_ok"]
+        else "gap up > 3%" if not ev["gap_ok_buy_put"]
+        else "garch gate (no expansion)" if ev["garch_mode"] == "gate" and not ev["garch_expand"]
+        else None if ev["has_buy_put"] else "macro regime disabled")
+    return out
+
+
+# ── Exit rules (shared by the live tracker and the backtest walk) ──────────
+
+def _price_exit_core(pct_change, prev_peak, days_held):
+    """
+    Price-based exits in the live tracker's order:
+      profit target → stop loss → trailing stop → stagnation.
+    days_held: trading days held (np.busday_count live, bars in the backtest).
+    Returns (triggered, reasons, peak_pct, code).
+    """
+    reasons, triggered, code = [], False, None
+    if pct_change >= SELL_PROFIT_TARGET:
+        triggered, code = True, "take_profit"
+        reasons.append(f"🎯 Profit target hit: +{pct_change:.1f}% (target +{SELL_PROFIT_TARGET}%)")
+    elif pct_change <= -SELL_STOP_LOSS:
+        triggered, code = True, "stop_loss"
+        reasons.append(f"🛑 Stop loss hit: {pct_change:.1f}% (limit -{SELL_STOP_LOSS}%)")
+
+    peak_pct = max(_as_float(prev_peak, -999.0), pct_change)
+    if peak_pct >= TRAIL_ACTIVATE_PCT and not triggered:
+        trailing_stop = peak_pct - TRAIL_LOCK_PCT
+        if pct_change <= trailing_stop:
+            triggered, code = True, "trailing_stop"
+            reasons.append(f"📉 Trailing stop: dropped to {pct_change:+.1f}% from peak +{peak_pct:.1f}% "
+                           f"(trail lock at {trailing_stop:+.1f}%)")
+
+    if days_held is not None and not triggered:
+        if days_held >= STAGNANT_DAYS and abs(pct_change) <= STAGNANT_RANGE:
+            triggered, code = True, "stagnation"
+            reasons.append(f"⏳ Stagnation exit: held {days_held} trading days with P&L {pct_change:+.1f}% "
+                           f"(within ±{STAGNANT_RANGE}%) — theta bleed, exit and redeploy")
+    return triggered, reasons, round(peak_pct, 2), code
+
+
+def _strategy_exit_check(strategy, price, rsi, bb_u, bb_l, strike=None, short_put=None, short_call=None):
+    """
+    The per-strategy RSI / Bollinger / strike exits from the live tracker.
+    Returns (triggered, reasons, signal_still_valid, note, code).
+    """
+    reasons, triggered, code, note = [], False, None, None
+    still_valid = True
+    if strategy == "buy_call":
+        if rsi >= SELL_RSI_BULL_TARGET:
+            triggered, code = True, "rsi_target"
+            reasons.append(f"📈 RSI recovered to {rsi:.1f} (target ≥{SELL_RSI_BULL_TARGET}) — mean reversion complete, take profit")
+        if price >= bb_u:
+            triggered, code = True, code or "bb_target"
+            reasons.append(f"📈 Price ${price:.2f} hit upper Bollinger Band ${bb_u:.2f} — extended, take profit")
+        still_valid = rsi < SELL_RSI_BULL_TARGET
+    elif strategy == "buy_put":
+        if rsi <= SELL_RSI_BEAR_TARGET:
+            triggered, code = True, "rsi_target"
+            reasons.append(f"📉 RSI pulled back to {rsi:.1f} (target ≤{SELL_RSI_BEAR_TARGET}) — mean reversion complete, take profit")
+        if price <= bb_l:
+            triggered, code = True, code or "bb_target"
+            reasons.append(f"📉 Price ${price:.2f} hit lower Bollinger Band ${bb_l:.2f} — extended, take profit")
+        still_valid = rsi > SELL_RSI_BEAR_TARGET
+    elif strategy == "sell_put":
+        if price < bb_l:
+            triggered, code = True, "bb_breach"
+            reasons.append(f"⚠️ Stock ${price:.2f} broke below BB lower ${bb_l:.2f} — short put at risk, consider closing")
+        if rsi > 55:
+            note = f"✅ RSI {rsi:.1f} — stock recovered, put likely near max profit"
+        still_valid = price >= bb_l
+    elif strategy == "covered_call":
+        k = _as_float(strike)
+        if price > k * 1.05:
+            triggered, code = True, "assignment_risk"
+            reasons.append(f"⚠️ Stock ${price:.2f} running past strike ${strike} — call may be assigned")
+        still_valid = True
+    elif strategy == "iron_condor":
+        sp, sc = _as_float(short_put), _as_float(short_call)
+        if sp and sc:
+            if price <= sp:
+                triggered, code = True, "short_put_breach"
+                reasons.append(f"⚠️ Stock ${price:.2f} broke below short put ${sp:.2f}")
+            elif price >= sc:
+                triggered, code = True, "short_call_breach"
+                reasons.append(f"⚠️ Stock ${price:.2f} broke above short call ${sc:.2f}")
+        still_valid = (sp < price < sc) if (sp and sc) else True
+    return triggered, reasons, still_valid, note, code
+
+
 def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch_fn=None):
     """
     Evaluate one ticker for all strategies.
@@ -1757,269 +2458,55 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
         #   Sell Puts & Covered Calls: price ≤ MAX_PRICE_SELL
         #   Buy Calls & Buy Puts: no upper price cap
 
-        closes        = hist["Close"]
-        rsi           = calc_rsi(closes, RSI_PERIOD)
-        bb_u, bb_m, bb_l = calc_bb(closes, BB_PERIOD, BB_STD_DEV)
-        dc_u, dc_m, dc_l = calc_donchian(hist, DC_PERIOD)
-
-        cur_rsi  = float(rsi.iloc[-1])
-        cur_bb_u = float(bb_u.iloc[-1])
-        cur_bb_m = float(bb_m.iloc[-1])
-        cur_bb_l = float(bb_l.iloc[-1])
-
-        # ── MFI (Money Flow Index) ────────────────────────────
-        mfi_ser  = calc_mfi(hist, period=14)
-        cur_mfi  = float(mfi_ser.iloc[-1]) if not pd.isna(mfi_ser.iloc[-1]) else 50.0
-        sig_mfi_os = cur_mfi < 20    # oversold on volume — strong buy confirmation
-        sig_mfi_ob = cur_mfi > 80    # overbought on volume — strong sell confirmation
-        cur_dc_u = float(dc_u.iloc[-1])
-        cur_dc_m = float(dc_m.iloc[-1])
-        cur_dc_l = float(dc_l.iloc[-1])
-
-        # Donchian signals — price at range extreme (independent of volatility)
-        dc_at_lower   = price <= cur_dc_l * 1.01   # within 1% of lower channel
-        dc_at_upper   = price >= cur_dc_u * 0.99   # within 1% of upper channel
-        # Donchian squeeze: range is narrow relative to price (consolidation)
-        dc_range_pct  = (cur_dc_u - cur_dc_l) / price * 100 if price > 0 else 0
-        dc_squeeze    = dc_range_pct < 8            # < 8% range = tight consolidation
-
-        oversold    = cur_rsi < RSI_OVERSOLD or price < cur_bb_l or dc_at_lower
-        overbought  = cur_rsi > RSI_OVERBOUGHT or price > cur_bb_u or dc_at_upper
-        reversal_up = rsi_turning_up(rsi)
-
-        # ── MA50 and MA200 trend direction ────────────────────
-        ma50_ser  = closes.rolling(50).mean()
-        ma200_ser = closes.rolling(200).mean()
-        ma50      = float(ma50_ser.iloc[-1])  if not pd.isna(ma50_ser.iloc[-1])  else None
-        ma200     = float(ma200_ser.iloc[-1]) if not pd.isna(ma200_ser.iloc[-1]) else None
-        above_ma50 = ma50  is not None and price > ma50
-        trend_bull = ma200 is not None and price > ma200   # stock above 200 MA
-        trend_bear = ma200 is not None and price < ma200   # stock below 200 MA
-
-        # ── Relative strength vs SPY (20-day return ratio) ───
-        rs_ratio, rs_strong, rs_weak, beta = calc_rs_vs_spy(closes)
-
-        # ── HV Rank (options cheapness / expensiveness) ──────
-        _rets    = closes.pct_change()
-        _hv30    = (_rets.rolling(30).std() * np.sqrt(252) * 100).dropna()
-        # Percentile of today's 30-day HV within the available history.
-        # (rolling(252).rank() needed 282 bars; 1y history has ~250, so this
-        # was always NaN and hv_rank was stuck at the neutral 50.)
-        hv_rank  = float((_hv30 < _hv30.iloc[-1]).mean() * 100) if len(_hv30) >= 60 else 50.0
-        hv_high  = hv_rank >= 60   # options expensive → favour selling
-        hv_low   = hv_rank <= 40   # options cheap → favour buying
-
-        # ── ADX — trend strength ──────────────────────────────
-        adx_ser, pdi_ser, ndi_ser = calc_adx(hist)
-        cur_adx = round(float(adx_ser.iloc[-1]), 1) if adx_ser is not None else None
-        cur_pdi = round(float(pdi_ser.iloc[-1]), 1) if pdi_ser is not None else None
-        cur_ndi = round(float(ndi_ser.iloc[-1]), 1) if ndi_ser is not None else None
-        # ADX threshold is one of the WFO-optimised parameters; it used to be
-        # hard-coded here so applying an optimizer result changed nothing.
-        _adx_thr     = float(scan_state.get("wfo_params", {}).get("adx_threshold", 30))
-        strong_trend = cur_adx is not None and cur_adx > _adx_thr
-
-        # ── ADX mode: ranging vs trending ────────────────────────
-        # Ranging (ADX < 20): mean-reversion signals (RSI, BB) are more reliable
-        # Trending (ADX > 30): momentum signals (MACD, MA crossovers) are more reliable
-        adx_mode = ("ranging"  if (cur_adx or 0) < 20
-                    else "trending" if (cur_adx or 0) > 30
-                    else "normal")
-
-        # ── 52-week low / high proximity ─────────────────────────
-        low_52w  = float(closes.rolling(252).min().iloc[-1]) if len(closes) >= 252 else float(closes.min())
-        high_52w = float(closes.rolling(252).max().iloc[-1]) if len(closes) >= 252 else float(closes.max())
-        near_52w_low  = price <= low_52w  * 1.05   # within 5% of 52-week low
-        near_52w_high = price >= high_52w * 0.95   # within 5% of 52-week high
-
-        # Knife / roar guards:
-        #   falling_knife = confirmed strong downtrend → protect Buy Call and Sell Put
-        _raw_knife = trend_bear and strong_trend and (cur_ndi or 0) > (cur_pdi or 0)
-        # Exception: deeply oversold (RSI < 30) with RSI turning up = exhaustion bounce
-        #   — allow even in a downtrend when selling is likely exhausted.
-        #   Threshold raised from 25→30 so more stocks pass in broad market sell-offs.
-        exhaustion_bounce = cur_rsi < 30 and reversal_up
-        falling_knife = _raw_knife and not exhaustion_bounce
-
-        #   melt_up = confirmed strong uptrend → protect Buy Put
-        melt_up = trend_bull and strong_trend and (cur_pdi or 0) > (cur_ndi or 0)
-
-        # ── MACD (uses existing history data — no extra network call) ──
-        macd_line, macd_sig_line, macd_hist_ser = calc_macd(closes)
-        macd_cross   = macd_crossover(macd_line, macd_sig_line)
-        macd_bull    = macd_cross == "bull"
-        macd_bear    = macd_cross == "bear"
-        cur_macd     = round(float(macd_line.iloc[-1]),   4)
-        cur_macd_sig = round(float(macd_sig_line.iloc[-1]), 4)
-        cur_macd_h   = round(float(macd_hist_ser.iloc[-1]), 4)
-
-        # ── EMA 9 / 21 crossover (short-term momentum) ──
-        # ema9 > ema21 = short-term momentum bullish
-        # ema9 < ema21 = short-term momentum bearish
-        # Cross within last 3 bars = fresh signal
-        ema9      = closes.ewm(span=9,  adjust=False).mean()
-        ema21     = closes.ewm(span=21, adjust=False).mean()
-        ema_bull  = bool(ema9.iloc[-1] > ema21.iloc[-1]) if len(closes) >= 21 else False
-        ema_bear  = bool(ema9.iloc[-1] < ema21.iloc[-1]) if len(closes) >= 21 else False
-        # Fresh cross within last 3 bars (stronger signal)
-        try:
-            ema_diff      = (ema9 - ema21).iloc[-3:].values
-            ema_cross_bull = bool((ema_diff[0] <= 0) and (ema_diff[-1] > 0))
-            ema_cross_bear = bool((ema_diff[0] >= 0) and (ema_diff[-1] < 0))
-        except Exception:
-            ema_cross_bull = ema_cross_bear = False
-
-        # ── VIX regime ────────────────────────────────────────
-        cur_vix    = get_vix()
-        regime     = vix_regime(cur_vix)
-        # In high-VIX environments prefer selling premium; in low-VIX prefer buying
-        regime_favors_selling = regime == "high"
-        regime_favors_buying  = regime == "low"
-
-        # ── VIX term structure (VIX vs VIX3M) ────────────────────
-        cur_vix3m    = get_vix3m()
-        vix_ts       = vix_term_structure(cur_vix, cur_vix3m)
-        vix_backw    = vix_ts == "backwardation"   # panic → reversals more likely
-        vix_contango = vix_ts == "contango"        # calm  → sell premium more reliable
-
-        # ── Fed meeting proximity + yield curve sentiment ─────
-        _fed         = get_fed_context()
-        pre_fed      = _fed["pre_fed_window"]      # ~3 trading days before FOMC
-        post_fed     = _fed["post_fed_window"]     # 0-2 days after FOMC
-        yield_inv    = _fed["yield_inverted"]      # 3m > 5y → recession/cut pricing
-        yield_steep  = _fed["yield_steep"]         # 5y - 3m > 1.5% → growth pricing
-
-        # ── VIX-adjusted RSI thresholds ───────────────────────
-        # High fear (VIX > 25): stocks stay oversold longer → require more extreme RSI
-        # Low VIX  (< 15):      options are cheap → slightly relaxed thresholds
-        if regime == "high":
-            _rsi_os_thr = max(RSI_OVERSOLD - 5, 20)
-            _rsi_ob_thr = min(RSI_OVERBOUGHT + 5, 80)
-        elif regime == "low":
-            _rsi_os_thr = RSI_OVERSOLD + 2
-            _rsi_ob_thr = RSI_OVERBOUGHT - 2
-        else:
-            _rsi_os_thr = RSI_OVERSOLD
-            _rsi_ob_thr = RSI_OVERBOUGHT
-        # Re-evaluate with regime-adjusted thresholds (overrides the initial values above)
-        oversold   = cur_rsi < _rsi_os_thr or price < cur_bb_l or dc_at_lower
-        overbought = cur_rsi > _rsi_ob_thr or price > cur_bb_u or dc_at_upper
-
-        # ── Volume confirmation ───────────────────────────────
-        vol_confirmed, cur_vol, avg_vol = volume_confirmation(hist)
-
-        # ── Confluence counters ────────────────────────────────
-        # P/C ratio needs the option chain, which is only fetched after the
-        # early-exit gate — it is added to the counters below once known.
-        pc_bullish = False
-        pc_bearish = False
-
-        # ADX mode: in ranging markets RSI/BB count double; in trending MACD/MA count double
-        _rng = adx_mode == "ranging"
-        _trd = adx_mode == "trending"
-        # Buy Call needs 2+ bullish signals to avoid catching a falling knife
-        bull_signals = sum([
-            cur_rsi < 30,
-            cur_rsi < 30 and _rng,          # double-weight RSI in ranging market
-            price < cur_bb_l,
-            price < cur_bb_l and _rng,      # double-weight BB in ranging market
-            dc_at_lower,
-            reversal_up,
-            macd_bull,
-            macd_bull and _trd,             # double-weight MACD in trending market
-            vol_confirmed,
-            regime_favors_buying,
-            pc_bullish,
-            rs_strong,
-            hv_low,
-            near_52w_low,                   # near annual floor = strong support
-            vix_backw,                      # panic spike → reversal signal
-            sig_mfi_os,                     # MFI oversold = volume confirms selling exhaustion
-            ema_bull,                       # EMA9 above EMA21 = short-term momentum aligned
-            ema_cross_bull,                 # Fresh EMA9/21 bullish cross
-        ])
-        # Buy Put needs 2+ bearish signals to avoid shorting a roaring bull
-        bear_signals = sum([
-            cur_rsi > _rsi_ob_thr,              # regime-adjusted (same default as RSI_OVERBOUGHT)
-            cur_rsi > _rsi_ob_thr and _rng,     # double-weight in ranging
-            price > cur_bb_u,
-            price > cur_bb_u and _rng,
-            dc_at_upper,
-            macd_bear,
-            macd_bear and _trd,
-            vol_confirmed,
-            pc_bearish,
-            rs_weak,
-            near_52w_high,                  # near annual ceiling = strong resistance
-            sig_mfi_ob,                     # MFI overbought = volume confirms buying exhaustion
-            ema_bear,                       # EMA9 below EMA21 = short-term momentum aligned bearish
-            ema_cross_bear,                 # Fresh EMA9/21 bearish cross
-        ])
-
-        # ── WFO param overrides (applied via /api/optimizer/apply) ──
-        _wfo_p    = scan_state.get("wfo_params", {})
-        # Cap WFO recommendations — WFO optimises on historical data and can
-        # recommend thresholds that are too strict for current market conditions.
-        # bull_min capped at 2: requiring 3+ simultaneous bull signals is too rare
-        # bear_min capped at 2: SPY regime can add +1 on top, so max effective = 3
-        _bull_min = min(_wfo_p.get("bull_min", 1), 2)
-        _bear_min = min(_wfo_p.get("bear_min", 2), 2)
-
-        # ── Broad market regime (SPY 200 MA + ADX) ───────────────
-        # In a confirmed broad bull market, raise the bar for buy puts —
-        # overbought stocks in a rising tide can stay overbought far longer.
-        # bull_strong → require 3 bear signals instead of 2
-        # bear_strong → lower the bar for buy puts to 1 (broad selling aids the trade)
-        market_trend = get_market_trend()
-        if market_trend == "bull_strong":
-            _bear_min = min(_bear_min + 1, 3)   # add 1, cap at 3
-        elif market_trend == "bear_strong":
-            _bear_min = max(1, _bear_min - 1)  # easier gate when broad market is falling
-
-        # ── Green candle confirmation (buy calls only, optional) ──
-        # True when the latest close is above the previous close —
-        # buyers showed up and price is already bouncing.
-        # Bypassed automatically when exhaustion_bounce is confirmed —
-        # RSI < 30 + RSI turning up is a stronger signal than a single green day.
-        green_candle = float(closes.iloc[-1]) > float(closes.iloc[-2]) if len(closes) >= 2 else True
-        green_ok     = (not REQUIRE_GREEN_CANDLE) or green_candle or exhaustion_bounce
-
-        # ── Red candle confirmation (buy puts only, optional) ──
-        # True when the latest close is below the previous close —
-        # sellers showed up and the rollover has actually started.
-        red_candle = float(closes.iloc[-1]) < float(closes.iloc[-2]) if len(closes) >= 2 else True
-        red_ok     = (not REQUIRE_RED_CANDLE) or red_candle
-
-        # ── Gap analysis ── (filter out entries on adverse opening gaps)
-        # gap_pct = (today's open vs yesterday's close).
-        # Stocks that gap >3% AGAINST the direction we want to bet usually keep
-        # going — don't try to catch a knife or fade a runaway move.
-        try:
-            opens = hist["Open"]
-            if len(opens) >= 2 and len(closes) >= 2:
-                gap_pct = (float(opens.iloc[-1]) - float(closes.iloc[-2])) / float(closes.iloc[-2]) * 100
-            else:
-                gap_pct = 0.0
-        except Exception:
-            gap_pct = 0.0
-        # Buy Call: avoid if gapped DOWN > 3% (continuation risk)
-        # Buy Put:  avoid if gapped UP > 3% (continuation risk)
-        gap_ok_buy_call = gap_pct >= -3.0
-        gap_ok_buy_put  = gap_pct <=  3.0
-
-        # Early exit — skip meta + options fetch if no strategy can trigger
-        # MA50 trend gate: only buy calls if above 50-day MA OR deeply oversold (RSI < 25)
-        trend_ok_buy     = above_ma50 or cur_rsi < 25
-        # Macro regime gate — disables strategies that don't fit current regime
-        macro            = get_macro_regime()
-        has_sell_put     = macro["sell_put"]     and (oversold or macd_bear) and price <= MAX_PRICE_SELL and not falling_knife and gap_ok_buy_call
-        has_buy_call     = macro["buy_call"]     and oversold and bull_signals >= _bull_min and not falling_knife and green_ok and trend_ok_buy and gap_ok_buy_call
-        has_buy_put      = macro["buy_put"]      and (overbought or macd_bear) and bear_signals >= _bear_min and not melt_up and red_ok and gap_ok_buy_put
-        has_covered_call = macro["covered_call"] and price <= MAX_PRICE_SELL
-        # Iron condors are skipped during main scan (slow); run separately on demand
-        has_iron_condor  = macro["iron_condor"]  and (not oversold) and (not overbought) and (35 <= cur_rsi <= 65) and scan_condors
-        if not any([has_sell_put, has_buy_call, has_buy_put, has_covered_call, has_iron_condor]):
+        # ── Indicators + entry rules: the SAME engine the backtest runs ──
+        # indicator_frame() computes every per-bar series; ind_at() takes the
+        # last bar; live_market_ctx() is today's market context; evaluate_entry()
+        # applies the rules.  Nothing below this point decides whether a strategy
+        # fires — that is all inside evaluate_entry (shared with the backtest).
+        closes = hist["Close"]
+        fr     = indicator_frame(hist, spy_closes=_spy_cache.get("closes"), sym=sym, garch="last")
+        ind    = ind_at(fr, -1)
+        ctx    = live_market_ctx()
+        ev     = evaluate_entry(ind, ctx, live_params(), scan_condors=scan_condors)
+        if not ev["any"]:
             return None
+
+        # ── Unpack for the annotation / scoring code below (names kept) ──
+        cur_rsi  = ind["rsi"];   cur_bb_u = ind["bb_u"]; cur_bb_m = ind["bb_m"]; cur_bb_l = ind["bb_l"]
+        cur_dc_u = ind["dc_u"];  cur_dc_m = ind["dc_m"]; cur_dc_l = ind["dc_l"]
+        cur_mfi  = ind["mfi"];   sig_mfi_os = ev["sig_mfi_os"]; sig_mfi_ob = ev["sig_mfi_ob"]
+        dc_at_lower, dc_at_upper = ev["dc_at_lower"], ev["dc_at_upper"]
+        dc_range_pct, dc_squeeze = ev["dc_range_pct"], ev["dc_squeeze"]
+        oversold, overbought     = ev["oversold"], ev["overbought"]
+        reversal_up              = ind["reversal_up"]
+        ma50, ma200              = ind["ma50"], ind["ma200"]
+        above_ma50, trend_bull, trend_bear = ev["above_ma50"], ev["trend_bull"], ev["trend_bear"]
+        rs_ratio, rs_strong, rs_weak, beta = ind["rs_ratio"], ind["rs_strong"], ind["rs_weak"], ind["beta"]
+        hv_rank, hv_high, hv_low = ind["hv_rank"], ev["hv_high"], ev["hv_low"]
+        cur_adx, cur_pdi, cur_ndi = ind["adx"], ind["pdi"], ind["ndi"]
+        strong_trend, adx_mode   = ev["strong_trend"], ev["adx_mode"]
+        low_52w, high_52w        = ind["low_52w"], ind["high_52w"]
+        near_52w_low, near_52w_high = ev["near_52w_low"], ev["near_52w_high"]
+        exhaustion_bounce, falling_knife, melt_up = ev["exhaustion_bounce"], ev["falling_knife"], ev["melt_up"]
+        macd_bull, macd_bear     = ind["macd_bull"], ind["macd_bear"]
+        cur_macd, cur_macd_sig, cur_macd_h = round(ind["macd"], 4), round(ind["macd_sig"], 4), round(ind["macd_hist"], 4)
+        cur_vix, cur_vix3m, regime, vix_ts = ctx["vix"], ctx["vix3m"], ctx["regime"], ctx["vix_ts"]
+        vix_backw, vix_contango  = ev["vix_backw"], ev["vix_contango"]
+        pre_fed, post_fed        = ctx["pre_fed"], ctx["post_fed"]
+        yield_inv, yield_steep   = ctx["yield_inverted"], ctx["yield_steep"]
+        _rsi_os_thr, _rsi_ob_thr = ev["rsi_os_thr"], ev["rsi_ob_thr"]
+        vol_confirmed, cur_vol, avg_vol = ind["vol_confirmed"], ind["cur_vol"], ind["avg_vol"]
+        bull_signals, bear_signals = ev["bull_signals"], ev["bear_signals"]
+        market_trend             = ctx["market_trend"]
+        green_candle, red_candle = ev["green_candle"], ev["red_candle"]
+        has_sell_put, has_buy_call, has_buy_put = ev["has_sell_put"], ev["has_buy_call"], ev["has_buy_put"]
+        has_covered_call, has_iron_condor       = ev["has_covered_call"], ev["has_iron_condor"]
+        garch_vol = ind["garch_vol"]
+        # Series for the chart block
+        bb_u = pd.Series(fr["bb_u"], index=closes.index); bb_m = pd.Series(fr["bb_m"], index=closes.index)
+        bb_l = pd.Series(fr["bb_l"], index=closes.index); rsi  = pd.Series(fr["rsi"],  index=closes.index)
+        macd_line = pd.Series(fr["macd"], index=closes.index); macd_sig_line = pd.Series(fr["macd_sig"], index=closes.index)
+        macd_hist_ser = pd.Series(fr["macd_hist"], index=closes.index)
 
         # ── Network data (only fetched when a signal is possible) ─
         # In the main scan nothing was prefetched: the gate above ran on bulk
@@ -2145,17 +2632,23 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
             "vix_backw":     vix_backw,
             "vix_contango":  vix_contango,
             # Fed meeting proximity + yield curve
-            "days_to_next_fed":    _fed["days_to_next_fed"],
-            "next_fed_date":       _fed["next_fed_date"],
+            "days_to_next_fed":    ctx["days_to_next_fed"],
+            "next_fed_date":       ctx["next_fed_date"],
             "pre_fed_window":      pre_fed,
             "post_fed_window":     post_fed,
-            "irx":                 _fed["irx"],
-            "fvx":                 _fed["fvx"],
-            "yield_spread":        _fed["yield_spread"],
+            "irx":                 ctx["irx"],
+            "fvx":                 ctx["fvx"],
+            "yield_spread":        ctx["yield_spread"],
             "yield_inverted":      yield_inv,
             "yield_steep":         yield_steep,
-            # GARCH(1,1) volatility estimate
-            "garch_vol":     round(calc_garch_vol(closes) * 100, 1),  # as % e.g. 32.4
+            # GJR-GARCH forecast vs trailing realised vol (same arrays the backtest uses)
+            "garch_vol":      round(garch_vol * 100, 1) if garch_vol is not None else None,   # as % e.g. 32.4
+            "hv30":           round(ind["hv30"] * 100, 1) if ind["hv30"] is not None else None,
+            "garch_expand":   ind["garch_expand"],
+            "garch_contract": ind["garch_contract"],
+            "garch_mode":     ev["garch_mode"],
+            # Every individual flag the rules looked at (signal log + calibration read these)
+            "flags":          ev["flags"],
             # MFI
             "mfi":           round(cur_mfi, 1),
             "sig_mfi_os":    sig_mfi_os,
@@ -2702,36 +3195,13 @@ def _fetch_option_quote(sym, exp, strike, otype, tkr=None, chain=None):
 
 def _price_exit_check(pct_change, prev_peak, tracked_at):
     """
-    Evaluate the price-based exits for an open position:
-    profit target, stop loss, trailing stop, stagnation.
-    Returns (triggered, reasons, peak_pct).  Pure function — no I/O.
+    Live wrapper around the shared price-exit rules (_price_exit_core, defined
+    with the signal engine): converts the position's tracked_at timestamp into
+    trading days held.  Returns (triggered, reasons, peak_pct).
     """
-    reasons   = []
-    triggered = False
-    if pct_change >= SELL_PROFIT_TARGET:
-        triggered = True
-        reasons.append(f"🎯 Profit target hit: +{pct_change:.1f}% (target +{SELL_PROFIT_TARGET}%)")
-    elif pct_change <= -SELL_STOP_LOSS:
-        triggered = True
-        reasons.append(f"🛑 Stop loss hit: {pct_change:.1f}% (limit -{SELL_STOP_LOSS}%)")
-
-    # Trailing stop — once P&L has reached TRAIL_ACTIVATE_PCT, lock in (peak − TRAIL_LOCK_PCT)
-    peak_pct = max(_as_float(prev_peak, -999.0), pct_change)
-    if peak_pct >= TRAIL_ACTIVATE_PCT and not triggered:
-        trailing_stop = peak_pct - TRAIL_LOCK_PCT
-        if pct_change <= trailing_stop:
-            triggered = True
-            reasons.append(f"📉 Trailing stop: dropped to {pct_change:+.1f}% from peak +{peak_pct:.1f}% "
-                           f"(trail lock at {trailing_stop:+.1f}%)")
-
-    # Stagnation — theta bleeds long options; flat after N trading days → redeploy
-    if tracked_at and not triggered:
-        days_held = _trading_days_since(tracked_at)
-        if days_held >= STAGNANT_DAYS and abs(pct_change) <= STAGNANT_RANGE:
-            triggered = True
-            reasons.append(f"⏳ Stagnation exit: held {days_held} trading days with P&L {pct_change:+.1f}% "
-                           f"(within ±{STAGNANT_RANGE}%) — theta bleed, exit and redeploy")
-    return triggered, reasons, round(peak_pct, 2)
+    days_held = _trading_days_since(tracked_at) if tracked_at else None
+    triggered, reasons, peak, _ = _price_exit_core(pct_change, prev_peak, days_held)
+    return triggered, reasons, peak
 
 
 def _apply_price_update(position, sig, mid, bid, ask, quality):
@@ -3259,73 +3729,18 @@ def get_sell_signal(position: dict) -> dict:
                 if prev_sig.get(k) is not None:
                     result[k] = prev_sig[k]
 
-        # ── RSI / BB reversal checks ───────────────────────────
-        if strategy == "buy_call":
-            # Entered on oversold bounce — exit when RSI reaches neutral or price hits upper BB
-            if cur_rsi >= SELL_RSI_BULL_TARGET:
-                result["triggered"] = True
-                result["reasons"].append(
-                    f"📈 RSI recovered to {cur_rsi:.1f} (target ≥{SELL_RSI_BULL_TARGET}) — mean reversion complete, take profit"
-                )
-            if price >= cur_bb_u:
-                result["triggered"] = True
-                result["reasons"].append(
-                    f"📈 Price ${price:.2f} hit upper Bollinger Band ${cur_bb_u:.2f} — extended, take profit"
-                )
-            # Signal still valid while RSI is below the exit threshold (bounce in progress)
-            result["signal_still_valid"] = cur_rsi < SELL_RSI_BULL_TARGET
-
-        elif strategy == "buy_put":
-            # Entered on overbought pullback — exit when RSI reaches neutral or price hits lower BB
-            if cur_rsi <= SELL_RSI_BEAR_TARGET:
-                result["triggered"] = True
-                result["reasons"].append(
-                    f"📉 RSI pulled back to {cur_rsi:.1f} (target ≤{SELL_RSI_BEAR_TARGET}) — mean reversion complete, take profit"
-                )
-            if price <= cur_bb_l:
-                result["triggered"] = True
-                result["reasons"].append(
-                    f"📉 Price ${price:.2f} hit lower Bollinger Band ${cur_bb_l:.2f} — extended, take profit"
-                )
-            # Still valid while RSI is above the exit threshold (pullback in progress)
-            result["signal_still_valid"] = cur_rsi > SELL_RSI_BEAR_TARGET
-
-        elif strategy == "sell_put":
-            # Sold put for premium — warn if stock breaks below lower BB (put at risk)
-            if price < cur_bb_l:
-                result["triggered"] = True
-                result["reasons"].append(
-                    f"⚠️ Stock ${price:.2f} broke below BB lower ${cur_bb_l:.2f} — short put at risk, consider closing"
-                )
-            # Good outcome: RSI has recovered, put is near worthless or at max profit
-            if cur_rsi > 55:
-                result["note"] = f"✅ RSI {cur_rsi:.1f} — stock recovered, put likely near max profit"
-            # Still valid while stock is above the lower band
-            result["signal_still_valid"] = price >= cur_bb_l
-
-        elif strategy == "covered_call":
-            if price > float(entry.get("strike", 0)) * 1.05:
-                result["triggered"] = True
-                result["reasons"].append(
-                    f"⚠️ Stock ${price:.2f} running past strike ${entry.get('strike')} — call may be assigned"
-                )
-            result["signal_still_valid"] = True
-
-        elif strategy == "iron_condor":
-            sp = float(position.get("legs", {}).get("short_put", {}).get("strike", 0))
-            sc = float(position.get("legs", {}).get("short_call", {}).get("strike", 0))
-            if sp and sc:
-                if price <= sp:
-                    result["triggered"] = True
-                    result["reasons"].append(
-                        f"⚠️ Stock ${price:.2f} broke below short put ${sp:.2f}"
-                    )
-                elif price >= sc:
-                    result["triggered"] = True
-                    result["reasons"].append(
-                        f"⚠️ Stock ${price:.2f} broke above short call ${sc:.2f}"
-                    )
-            result["signal_still_valid"] = sp < price < sc if sp and sc else True
+        # ── RSI / BB / strike reversal checks — shared with the backtest ──
+        legs = position.get("legs") or {}
+        trig, reasons, still_valid, note, _ = _strategy_exit_check(
+            strategy, price, cur_rsi, cur_bb_u, cur_bb_l,
+            strike=entry.get("strike"),
+            short_put=(legs.get("short_put") or {}).get("strike"),
+            short_call=(legs.get("short_call") or {}).get("strike"))
+        result["triggered"] = result["triggered"] or trig
+        result["reasons"].extend(reasons)
+        result["signal_still_valid"] = still_valid
+        if note:
+            result["note"] = note
 
     except Exception as e:
         print(f"[Track] {sym} sell-signal check failed: {e}")
@@ -3484,271 +3899,190 @@ def _bt_option_price(S, K, T, sigma, option_type):
         return 0.0
 
 
-def _precompute_indicators(hist):
+# Default rule parameters for a backtest run — the module LITERALS, never the
+# live-mutated globals, so a "default" backtest is reproducible regardless of
+# what optimizer result happens to be applied in the running process.
+BT_DEFAULT_PARAMS = {
+    "rsi_oversold": 35, "rsi_overbought": 65, "bull_min": 1, "bear_min": 2,
+    "adx_threshold": 30, "garch_mode": "off",
+    "require_green_candle": False, "require_red_candle": False,
+}
+_CTX_COLS = ("vix", "vix3m", "regime", "vix_ts", "market_trend", "pre_fed", "post_fed",
+             "yield_inverted", "yield_steep",
+             "macro_buy_call", "macro_buy_put", "macro_sell_put", "macro_covered_call", "macro_iron_condor")
+
+
+def _precompute_indicators(hist, sym=None, ctx_hist=None, spy_closes=None, garch="all"):
     """
-    Pre-compute ALL indicator arrays for a ticker's history DataFrame.
-    Returns a dict of numpy arrays so the WFO combo sweep never recomputes them.
+    The backtest's per-ticker data: the shared indicator_frame() (every
+    indicator, every bar) plus the market context of each bar's date and the
+    option-model volatility.  Context comes from market_context_history()
+    (same yfinance series + same pure rules as the live getters).
     """
-    closes  = hist["Close"]
-    highs   = hist["High"]
-    lows    = hist["Low"]
-    volumes = hist["Volume"]
-    n       = len(closes)
+    if ctx_hist is None:
+        ctx_hist = market_context_history()
+    if spy_closes is None:
+        spy_closes = _ctx_hist_cache.get("spy_closes")
+    fr = indicator_frame(hist, spy_closes=spy_closes, sym=sym, garch=garch)
+    ctx = ctx_hist.reindex(fr["index"], method="ffill")
+    fr["ctx"]    = {c: ctx[c].values for c in _CTX_COLS if c in ctx.columns}
+    fr["dates"]  = [d.strftime("%Y-%m-%d") for d in fr["index"]]
+    fr["closes"] = fr["price"]
+    # Option-model volatility: trailing 30-day realised vol × 1.15 — a stand-in
+    # for market implied vol (which usually sits above realised).  GARCH stays a
+    # SIGNAL (garch_expand / garch_contract), not the pricing vol, so a correct
+    # vol forecast can actually show up as P&L instead of being priced in.
+    hv = pd.Series(fr["hv30"]) * 1.15
+    rets = pd.Series(fr["price"]).pct_change()
+    hv = hv.fillna(rets.rolling(20, min_periods=5).std() * np.sqrt(252) * 1.15).fillna(0.30)
+    fr["iv_est"] = hv.clip(0.05, 2.0).values
+    return fr
 
-    # RSI
-    rsi_s = calc_rsi(closes, RSI_PERIOD)
 
-    # Bollinger Bands
-    bb_upper_s, bb_mid_s, bb_lower_s = calc_bb(closes, BB_PERIOD, BB_STD_DEV)
+_PC_CTX, _PC_SPY = None, None
 
-    # MACD
-    ema12   = closes.ewm(span=12, adjust=False).mean()
-    ema26   = closes.ewm(span=26, adjust=False).mean()
-    macd_s  = ema12 - ema26
-    signal_s = macd_s.ewm(span=9, adjust=False).mean()
 
-    # Proper ADX (+DI / -DI / ADX) via shared calc_adx
-    _adx_full, _pdi_s, _ndi_s = calc_adx(hist)
-    adx_s = _adx_full if _adx_full is not None else pd.Series(np.zeros(n), index=closes.index)
+def _precompute_worker_init(ctx_hist, spy_closes, garch_cache):
+    global _PC_CTX, _PC_SPY
+    _PC_CTX, _PC_SPY = ctx_hist, spy_closes
+    _garch_cache.update(garch_cache)
 
-    # MA50 and MA200
-    ma50_s   = closes.rolling(50).mean()
-    ma200_s  = closes.rolling(200).mean()
 
-    # HV Rank per bar: 30-day annualized HV percentile over the trailing year
-    # (min_periods=60 so the first ~10 months of a 2y history aren't all NaN,
-    # which used to make hv_rank "50" for most training bars and real for
-    # every validation bar — an asymmetry between the WFO windows).
-    # High HV Rank (≥60) → good time to sell premium (options expensive)
-    # Low  HV Rank (≤40) → good time to buy options (options cheap)
-    _rets    = closes.pct_change()
-    _hv30    = _rets.rolling(30).std() * np.sqrt(252) * 100  # annualised %
-    hv_rank_s = _hv30.rolling(252, min_periods=60).rank(pct=True) * 100   # 0–100 percentile
+def _precompute_worker(item):
+    sym, hist = item
+    try:
+        fr  = _precompute_indicators(hist, sym=sym, ctx_hist=_PC_CTX, spy_closes=_PC_SPY)
+        new = fr.pop("_garch_new", {}) or {}
+        return sym, fr, new, None
+    except Exception as e:
+        return sym, None, {}, str(e)
 
-    # 52-week rolling low and high
-    low_52w_s  = closes.rolling(252).min()
-    high_52w_s = closes.rolling(252).max()
 
-    # ADX mode per bar: ranging (<20), normal (20-30), trending (>30)
-    # Encode as float: 0=ranging, 1=normal, 2=trending for numpy storage
-    _adx_vals = adx_s.values
-    _adx_mode = np.where(_adx_vals < 20, 0.0,
-                np.where(_adx_vals > 30, 2.0, 1.0))
+def _precompute_many(hist_map, label="Precompute"):
+    """
+    _precompute_indicators for many tickers, in parallel processes when there
+    are enough of them (the rolling GARCH refits are the cost: ~90 fits per
+    ticker on a 2y frame).  Fresh GARCH fits come back from the workers and are
+    merged into the on-disk cache, so the second run of any job is near-instant.
+    """
+    ctx = market_context_history()
+    spy = _ctx_hist_cache.get("spy_closes")
+    items = list(hist_map.items())
+    out, errors = {}, 0
+    if len(items) >= 6 and (os.cpu_count() or 1) > 2:
+        with _garch_cache_lock:
+            seed = dict(_garch_cache)
+        with ProcessPoolExecutor(max_workers=min(WFO_CPU_WORKERS, len(items)),
+                                 initializer=_precompute_worker_init, initargs=(ctx, spy, seed)) as pool:
+            for sym, fr, new, err in pool.map(_precompute_worker, items, chunksize=2):
+                if fr is None:
+                    errors += 1
+                    print(f"  [{label}] {sym} failed: {err}")
+                    continue
+                out[sym] = fr
+                if new:
+                    with _garch_cache_lock:
+                        _garch_cache.update(new)
+    else:
+        for sym, h in items:
+            try:
+                fr = _precompute_indicators(h, sym=sym, ctx_hist=ctx, spy_closes=spy)
+                fr.pop("_garch_new", None)
+                out[sym] = fr
+            except Exception as e:
+                errors += 1
+                print(f"  [{label}] {sym} failed: {e}")
+    _save_garch_cache()
+    print(f"  [{label}] {len(out)} tickers ready" + (f", {errors} failed" if errors else ""))
+    return out
 
-    # Vectorized MACD crossover: macd crossed above signal in last 3 bars
-    macd_cross_s = (macd_s > signal_s) & (macd_s.shift(1) <= signal_s.shift(1))
-    macd_bull_s  = macd_cross_s.rolling(3).max().astype(bool)
-    macd_bear_s  = ((macd_s < signal_s) & (macd_s.shift(1) >= signal_s.shift(1))).rolling(3).max().astype(bool)
 
-    # Vectorized RSI turning-up: RSI now > min of last 4 bars + 1.5
-    rsi_min4_s   = rsi_s.shift(1).rolling(4).min()
-    rsi_turn_up_s = rsi_s > (rsi_min4_s + 1.5)
-
-    # Volume confirmation: current volume >= 1.2x 20-day avg
-    vol_avg20_s  = volumes.rolling(20).mean()
-    vol_ok_s     = volumes >= (vol_avg20_s * 1.2)
-
-    # MFI (Money Flow Index) — RSI weighted by volume
-    mfi_s = calc_mfi(hist, period=14)
-
-    # IV estimate per bar — trailing 30-day realised vol with a 15% premium
-    # (implied vol usually trades above realised).  Only information available
-    # AT that bar is used.  The previous version fit one GARCH model on the
-    # whole 2-year series and used it for every bar, so each simulated trade
-    # was priced with volatility from its own future (look-ahead bias).
-    iv_est_s = (_rets.rolling(30).std() * np.sqrt(252) * 1.15)
-    iv_est_s = iv_est_s.fillna(_rets.rolling(20, min_periods=5).std() * np.sqrt(252) * 1.15)
-    iv_est_s = iv_est_s.fillna(0.30).clip(lower=0.05, upper=2.0)
-
-    # Pre-convert date strings
-    dates = [d.strftime("%Y-%m-%d") for d in hist.index]
-
+def ctx_at(fr, i):
+    """Market context for bar i of a backtest frame (same keys as live_market_ctx)."""
+    c = fr["ctx"]
+    g = lambda k, d=None: (c[k][i] if k in c else d)
+    def _b(x):
+        return bool(x) if x == x else False
+    vix = g("vix"); vix3m = g("vix3m")
     return {
-        "closes":      closes.values,
-        "rsi":         rsi_s.values,
-        "bb_upper":    bb_upper_s.values,
-        "bb_lower":    bb_lower_s.values,
-        "macd_bull":   macd_bull_s.values,
-        "macd_bear":   macd_bear_s.values,
-        "rsi_turn_up": rsi_turn_up_s.values,
-        "vol_ok":      vol_ok_s.values,
-        "mfi":         mfi_s.values,
-        "adx":         adx_s.values,
-        "ma50":        ma50_s.values,
-        "ma200":       ma200_s.values,
-        "hv_rank":     hv_rank_s.values,
-        "low_52w":     low_52w_s.values,
-        "high_52w":    high_52w_s.values,
-        "adx_mode":    _adx_mode,
-        "iv_est":      iv_est_s.values,
-        "dates":       dates,
-        "n":           n,
+        "vix":            None if vix is None or vix != vix else float(vix),
+        "vix3m":          None if vix3m is None or vix3m != vix3m else float(vix3m),
+        "regime":         g("regime", "normal") or "normal",
+        "vix_ts":         g("vix_ts", "flat") or "flat",
+        "market_trend":   g("market_trend", "neutral") or "neutral",
+        "pre_fed":        _b(g("pre_fed", False)),
+        "post_fed":       _b(g("post_fed", False)),
+        "yield_inverted": _b(g("yield_inverted", False)),
+        "yield_steep":    _b(g("yield_steep", False)),
+        "macro": {k: _b(g(f"macro_{k}", True)) for k in ("buy_call", "buy_put", "sell_put", "covered_call", "iron_condor")},
     }
 
 
-def _bt_signals_fast(pc, idx, params=None):
-    """
-    Fast signal check using precomputed arrays from _precompute_indicators.
-    pc  : dict returned by _precompute_indicators
-    idx : bar index into the arrays
-    Returns the same dict shape as _bt_signals, or None if no signal.
-    """
-    p          = params or {}
-    rsi_os     = p.get("rsi_oversold",  RSI_OVERSOLD)
-    rsi_ob     = p.get("rsi_overbought", RSI_OVERBOUGHT)
-    bull_min   = p.get("bull_min",       1)
-    bear_min   = p.get("bear_min",       1)
-    adx_thr    = p.get("adx_threshold",  30)
-
-    rsi        = float(pc["rsi"][idx])       if not np.isnan(pc["rsi"][idx])       else 50.0
-    bb_upper   = float(pc["bb_upper"][idx])  if not np.isnan(pc["bb_upper"][idx])  else 1e9
-    bb_lower   = float(pc["bb_lower"][idx])  if not np.isnan(pc["bb_lower"][idx])  else 0.0
-    price      = float(pc["closes"][idx])
-    adx        = float(pc["adx"][idx])       if not np.isnan(pc["adx"][idx])       else 0.0
-    ma50       = float(pc["ma50"][idx])      if not np.isnan(pc["ma50"][idx])       else price
-    ma200      = float(pc["ma200"][idx])     if not np.isnan(pc["ma200"][idx])      else price
-    hv_rank    = float(pc["hv_rank"][idx])   if not np.isnan(pc["hv_rank"][idx])    else 50.0
-    low_52w    = float(pc["low_52w"][idx])   if not np.isnan(pc["low_52w"][idx])    else 0.0
-    high_52w   = float(pc["high_52w"][idx])  if not np.isnan(pc["high_52w"][idx])   else 1e9
-    adx_mode_n = float(pc["adx_mode"][idx])  if not np.isnan(pc["adx_mode"][idx])   else 1.0
-    adx_mode   = "ranging" if adx_mode_n < 0.5 else ("trending" if adx_mode_n > 1.5 else "normal")
-    mfi        = float(pc["mfi"][idx])       if not np.isnan(pc["mfi"][idx])        else 50.0
-
-    sig_rsi_os        = rsi < rsi_os
-    sig_rsi_ob        = rsi > rsi_ob
-    sig_bb_low        = price <= bb_lower
-    sig_bb_high       = price >= bb_upper
-    sig_reversal      = bool(pc["rsi_turn_up"][idx])
-    sig_macd_bull     = bool(pc["macd_bull"][idx])
-    sig_macd_bear     = bool(pc["macd_bear"][idx])
-    sig_vol_ok        = bool(pc["vol_ok"][idx])
-    sig_above_ma50    = price > ma50
-    sig_above_ma200   = price > ma200
-    sig_hv_high       = hv_rank >= 60
-    sig_hv_low        = hv_rank <= 40
-    sig_near_52w_low  = low_52w > 0   and price <= low_52w  * 1.05
-    sig_near_52w_high = high_52w < 1e9 and price >= high_52w * 0.95
-    sig_mfi_os        = mfi < 20      # oversold on volume
-    sig_mfi_ob        = mfi > 80      # overbought on volume
-
-    _rng = adx_mode == "ranging"
-    _trd = adx_mode == "trending"
-
-    oversold   = sig_rsi_os and sig_bb_low
-    overbought = sig_rsi_ob and sig_bb_high
-
-    bull_count = sum([sig_rsi_os, sig_rsi_os and _rng,
-                      sig_bb_low, sig_bb_low and _rng,
-                      sig_reversal, sig_macd_bull, sig_macd_bull and _trd,
-                      sig_vol_ok, sig_hv_low, sig_near_52w_low,
-                      sig_mfi_os])          # MFI oversold = strong volume confirmation
-    bear_count = sum([sig_rsi_ob, sig_rsi_ob and _rng,
-                      sig_bb_high, sig_bb_high and _rng,
-                      sig_macd_bear, sig_macd_bear and _trd,
-                      sig_near_52w_high,
-                      sig_mfi_ob])          # MFI overbought = heavy selling volume
-
-    above_ma200   = sig_above_ma200
-    falling_knife = sig_rsi_os and not sig_reversal and adx > adx_thr and not above_ma200
-
-    # Trend gate: buy calls only when above 50-day MA OR deeply oversold (RSI < 25)
-    trend_ok_buy  = sig_above_ma50 or rsi < 25
-
-    has_buy_call  = bull_count >= bull_min and not falling_knife and trend_ok_buy
-    has_buy_put   = bear_count >= bear_min
-    has_sell_put  = (oversold or sig_macd_bear) and price <= MAX_PRICE_SELL and not falling_knife
-
-    if not (has_buy_call or has_buy_put or has_sell_put):
+def _bt_entry_at(fr, idx, params):
+    """Evaluate the shared entry rules at bar idx. Returns (ind, ctx, ev) or None."""
+    ind = ind_at(fr, idx)
+    if ind["price"] != ind["price"] or ind["price"] < MIN_PRICE:
         return None
-
-    return {
-        "price":          price,
-        "sig_rsi_os":     sig_rsi_os,
-        "sig_rsi_ob":     sig_rsi_ob,
-        "sig_bb_low":     sig_bb_low,
-        "sig_bb_high":    sig_bb_high,
-        "sig_reversal":   sig_reversal,
-        "sig_macd_bull":  sig_macd_bull,
-        "sig_macd_bear":  sig_macd_bear,
-        "sig_vol_ok":     sig_vol_ok,
-        "sig_above_ma50":   sig_above_ma50,
-        "sig_hv_high":      sig_hv_high,
-        "sig_hv_low":       sig_hv_low,
-        "sig_near_52w_low":  sig_near_52w_low,
-        "sig_near_52w_high": sig_near_52w_high,
-        "sig_mfi_os":        sig_mfi_os,
-        "sig_mfi_ob":        sig_mfi_ob,
-        "mfi":               round(mfi, 1),
-        "adx_mode":         adx_mode,
-        "bull_count":       bull_count,
-        "bear_count":       bear_count,
-        "has_buy_call":     has_buy_call,
-        "has_buy_put":      has_buy_put,
-        "has_sell_put":     has_sell_put,
-    }
+    ctx = ctx_at(fr, idx)
+    ev  = evaluate_entry(ind, ctx, params)
+    if not (ev["has_buy_call"] or ev["has_buy_put"] or ev["has_sell_put"]):
+        return None
+    return ind, ctx, ev
 
 
-def _bt_walk_exit(closes_arr, idx, K, iv_est, hold_days, strategy, entry_opt):
+def _bt_walk_exit(fr, idx, K, iv_est, hold_days, strategy, entry_opt):
     """
-    Walk day-by-day from the entry index and close the position at the FIRST
-    sell-signal trigger — matching how the live bot manages an open trade:
-      stop loss     : option P&L <= -SELL_STOP_LOSS
-      trailing stop : peak P&L >= TRAIL_ACTIVATE_PCT, then gives back TRAIL_LOCK_PCT
-      take profit   : option P&L >= SELL_PROFIT_TARGET
-      stagnation    : flat (|P&L| <= STAGNANT_RANGE) after STAGNANT_DAYS days
-    Falls back to an end-of-hold exit when nothing triggers.
-
-    Runs on the precomputed close array (fast path, no DataFrame). IV is held
-    constant across the hold, matching the live signal-log simulator.
-    Returns dict: pnl_pct, exit_reason, exit_offset, exit_price, exit_opt.
+    Walk bar by bar after entry and close at the FIRST exit the live tracker
+    would flag, using the same shared rules in the same order:
+      price exits  (_price_exit_core):  target → stop → trailing → stagnation
+      strategy exits (_strategy_exit_check): RSI/Bollinger reversal, BB breach
+      expiry: the modelled option is the scanner's ~30-DTE contract — it expires
+              after OPTION_DTE_BARS bars and settles at intrinsic value.
+    P&L is rounded to 1 dp before the threshold tests, as the live tracker does.
+    Returns dict: pnl_pct (close-level), pnl_trigger_pct (−15/+30 if a stop/target
+    order is assumed to fill at the trigger level), exit_reason, exit_offset,
+    exit_price, exit_opt — or None when the walk runs off the end of the data.
     """
-    opt_type = "call" if strategy == "buy_call" else "put"
-    is_short = (strategy == "sell_put")
+    opt_type = "call" if strategy in ("buy_call", "covered_call") else "put"
+    is_short = strategy in SHORT_PREMIUM_STRATS
+    closes, rsi, bb_u, bb_l = fr["price"], fr["rsi"], fr["bb_u"], fr["bb_l"]
+    n = fr["n"]
+    T_entry = OPTION_DTE_TARGET / 365.0
+    cap = min(hold_days, OPTION_DTE_BARS)
 
     def _pnl(curr_opt):
-        # long profits when premium rises; short profits when premium decays
-        if is_short:
-            return (entry_opt - curr_opt) / entry_opt * 100.0
-        return (curr_opt - entry_opt) / entry_opt * 100.0
+        return ((entry_opt - curr_opt) if is_short else (curr_opt - entry_opt)) / entry_opt * 100.0
 
     peak = -999.0
-    for i in range(1, hold_days + 1):
-        close   = float(closes_arr[idx + i])
-        # hold_days counts TRADING bars, so time-to-expiry is bars/252 years
-        T_rem   = max((hold_days - i) / 252.0, 0.001)
-        cur_opt = _bt_option_price(close, K, T_rem, iv_est, opt_type)
-        pnl     = _pnl(cur_opt)
-        peak    = max(peak, pnl)
-        # Stop loss takes precedence over take-profit on the same day.
-        # Recorded P&L is the TRIGGER level (not the gapped-through close) —
-        # in real trading a GTC stop/limit at the broker fires intraday at the
-        # trigger price, so the realised fill is ~ -15% or +30%, not the next
-        # daily close that may have gapped far past it. Trailing/stagnation
-        # don't have GTC orders behind them, so record the actual close pnl.
-        if pnl <= -SELL_STOP_LOSS:
-            reason  = "stop_loss"
-            rec_pnl = -float(SELL_STOP_LOSS)
-        elif peak >= TRAIL_ACTIVATE_PCT and pnl <= peak - TRAIL_LOCK_PCT:
-            reason  = "trailing_stop"
-            rec_pnl = pnl
-        elif pnl >= SELL_PROFIT_TARGET:
-            reason  = "take_profit"
-            rec_pnl = float(SELL_PROFIT_TARGET)
-        elif i >= STAGNANT_DAYS and abs(pnl) <= STAGNANT_RANGE:
-            reason  = "stagnation"
-            rec_pnl = pnl
+    for i in range(1, cap + 1):
+        j = idx + i
+        if j >= n:
+            return None                                   # right-censored: outcome unknown
+        close = float(closes[j])
+        if i >= OPTION_DTE_BARS:
+            cur_opt = max(0.0, (close - K) if opt_type == "call" else (K - close))   # expiry: intrinsic
         else:
-            continue
-        return {"pnl_pct": round(rec_pnl, 1), "exit_reason": reason,
-                "exit_offset": i, "exit_price": round(close, 2),
-                "exit_opt": round(cur_opt, 3)}
-
-    # No trigger fired — settle at end of hold (option near expiry)
-    close   = float(closes_arr[idx + hold_days])
-    cur_opt = _bt_option_price(close, K, 1 / 252.0, iv_est, opt_type)
-    return {"pnl_pct": round(_pnl(cur_opt), 1), "exit_reason": "end_of_hold",
-            "exit_offset": hold_days, "exit_price": round(close, 2),
-            "exit_opt": round(cur_opt, 3)}
+            T_rem   = max(T_entry - i / 252.0, 0.5 / 365.0)
+            cur_opt = _bt_option_price(close, K, T_rem, iv_est, opt_type)
+        pnl   = _pnl(cur_opt)
+        pnl_r = round(pnl, 1)
+        trig, _, peak, code = _price_exit_core(pnl_r, peak, i)
+        if not trig:
+            trig, _, _, _, code = _strategy_exit_check(strategy, close, float(rsi[j]), float(bb_u[j]), float(bb_l[j]), strike=K)
+        if not trig and i >= OPTION_DTE_BARS:
+            trig, code = True, "expired"
+        if not trig and i == cap:
+            trig, code = True, "end_of_hold"
+        if trig:
+            if code == "stop_loss":
+                pnl_trig = -float(SELL_STOP_LOSS)
+            elif code == "take_profit":
+                pnl_trig = float(SELL_PROFIT_TARGET)
+            else:
+                pnl_trig = pnl_r
+            return {"pnl_pct": pnl_r, "pnl_trigger_pct": round(pnl_trig, 1), "exit_reason": code,
+                    "exit_offset": i, "exit_price": round(close, 2), "exit_opt": round(cur_opt, 3)}
+    return None
 
 
 def _bt_strike(price):
@@ -3765,141 +4099,131 @@ def _bt_strike(price):
     return float(round(price / 5) * 5)
 
 
+def _bt_iv_rank_proxy(ind, iv_pct):
+    """calc_iv_rank() with the modelled IV: position of iv_pct inside the trailing-year 21-day HV range."""
+    lo, hi = ind.get("iv_rank_lo"), ind.get("iv_rank_hi")
+    if lo is None or hi is None:
+        return None
+    if hi <= lo:
+        return 50.0
+    return round(float(np.clip((iv_pct - lo) / (hi - lo) * 100, 0, 100)), 1)
+
+
 def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                         idx_start=60, idx_end=None, precomp=None,
                         record_path=False, use_exits=True):
     """
-    Walk history for `ticker`.
-    hold_days   : max days to hold the option (the exit cap)
-    params      : optional parameter overrides for _bt_signals (WFO use)
-    hist        : pre-downloaded DataFrame (skip yfinance fetch if provided)
-    idx_start / idx_end : window slice for walk-forward splits
-    precomp     : pre-computed indicator dict from _precompute_indicators (WFO fast path)
-    record_path : if True, also record option P&L at every HOLD_SWEEP_INTERVALS checkpoint
-                  (used by the Hold Horizon Analysis tool)
-    use_exits   : if True (default) each trade is managed day-by-day and closed at
-                  the first stop-loss / take-profit / trailing / stagnation trigger,
-                  matching live trading. If False, holds to expiry (legacy behaviour).
+    Walk history for `ticker` applying the SHARED entry rules (evaluate_entry)
+    at every bar and the SHARED exit rules (_bt_walk_exit) to every trade.
+    hold_days   : max bars held (the modelled ~30-DTE option expires after OPTION_DTE_BARS anyway)
+    params      : rule parameters (same keys as live_params()); missing keys take BT_DEFAULT_PARAMS
+    hist        : pre-downloaded 2y DataFrame (fetched if None)
+    idx_start / idx_end : bar window (walk-forward splits)
+    precomp     : dict from _precompute_indicators (built here if None — slow per ticker, use
+                  _precompute_many for batches)
+    record_path : also record unmanaged hold-to-day-d option P&L at HOLD_SWEEP_INTERVALS (Hold Horizon tool)
+    What the backtest cannot know (and treats as the live gate would at gate time):
+    put/call ratio (0), short interest / earnings (score-only live), real quotes
+    and liquidity — the sell_put premium gate uses the modelled premium and a
+    modelled IV rank, flagged on each trade as proxy_gate.
     """
-    if hist is None:
+    p = {**BT_DEFAULT_PARAMS, **(params or {})}
+    if hist is None and precomp is None:
         try:
             _, hist = _fetch_history(ticker, "2y")
-            if hist is None or len(hist) < 120:
+            if hist is None or len(hist) < 60:
                 return []
         except Exception:
             return []
-
-    # Build precomp if not supplied
     if precomp is None:
-        precomp = _precompute_indicators(hist)
+        precomp = _precompute_indicators(hist, sym=ticker)
 
     trades  = []
-    n_bars  = precomp["n"]
+    fr      = precomp
+    n_bars  = fr["n"]
     start   = max(60, idx_start)
-    end     = (idx_end or n_bars) - hold_days
-    T_entry = hold_days / 252.0          # hold_days are trading bars → years
-    T_exit  = 0.001
-    # One open position per strategy at a time (as in live trading).  Without
-    # this every consecutive signal bar opened another overlapping trade on the
-    # same move, inflating trade counts and making the Sharpe look far better
-    # than a single-position account could ever achieve.
+    end     = (idx_end or n_bars)
+    T_entry = OPTION_DTE_TARGET / 365.0
+    # One open position per strategy at a time (the tracker rejects a duplicate
+    # ticker+strategy while one is open).
     busy_until = {"buy_call": -1, "buy_put": -1, "sell_put": -1}
 
     for idx in range(start, end):
-        sigs = _bt_signals_fast(precomp, idx, params)
-        if not sigs:
+        hit = _bt_entry_at(fr, idx, p)
+        if hit is None:
             continue
+        ind, ctx, ev = hit
+        price   = ind["price"]
+        iv_est  = float(fr["iv_est"][idx])
+        iv_rank = _bt_iv_rank_proxy(ind, iv_est * 100)
 
-        price      = sigs["price"]
-        iv_est     = float(precomp["iv_est"][idx])
-        exit_price = float(precomp["closes"][idx + hold_days])
-        entry_date = precomp["dates"][idx]
-        exit_date  = precomp["dates"][idx + hold_days]
-
-        for strategy, flag in [("buy_call", sigs["has_buy_call"]),
-                                ("buy_put",  sigs["has_buy_put"]),
-                                ("sell_put", sigs["has_sell_put"])]:
+        for strategy, flag in (("buy_call", ev["has_buy_call"]),
+                               ("buy_put",  ev["has_buy_put"]),
+                               ("sell_put", ev["has_sell_put"])):
             if not flag or idx < busy_until[strategy]:
                 continue
-            K        = _bt_strike(price)
-            opt_type = "call" if strategy == "buy_call" else "put"
+            K         = _bt_strike(price)
+            opt_type  = "call" if strategy == "buy_call" else "put"
             entry_opt = _bt_option_price(price, K, T_entry, iv_est, opt_type)
-            if entry_opt <= 0.01:
+            if entry_opt <= 0.01:                          # live: mid >= 0.01 / ask >= 0.01
                 continue
+            premium_pct = entry_opt / price * 100
+            proxy_gate  = None
+            if strategy == "sell_put":
+                # live: (calc_iv_rank >= IV_RANK_THRESHOLD) or (premium_pct >= PREMIUM_PCT_MIN)
+                iv_high   = iv_rank is not None and iv_rank >= IV_RANK_THRESHOLD
+                prem_high = premium_pct >= PREMIUM_PCT_MIN
+                proxy_gate = "iv_rank" if iv_high else ("premium" if prem_high else "blocked")
+                if not (iv_high or prem_high):
+                    continue
 
-            if use_exits:
-                # Manage the trade like the live bot — close at the first
-                # stop-loss / take-profit / trailing / stagnation trigger.
-                _ex           = _bt_walk_exit(precomp["closes"], idx, K, iv_est,
-                                              hold_days, strategy, entry_opt)
-                pnl_pct       = _ex["pnl_pct"]
-                exit_opt      = _ex["exit_opt"]
-                t_exit_price  = _ex["exit_price"]
-                t_exit_date   = precomp["dates"][idx + _ex["exit_offset"]]
-                t_exit_reason = _ex["exit_reason"]
-                busy_until[strategy] = idx + _ex["exit_offset"]
-            else:
-                # Legacy: hold the full period, settle at expiry.
-                exit_opt = _bt_option_price(exit_price, K, T_exit, iv_est, opt_type)
-                if strategy == "sell_put":
-                    pnl_pct = round((entry_opt - exit_opt) / entry_opt * 100, 1)
-                else:
-                    pnl_pct = round((exit_opt - entry_opt) / entry_opt * 100, 1)
-                t_exit_price  = round(exit_price, 2)
-                t_exit_date   = exit_date
-                t_exit_reason = "end_of_hold"
-                busy_until[strategy] = idx + hold_days
+            ex = _bt_walk_exit(fr, idx, K, iv_est, hold_days, strategy, entry_opt)
+            if ex is None:
+                continue                                   # not enough bars after entry to resolve
+            busy_until[strategy] = idx + ex["exit_offset"]
 
-            # ── Hold-path recording (for Hold Horizon Analysis) ──────────
-            # For each checkpoint d, compute option P&L if closed at day d
-            # instead of holding the full hold_days.  The option still has
-            # (hold_days − d) days of time value left at exit.
-            pnl_path: dict = {}
+            # ── Hold-path recording (Hold Horizon Analysis): unmanaged P&L if closed on day d ──
+            pnl_path = {}
             if record_path:
-                opt_type = "put" if strategy == "sell_put" else \
-                           "call" if strategy == "buy_call" else "put"
                 for d in HOLD_SWEEP_INTERVALS:
-                    future_idx = idx + d
-                    if future_idx >= len(precomp["closes"]):
+                    j = idx + d
+                    if j >= n_bars:
                         break
-                    ep     = float(precomp["closes"][future_idx])
-                    T_rem  = max((hold_days - d) / 252.0, 0.001)
-                    ex_val = _bt_option_price(ep, K, T_rem, iv_est, opt_type)
-                    if strategy == "sell_put":
-                        pnl_path[d] = round((entry_opt - ex_val) / entry_opt * 100, 1)
-                    else:
-                        pnl_path[d] = round((ex_val - entry_opt) / entry_opt * 100, 1)
+                    ep    = float(fr["price"][j])
+                    T_rem = max(T_entry - d / 252.0, 0.5 / 365.0)
+                    ex_val = (max(0.0, (ep - K) if opt_type == "call" else (K - ep)) if d >= OPTION_DTE_BARS
+                              else _bt_option_price(ep, K, T_rem, iv_est, opt_type))
+                    pnl_path[d] = round(((entry_opt - ex_val) if strategy == "sell_put" else (ex_val - entry_opt))
+                                        / entry_opt * 100, 1)
 
             trades.append({
-                "ticker":      ticker,
-                "strategy":    strategy,
-                "entry_date":  entry_date,
-                "exit_date":   t_exit_date,
-                "entry_price": round(price, 2),
-                "exit_price":  t_exit_price,
-                "entry_opt":   round(float(entry_opt), 3),
-                "exit_opt":    round(float(exit_opt), 3),
-                "pnl_pct":     float(pnl_pct),
-                "win":         bool(pnl_pct > 0),          # plain bool — np.bool_ is not JSON-serialisable
-                "exit_reason": t_exit_reason,
-                "iv_est":      round(iv_est * 100, 1),
-                "pnl_path":    pnl_path,
-                # Individual signal flags for quality analysis
-                "sig_rsi_os":     sigs["sig_rsi_os"],
-                "sig_bb_low":     sigs["sig_bb_low"],
-                "sig_reversal":   sigs["sig_reversal"],
-                "sig_macd_bull":  sigs["sig_macd_bull"],
-                "sig_vol_ok":     sigs["sig_vol_ok"],
-                "sig_rsi_ob":     sigs["sig_rsi_ob"],
-                "sig_bb_high":    sigs["sig_bb_high"],
-                "sig_macd_bear":  sigs["sig_macd_bear"],
-                "sig_above_ma50":   sigs["sig_above_ma50"],
-                "sig_hv_high":      sigs["sig_hv_high"],
-                "sig_hv_low":       sigs["sig_hv_low"],
-                "sig_near_52w_low":  sigs["sig_near_52w_low"],
-                "sig_near_52w_high": sigs["sig_near_52w_high"],
-                "sig_mfi_os":        sigs["sig_mfi_os"],
-                "sig_mfi_ob":        sigs["sig_mfi_ob"],
+                "ticker":        ticker,
+                "strategy":      strategy,
+                "entry_date":    fr["dates"][idx],
+                "exit_date":     fr["dates"][idx + ex["exit_offset"]],
+                "entry_price":   round(price, 2),
+                "exit_price":    ex["exit_price"],
+                "strike":        K,
+                "entry_opt":     round(float(entry_opt), 3),
+                "exit_opt":      round(float(ex["exit_opt"]), 3),
+                "premium_pct":   round(premium_pct, 2),
+                "proxy_gate":    proxy_gate,
+                "pnl_pct":       float(ex["pnl_pct"]),
+                "pnl_trigger_pct": float(ex["pnl_trigger_pct"]),
+                "win":           bool(ex["pnl_pct"] > 0),
+                "exit_reason":   ex["exit_reason"],
+                "bars_held":     ex["exit_offset"],
+                "iv_est":        round(iv_est * 100, 1),
+                "iv_rank":       iv_rank,
+                "garch_vol":     round(ind["garch_vol"] * 100, 1) if ind["garch_vol"] is not None else None,
+                "hv30":          round(ind["hv30"] * 100, 1) if ind["hv30"] is not None else None,
+                "regime":        ctx["regime"],
+                "market_trend":  ctx["market_trend"],
+                "bull_signals":  ev["bull_signals"],
+                "bear_signals":  ev["bear_signals"],
+                "pnl_path":      pnl_path,
+                # Individual signal flags — the engine's definitions (same keys as the live signal log)
+                **{k: bool(v) for k, v in ev["flags"].items()},
             })
     return trades
 
@@ -3959,11 +4283,18 @@ def _bt_metrics(trades):
     total_pnl_v     = sum(pnls)
     mdd_pct_of_peak = round(abs(max_dd) / peak_at_dd * 100, 1) if peak_at_dd > 0 else 0.0
     recovery_factor = round(total_pnl_v / abs(max_dd), 2) if max_dd < 0 else 0.0
+    trig = [t.get("pnl_trigger_pct", t["pnl_pct"]) for t in trades]
+    exit_mix = {}
+    for t in trades:
+        exit_mix[t.get("exit_reason", "?")] = exit_mix.get(t.get("exit_reason", "?"), 0) + 1
     return {
         "count":            n,
         "total_trades":     n,
         "win_rate":         win_rate,
         "avg_pnl":          avg_pnl,
+        "avg_pnl_trigger_fill": round(sum(trig) / n, 1),   # if stop/target orders fill at the trigger level
+        "avg_bars_held":    round(sum(t.get("bars_held", 0) for t in trades) / n, 1),
+        "exit_mix":         exit_mix,
         "expectancy":       avg_pnl,
         "avg_win":          avg_win,
         "avg_loss":         avg_loss,
@@ -4007,15 +4338,25 @@ def _run_backtest_job(tickers, hold_days):
 
         # ── Bulk download 2y OHLCV for all tickers in one shot ───────
         print(f"  [Backtest] Bulk downloading 2y history for {len(tickers)} tickers…")
-        hist_map = _bulk_download(tickers, "2y", min_rows=120)
+        hist_map = _bulk_download(tickers, "2y", min_rows=60)
         print(f"  [Backtest] Got data for {len(hist_map)}/{len(tickers)} tickers")
+
+        with _bt_lock:
+            _bt_state["stage"] = f"Pre-computing indicators + GARCH for {len(hist_map)} tickers…"
+        precomp_map = _precompute_many(hist_map, label="Backtest")
 
         with _bt_lock:
             _bt_state["stage"] = "Scanning signals…"
 
+        # The dashboard backtest runs the rules exactly as the live scanner is
+        # configured right now (applied optimizer params + UI toggles).
+        params = live_params()
         for i, sym in enumerate(tickers):
             try:
-                trades = run_backtest_ticker(sym, hold_days, hist=hist_map.get(sym))
+                pc = precomp_map.get(sym)
+                if pc is None:
+                    continue
+                trades = run_backtest_ticker(sym, hold_days, params=params, precomp=pc)
                 all_trades.extend(trades)
                 if trades:
                     print(f"  [Backtest] {sym}: {len(trades)} trades")
@@ -4058,29 +4399,47 @@ def _run_backtest_job(tickers, hold_days):
 #  SIGNAL QUALITY ANALYSIS
 # ══════════════════════════════════════════════════════════════
 
+# Human labels for every flag evaluate_entry() records (backtest trades and
+# signal-log entries carry the same keys, so one table serves both).
+SIGNAL_FLAG_LABELS = {
+    "sig_rsi_os":         "RSI Oversold",
+    "sig_bb_low":         "Below BB Lower",
+    "sig_dc_low":         "At Donchian Low",
+    "sig_reversal":       "RSI Turning Up",
+    "sig_macd_bull":      "MACD Bull Cross",
+    "sig_vol_ok":         "Volume Confirmed",
+    "sig_rsi_ob":         "RSI Overbought",
+    "sig_bb_high":        "Above BB Upper",
+    "sig_dc_high":        "At Donchian High",
+    "sig_macd_bear":      "MACD Bear Cross",
+    "sig_above_ma50":     "Above 50-day MA",
+    "sig_hv_high":        "HV Rank High (≥60)",
+    "sig_hv_low":         "HV Rank Low (≤40)",
+    "sig_rs_strong":      "RS Strong vs SPY",
+    "sig_rs_weak":        "RS Weak vs SPY",
+    "sig_near_52w_low":   "Near 52-Week Low",
+    "sig_near_52w_high":  "Near 52-Week High",
+    "sig_mfi_os":         "MFI Oversold (<20)",
+    "sig_mfi_ob":         "MFI Overbought (>80)",
+    "sig_ema_bull":       "EMA9 > EMA21",
+    "sig_ema_bear":       "EMA9 < EMA21",
+    "sig_ema_cross_bull": "EMA9/21 Bull Cross",
+    "sig_ema_cross_bear": "EMA9/21 Bear Cross",
+    "sig_vix_backw":      "VIX Backwardation",
+    "sig_vix_contango":   "VIX Contango",
+    "sig_regime_low":     "Low VIX Regime (<15)",
+    "sig_garch_expand":   "GARCH: Vol Expansion",
+    "sig_garch_contract": "GARCH: Vol Contraction",
+    "sig_exhaustion":     "Exhaustion Bounce",
+}
+
+
 def signal_quality_analysis(trades):
     """
     For each individual signal flag, compute win rate across all trades
     where that signal was active.  Returned as sorted list of dicts.
     """
-    SIGNAL_LABELS = {
-        "sig_rsi_os":     "RSI Oversold",
-        "sig_bb_low":     "Below BB Lower",
-        "sig_reversal":   "RSI Turning Up",
-        "sig_macd_bull":  "MACD Bull Cross",
-        "sig_vol_ok":     "Volume Confirmed",
-        "sig_rsi_ob":     "RSI Overbought",
-        "sig_bb_high":    "Above BB Upper",
-        "sig_macd_bear":  "MACD Bear Cross",
-        "sig_above_ma50":   "Above 50-day MA",
-        "sig_hv_high":      "HV Rank High (≥60)",
-        "sig_hv_low":       "HV Rank Low (≤40)",
-        "sig_rs_strong":    "RS Strong vs SPY",
-        "sig_near_52w_low":  "Near 52-Week Low",
-        "sig_near_52w_high": "Near 52-Week High",
-        "sig_mfi_os":        "MFI Oversold (<20)",
-        "sig_mfi_ob":        "MFI Overbought (>80)",
-    }
+    SIGNAL_LABELS = SIGNAL_FLAG_LABELS
     rows = []
     for flag, label in SIGNAL_LABELS.items():
         subset = [t for t in trades if t.get(flag)]
@@ -4108,11 +4467,13 @@ def signal_quality_analysis(trades):
 WFO_PARAM_GRID = {
     "rsi_oversold":  [25, 30, 35],
     "rsi_overbought":[65, 70, 75],
-    "bull_min":      [1, 2, 3],
+    "bull_min":      [1, 2],              # live caps at 2 — a 3 in the grid was silently clamped
     "bear_min":      [1, 2],
     "adx_threshold": [25, 30, 35],
-    "hold_days":     [14, 21, 30],
+    "hold_days":     [7, 14, 21],         # max bars held; the modelled option expires after 21 (≈30 DTE)
+    "garch_mode":    ["off", "confluence", "gate"],   # GJR-GARCH vol-forecast edge: ignored / +1 signal / hard gate
 }
+# → 3·3·2·2·3·3·3 = 972 combinations
 
 _wfo_state = {"running": False, "progress": 0, "total": 0, "results": None, "stage": ""}
 _wfo_lock  = threading.Lock()
@@ -4287,17 +4648,27 @@ def _expand_grid(grid):
 
 # Process-pool worker globals (set per-worker via initializer).
 # Lets workers reuse data maps across all combos without re-pickling them.
-_WFO_HIST_MAP    = None
 _WFO_SPLIT_MAP   = None
 _WFO_PRECOMP_MAP = None
 
 
-def _wfo_worker_init(hist_map, split_map, precomp_map):
+def _wfo_worker_init(split_map, precomp_map):
     """Initializer for ProcessPoolExecutor - runs once per worker process."""
-    global _WFO_HIST_MAP, _WFO_SPLIT_MAP, _WFO_PRECOMP_MAP
-    _WFO_HIST_MAP    = hist_map
+    global _WFO_SPLIT_MAP, _WFO_PRECOMP_MAP
     _WFO_SPLIT_MAP   = split_map
     _WFO_PRECOMP_MAP = precomp_map
+
+
+def _wfo_strategy_stats(trades):
+    """Per-strategy win rate / avg P&L / count for a leaderboard row."""
+    out = {}
+    for s in ("buy_call", "buy_put", "sell_put"):
+        st = [t for t in trades if t["strategy"] == s]
+        if st:
+            out[s] = {"n": len(st),
+                      "win_rate": round(100 * sum(1 for t in st if t["win"]) / len(st), 1),
+                      "avg_pnl":  round(sum(t["pnl_pct"] for t in st) / len(st), 1)}
+    return out
 
 
 def _wfo_eval_train_proc(combo):
@@ -4305,11 +4676,9 @@ def _wfo_eval_train_proc(combo):
     hold   = combo.get("hold_days", 21)
     params = {k: v for k, v in combo.items() if k != "hold_days"}
     all_t  = []
-    for sym, hist in _WFO_HIST_MAP.items():
-        split  = _WFO_SPLIT_MAP[sym]
-        pc     = _WFO_PRECOMP_MAP[sym]
+    for sym, pc in _WFO_PRECOMP_MAP.items():
         trades = run_backtest_ticker(sym, hold_days=hold, params=params,
-                                     hist=hist, idx_end=split, precomp=pc)
+                                     idx_end=_WFO_SPLIT_MAP[sym], precomp=pc)
         all_t.extend(trades)
     return _wfo_sharpe(all_t), len(all_t), combo
 
@@ -4320,25 +4689,21 @@ def _wfo_eval_val_proc(item):
     hold   = combo.get("hold_days", 21)
     params = {k: v for k, v in combo.items() if k != "hold_days"}
     val_trades = []
-    for sym, hist in _WFO_HIST_MAP.items():
-        split  = _WFO_SPLIT_MAP[sym]
-        pc     = _WFO_PRECOMP_MAP[sym]
+    for sym, pc in _WFO_PRECOMP_MAP.items():
         trades = run_backtest_ticker(sym, hold_days=hold, params=params,
-                                      hist=hist, idx_start=split, precomp=pc)
+                                     idx_start=_WFO_SPLIT_MAP[sym], precomp=pc)
         val_trades.extend(trades)
-    val_sharpe = _wfo_sharpe(val_trades)
-    val_wr     = round(len([t for t in val_trades if t["win"]]) /
-                       max(len(val_trades), 1) * 100, 1)
-    val_avg    = round(sum(t["pnl_pct"] for t in val_trades) /
-                       max(len(val_trades), 1), 1)
+    n = max(len(val_trades), 1)
     return {
-        "params":       combo,
-        "train_sharpe": train_sharpe,
-        "train_trades": train_n,
-        "val_sharpe":   val_sharpe,
-        "val_trades":   len(val_trades),
-        "val_win_rate": val_wr,
-        "val_avg_pnl":  val_avg,
+        "params":        combo,
+        "train_sharpe":  train_sharpe,
+        "train_trades":  train_n,
+        "val_sharpe":    _wfo_sharpe(val_trades),
+        "val_trades":    len(val_trades),
+        "val_win_rate":  round(len([t for t in val_trades if t["win"]]) / n * 100, 1),
+        "val_avg_pnl":   round(sum(t["pnl_pct"] for t in val_trades) / n, 1),
+        "val_avg_pnl_trigger_fill": round(sum(t["pnl_trigger_pct"] for t in val_trades) / n, 1),
+        "val_by_strategy": _wfo_strategy_stats(val_trades),
     }
 
 
@@ -4379,18 +4744,19 @@ def _run_wfo_job_inner(tickers):
 
     # ── Step 1: bulk-download all histories once ────────────────
     print(f"  [WFO] Downloading 2y history for {len(tickers)} tickers…")
-    hist_map = _bulk_download(tickers, "2y", min_rows=120)
+    hist_map = _bulk_download(tickers, "2y", min_rows=60)     # same 60-bar minimum as the live scanner
 
     if not hist_map:
         with _wfo_lock:
             _wfo_state.update(stage="No data available")
         return
 
-    # ── Step 2: pre-compute indicators once per ticker ──────────
+    # ── Step 2: pre-compute indicators + market context once per ticker ──
     with _wfo_lock:
-        _wfo_state["stage"] = "Pre-computing indicators…"
+        _wfo_state["stage"] = f"Pre-computing indicators + GARCH for {len(hist_map)} tickers…"
     print(f"  [WFO] Pre-computing indicators for {len(hist_map)} tickers…")
-    precomp_map = {sym: _precompute_indicators(h) for sym, h in hist_map.items()}
+    precomp_map = _precompute_many(hist_map, label="WFO")
+    hist_map    = {s: h for s, h in hist_map.items() if s in precomp_map}
 
     # ── Step 3: split by DATE, not by per-ticker row count ──────
     # A ticker with a short history (IPO, data gap) had its "first 75%" land
@@ -4415,7 +4781,7 @@ def _run_wfo_job_inner(tickers):
     with ProcessPoolExecutor(
         max_workers=WFO_CPU_WORKERS,
         initializer=_wfo_worker_init,
-        initargs=(hist_map, split_map, precomp_map),
+        initargs=(split_map, precomp_map),
     ) as pool:
         train_futures = {pool.submit(_wfo_eval_train_proc, combo): combo for combo in combos}
         train_done = 0
@@ -4570,42 +4936,28 @@ def _run_calibration_job_inner(months, universe):
         _cal_state.update(stage=f"Running backtest on {len(hist_map)} tickers…",
                           total=len(hist_map))
 
-    # ── 2. Backtest each ticker in the recent window ──────────
+    # ── 2. Backtest each ticker in the recent window (live rules, live params) ──
+    with _cal_lock:
+        _cal_state["stage"] = f"Pre-computing indicators + GARCH for {len(hist_map)} tickers…"
+    precomp_map = _precompute_many(hist_map, label="CAL")
+    params      = live_params()
     all_trades: list = []
-    sample_logged = False
-    for i, (sym, hist) in enumerate(hist_map.items()):
+    for i, (sym, pc) in enumerate(precomp_map.items()):
         with _cal_lock:
             _cal_state["progress"] = i + 1
         try:
-            # Use the last bar's date as reference — avoids tz arithmetic errors
-            end_ts    = hist.index[-1]
-            cutoff    = end_ts - pd.DateOffset(months=months)
-            start_idx = max(60, int(hist.index.searchsorted(cutoff)))
-            end_idx   = len(hist) - 14
-            if not sample_logged:
-                print(f"  [CAL] Sample — {sym}: rows={len(hist)}, "
-                      f"start_idx={start_idx}, end_idx={end_idx}, "
-                      f"window={end_idx - start_idx} bars")
-                sample_logged = True
-            trades = run_backtest_ticker(sym, hold_days=14, hist=hist,
-                                         idx_start=start_idx)
+            cutoff    = pc["index"][-1] - pd.DateOffset(months=months)
+            start_idx = max(60, int(pc["index"].searchsorted(cutoff)))
+            trades = run_backtest_ticker(sym, hold_days=14, params=params, precomp=pc, idx_start=start_idx)
             all_trades.extend(trades)
         except Exception as e:
             print(f"  [CAL] {sym} error: {e}")
 
-    print(f"  [CAL] Backtest complete — {len(all_trades)} trades from {len(hist_map)} tickers")
+    print(f"  [CAL] Backtest complete — {len(all_trades)} trades from {len(precomp_map)} tickers")
 
     if not all_trades:
-        # Diagnose: try one ticker with no window restriction to see if BT itself works
-        sample_sym = next(iter(hist_map))
-        sample_trades = run_backtest_ticker(sample_sym, hold_days=14,
-                                             hist=hist_map[sample_sym], idx_start=60)
-        print(f"  [CAL] Diagnostic (no window restriction) — {sample_sym}: "
-              f"{len(sample_trades)} trades")
         with _cal_lock:
-            _cal_state.update(running=False,
-                              stage=f"No trades in last {months}m window "
-                                    f"(full-history test: {len(sample_trades)} trades on {sample_sym})")
+            _cal_state.update(running=False, stage=f"No trades in last {months}m window")
         return
 
     with _cal_lock:
@@ -4731,22 +5083,15 @@ LR_CALIBRATION_FILE = "lr_calibration.json"
 
 # ── Signal flags and human labels used by LR calibration ──────────
 _LR_SIGNAL_FLAGS = [
-    "sig_rsi_os", "sig_bb_low", "sig_reversal", "sig_macd_bull", "sig_vol_ok",
-    "sig_rsi_ob", "sig_bb_high", "sig_macd_bear",
-    "sig_mfi_os", "sig_mfi_ob",
+    "sig_rsi_os", "sig_bb_low", "sig_dc_low", "sig_reversal", "sig_macd_bull", "sig_vol_ok",
+    "sig_rsi_ob", "sig_bb_high", "sig_dc_high", "sig_macd_bear",
+    "sig_mfi_os", "sig_mfi_ob", "sig_above_ma50", "sig_hv_high", "sig_hv_low",
+    "sig_rs_strong", "sig_rs_weak", "sig_near_52w_low", "sig_near_52w_high",
+    "sig_ema_bull", "sig_ema_bear", "sig_ema_cross_bull", "sig_ema_cross_bear",
+    "sig_vix_backw", "sig_vix_contango", "sig_regime_low",
+    "sig_garch_expand", "sig_garch_contract", "sig_exhaustion",
 ]
-_LR_FLAG_LABELS = {
-    "sig_rsi_os":    "RSI Oversold",
-    "sig_bb_low":    "Below BB Lower",
-    "sig_reversal":  "RSI Turning Up",
-    "sig_macd_bull": "MACD Bull Cross",
-    "sig_vol_ok":    "Volume Confirmed",
-    "sig_rsi_ob":    "RSI Overbought",
-    "sig_bb_high":   "Above BB Upper",
-    "sig_macd_bear": "MACD Bear Cross",
-    "sig_mfi_os":    "MFI Oversold (<20)",
-    "sig_mfi_ob":    "MFI Overbought (>80)",
-}
+_LR_FLAG_LABELS = dict(SIGNAL_FLAG_LABELS)
 
 
 def _fit_lr_on_trade_list(trade_list, source_label=""):
@@ -4944,19 +5289,19 @@ def _run_logistic_calibration(source="signal_log", months=12, universe="focus"):
             with _lr_lock:
                 _lr_state["stage"] = f"Running backtest on {len(hist_map)} tickers…"
 
+            with _lr_lock:
+                _lr_state["stage"] = f"Pre-computing indicators + GARCH for {len(hist_map)} tickers…"
+            precomp_map = _precompute_many(hist_map, label="LR")
+            params      = live_params()
             all_trades: list = []
-            for i, (sym, hist) in enumerate(hist_map.items()):
+            for i, (sym, pc) in enumerate(precomp_map.items()):
                 if i % 50 == 0:
                     with _lr_lock:
-                        _lr_state["stage"] = (
-                            f"Backtesting {i}/{len(hist_map)} tickers…"
-                        )
+                        _lr_state["stage"] = f"Backtesting {i}/{len(precomp_map)} tickers…"
                 try:
-                    end_ts    = hist.index[-1]
-                    cutoff    = end_ts - pd.DateOffset(months=months)
-                    start_idx = max(60, int(hist.index.searchsorted(cutoff)))
-                    trades    = run_backtest_ticker(sym, hold_days=14, hist=hist,
-                                                    idx_start=start_idx)
+                    cutoff    = pc["index"][-1] - pd.DateOffset(months=months)
+                    start_idx = max(60, int(pc["index"].searchsorted(cutoff)))
+                    trades    = run_backtest_ticker(sym, hold_days=14, params=params, precomp=pc, idx_start=start_idx)
                     all_trades.extend(trades)
                 except Exception as e:
                     print(f"  [LR] {sym} backtest error: {e}")
@@ -5079,44 +5424,35 @@ def _run_hold_sweep_job(months=12, universe="focus"):
         # (unadjusted prices — same basis as the calibration/LR jobs).
         with _hs_lock:
             _hs_state["stage"] = f"Downloading 2y history for {len(tickers)} tickers…"
-        hist_map = _bulk_download(tickers, "2y", min_rows=120)
+        hist_map = _bulk_download(tickers, "2y", min_rows=60)
 
-        # Use the live bot's calibrated entry params (from WFO) so HH tests the
-        # SAME setups the live scanner would actually trade — not the loosest
-        # possible defaults (bull_min=1, bear_min=1).
-        live_params = dict(scan_state.get("wfo_params", {}))
-        if live_params:
-            print(f"  [HoldSweep] Using live calibration params: {live_params}")
-        else:
-            print(f"  [HoldSweep] No WFO params set — using global defaults (bull_min=1, bear_min=1)")
+        # The live scanner's exact parameters (applied optimizer values + UI
+        # toggles) so the analysis covers the setups it would actually trade.
+        params = live_params()
+        print(f"  [HoldSweep] Using live params: {params}")
 
         with _hs_lock:
-            _hs_state["stage"] = f"Analysing {len(tickers)} tickers…"
+            _hs_state["stage"] = f"Pre-computing indicators + GARCH for {len(hist_map)} tickers…"
+        precomp_map = _precompute_many(hist_map, label="HoldSweep")
+        with _hs_lock:
+            _hs_state["stage"] = f"Analysing {len(precomp_map)} tickers…"
 
         all_trades = []
         done = 0
 
         def _sweep_one(tkr):
             try:
-                h = hist_map.get(tkr)
-                if h is None:
-                    _, h = _fetch_history(tkr, "2y")
-                if h is None or len(h) < 120:
+                pc = precomp_map.get(tkr)
+                if pc is None:
                     return []
-                # yfinance returns a tz-aware index; strip it so the cutoff
-                # comparison works (cutoff is tz-naive).
-                if h.index.tz is not None:
-                    h = h.copy()
-                    h.index = h.index.tz_localize(None)
-                # Pre-compute indicators on the FULL 2y history (the 200-day MA and
-                # 52-week range need it), then only *score* bars after the cutoff.
-                pc        = _precompute_indicators(h)
-                idx_start = int(h.index.searchsorted(pd.Timestamp(cutoff)))
-                if len(h) - idx_start < 25:
+                # Indicators are on the FULL 2y history (the 200-day MA and
+                # 52-week range need it); only bars after the cutoff are scored.
+                idx_start = int(pc["index"].searchsorted(pd.Timestamp(cutoff)))
+                if pc["n"] - idx_start < 25:
                     return []
                 return run_backtest_ticker(
-                    tkr, hold_days=21, hist=h, precomp=pc, idx_start=idx_start,
-                    params=live_params, record_path=True
+                    tkr, hold_days=21, precomp=pc, idx_start=idx_start,
+                    params=params, record_path=True
                 )
             except Exception as _e:
                 print(f"  [HoldSweep] {tkr} skipped: {_e}")
@@ -5315,17 +5651,27 @@ def _log_new_signals(totals: dict):
                     "rsi_at_signal":   rec.get("rsi"),
                     "score":           rec.get("score"),
                     "vix_regime":      rec.get("vix_regime"),
-                    # Individual signal flags (for per-signal quality analysis)
-                    "sig_rsi_os":    rec.get("rsi", 100) < 30,
-                    "sig_bb_low":    rec.get("price", 0) < rec.get("bb_lower", 0),
-                    "sig_rsi_ob":    rec.get("rsi", 0) > 70,
-                    "sig_bb_high":   rec.get("price", 0) > rec.get("bb_upper", 0),
-                    "sig_macd_bull": rec.get("macd_bull", False),
-                    "sig_macd_bear": rec.get("macd_bear", False),
-                    "sig_reversal":  rec.get("reversal", rec.get("reversal_up", False)),  # scan stores "reversal"
-                    "sig_vol_ok":    rec.get("vol_confirmed", False),
-                    "sig_mfi_os":    rec.get("sig_mfi_os", False),
-                    "sig_mfi_ob":    rec.get("sig_mfi_ob", False),
+                    # Market IV vs model vol at signal time — the only place the
+                    # real IV-vs-GARCH edge can be measured (no historical IV exists)
+                    "iv_at_signal":    (rec.get("option") or {}).get("iv"),
+                    "garch_at_signal": rec.get("garch_vol"),
+                    "hv30_at_signal":  rec.get("hv30"),
+                    "garch_expand":    rec.get("garch_expand"),
+                    "garch_contract":  rec.get("garch_contract"),
+                    # Individual signal flags — the engine's own definitions (the same
+                    # keys the backtest records), not a separate set of thresholds.
+                    **(rec.get("flags") or {
+                        "sig_rsi_os":    rec.get("rsi", 100) < 30,
+                        "sig_bb_low":    rec.get("price", 0) < rec.get("bb_lower", 0),
+                        "sig_rsi_ob":    rec.get("rsi", 0) > 70,
+                        "sig_bb_high":   rec.get("price", 0) > rec.get("bb_upper", 0),
+                        "sig_macd_bull": rec.get("macd_bull", False),
+                        "sig_macd_bear": rec.get("macd_bear", False),
+                        "sig_reversal":  rec.get("reversal", False),
+                        "sig_vol_ok":    rec.get("vol_confirmed", False),
+                        "sig_mfi_os":    rec.get("sig_mfi_os", False),
+                        "sig_mfi_ob":    rec.get("sig_mfi_ob", False),
+                    }),
                     "resolved":      False,
                     "outcome":       None,
                 }
@@ -5356,132 +5702,47 @@ def _simulate_signal_exit(entry, hist):
     and win. Falls back to end-of-hold resolution if no trigger hits.
     """
     strat       = entry.get("strategy", "")
-    entry_price = entry.get("price_at_signal")
+    entry_price = _as_float(entry.get("price_at_signal"))
     signal_date = (entry.get("signal_date") or "")[:10]
-    hold_days   = entry.get("hold_days", 7)
+    hold_days   = int(entry.get("hold_days", 7) or 7)
 
-    if not entry_price or entry_price <= 0 or not signal_date:
+    if entry_price <= 0 or not signal_date or strat not in ("buy_call", "buy_put", "sell_put", "covered_call"):
         return None
-
-    # Map strategy -> option type + position direction
-    if strat == "buy_call":
-        opt_type, position = "call", "long"
-    elif strat == "buy_put":
-        opt_type, position = "put",  "long"
-    elif strat == "sell_put":
-        opt_type, position = "put",  "short"
-    elif strat == "covered_call":
-        opt_type, position = "call", "short"
-    else:
-        return None
-
-    # Strip tz from hist index if present
-    if hist.index.tz is not None:
-        hist = hist.copy()
-        hist.index = hist.index.tz_localize(None)
-
     try:
-        entry_dt = datetime.strptime(signal_date, "%Y-%m-%d").date()
+        entry_dt = pd.Timestamp(signal_date)
     except Exception:
         return None
 
-    bars_after  = hist[hist.index.date >= entry_dt].head(hold_days + 1)
-    if len(bars_after) < 2:
-        return None  # not enough days to walk
+    # Same engine as the backtest: indicator frame on UNADJUSTED daily bars
+    # (indices for the RSI/BB exits), the same option model and the same walk.
+    fr = indicator_frame(hist, spy_closes=None, sym=entry.get("ticker"), garch=None)
+    pos = int(fr["index"].searchsorted(entry_dt))
+    if pos >= fr["n"] or pos + 1 >= fr["n"]:
+        return None                                   # signal bar not in history / nothing after it
+    hv = pd.Series(fr["hv30"]) * 1.15
+    rets = pd.Series(fr["price"]).pct_change()
+    hv = hv.fillna(rets.rolling(20, min_periods=5).std() * np.sqrt(252) * 1.15).fillna(0.30).clip(0.05, 2.0)
+    sigma = float(hv.iloc[pos])
 
-    # GARCH IV estimate on closes through signal_date (fallback 40%)
-    bars_before = hist[hist.index.date < entry_dt]
-    iv_closes   = pd.concat([bars_before["Close"], bars_after["Close"].head(1)])
-    try:
-        sigma = float(calc_garch_vol(iv_closes)) if len(iv_closes) >= 30 else 0.40
-    except Exception:
-        sigma = 0.40
-    sigma = max(0.05, min(2.0, sigma))
-
-    # Entry option premium
-    K = round(entry_price)
-    T_entry   = hold_days / 365.0
-    entry_opt = _bt_option_price(entry_price, K, T_entry, sigma, opt_type)
+    opt_type  = "call" if strat in ("buy_call", "covered_call") else "put"
+    K         = _bt_strike(entry_price)
+    entry_opt = _bt_option_price(entry_price, K, OPTION_DTE_TARGET / 365.0, sigma, opt_type)
     if entry_opt < 0.01:
-        return None  # entry premium too small to evaluate meaningfully
+        return None
 
-    def _opt_pnl(curr_opt):
-        if position == "long":
-            return (curr_opt - entry_opt) / entry_opt * 100
-        else:  # short — profit when premium decays
-            return (entry_opt - curr_opt) / entry_opt * 100
-
-    # Walk forward day by day, tracking peak option P&L for trailing stop
-    peak_pnl = -999.0
-    for i in range(1, len(bars_after)):
-        date_idx    = bars_after.index[i]
-        close       = float(bars_after["Close"].iloc[i])
-        T_remain    = max((hold_days - i) / 365.0, 0.001)
-        current_opt = _bt_option_price(close, K, T_remain, sigma, opt_type)
-        opt_pnl     = _opt_pnl(current_opt)
-        stock_ret   = (close - entry_price) / entry_price * 100
-        peak_pnl    = max(peak_pnl, opt_pnl)
-
-        # Stop loss takes precedence over take-profit on the same day
-        if opt_pnl <= -SELL_STOP_LOSS:
-            return {
-                "exit_day":         date_idx.strftime("%Y-%m-%d"),
-                "exit_day_idx":     i,
-                "exit_reason":      "stop_loss",
-                "exit_option_pct":  round(opt_pnl, 2),
-                "stock_return_pct": round(stock_ret, 2),
-                "exit_price":       round(close, 2),
-                "win":              False,
-            }
-        # Trailing stop — lock in gains once peak crossed activation
-        if peak_pnl >= TRAIL_ACTIVATE_PCT:
-            trailing_stop = peak_pnl - TRAIL_LOCK_PCT
-            if opt_pnl <= trailing_stop:
-                return {
-                    "exit_day":         date_idx.strftime("%Y-%m-%d"),
-                    "exit_day_idx":     i,
-                    "exit_reason":      "trailing_stop",
-                    "exit_option_pct":  round(opt_pnl, 2),
-                    "stock_return_pct": round(stock_ret, 2),
-                    "exit_price":       round(close, 2),
-                    "win":              opt_pnl > 0,
-                }
-        if opt_pnl >= SELL_PROFIT_TARGET:
-            return {
-                "exit_day":         date_idx.strftime("%Y-%m-%d"),
-                "exit_day_idx":     i,
-                "exit_reason":      "take_profit",
-                "exit_option_pct":  round(opt_pnl, 2),
-                "stock_return_pct": round(stock_ret, 2),
-                "exit_price":       round(close, 2),
-                "win":              True,
-            }
-        # Stagnation — close positions sitting near flat after N days
-        if i >= STAGNANT_DAYS and abs(opt_pnl) <= STAGNANT_RANGE:
-            return {
-                "exit_day":         date_idx.strftime("%Y-%m-%d"),
-                "exit_day_idx":     i,
-                "exit_reason":      "stagnation",
-                "exit_option_pct":  round(opt_pnl, 2),
-                "stock_return_pct": round(stock_ret, 2),
-                "exit_price":       round(close, 2),
-                "win":              opt_pnl > 0,
-            }
-
-    # No trigger — resolve at end of hold
-    final_close = float(bars_after["Close"].iloc[-1])
-    T_remain    = max(1 / 365.0, 0.001)
-    final_opt   = _bt_option_price(final_close, K, T_remain, sigma, opt_type)
-    final_pnl   = _opt_pnl(final_opt)
-    final_stock = (final_close - entry_price) / entry_price * 100
+    ex = _bt_walk_exit(fr, pos, K, sigma, hold_days, strat, entry_opt)
+    if ex is None:
+        return None                                   # hold period not complete yet
+    j = pos + ex["exit_offset"]
+    close = float(fr["price"][j])
     return {
-        "exit_day":         bars_after.index[-1].strftime("%Y-%m-%d"),
-        "exit_day_idx":     len(bars_after) - 1,
-        "exit_reason":      "end_of_hold",
-        "exit_option_pct":  round(final_pnl, 2),
-        "stock_return_pct": round(final_stock, 2),
-        "exit_price":       round(final_close, 2),
-        "win":              final_pnl > 0,
+        "exit_day":         fr["dates"][j] if "dates" in fr else str(fr["index"][j])[:10],
+        "exit_day_idx":     ex["exit_offset"],
+        "exit_reason":      ex["exit_reason"],
+        "exit_option_pct":  round(ex["pnl_pct"], 2),
+        "stock_return_pct": round((close - entry_price) / entry_price * 100, 2),
+        "exit_price":       round(close, 2),
+        "win":              bool(ex["pnl_pct"] > 0),
     }
 
 
@@ -5527,9 +5788,12 @@ def _resolve_signal_log():
                     earliest_dt = datetime.strptime(earliest_date, "%Y-%m-%d").date()
                 except Exception:
                     continue
-                # Pull a couple of extra trading days of buffer before the earliest entry
-                start_dt = earliest_dt - timedelta(days=3)
-                hist = _yf_call(yf.Ticker(sym).history, start=start_dt.isoformat())
+                # Start well before the earliest entry so the RSI/BB exit indicators
+                # are valid on the signal bar; UNADJUSTED prices like every other path
+                # (the default auto_adjust=True compared adjusted closes with the
+                # unadjusted price_at_signal across ex-dividend dates).
+                start_dt = earliest_dt - timedelta(days=120)
+                hist = _clean_hist(_yf_call(yf.Ticker(sym).history, start=start_dt.isoformat(), auto_adjust=False))
                 if hist is None or hist.empty:
                     continue
                 cur_price = float(hist["Close"].iloc[-1])
@@ -6551,65 +6815,14 @@ def api_debug_scan(sym):
         if hist is None or len(hist) < 60:
             return jsonify({"error": "Not enough history data"}), 400
 
-        closes  = hist["Close"]
-        price   = float(closes.iloc[-1])
-        rsi_ser = calc_rsi(closes, RSI_PERIOD)
-        cur_rsi = float(rsi_ser.iloc[-1])
-        bb_u, bb_m, bb_l = calc_bb(closes, BB_PERIOD, BB_STD_DEV)
-        cur_bb_u = float(bb_u.iloc[-1])
-        cur_bb_l = float(bb_l.iloc[-1])
-
-        ma200_ser  = closes.rolling(200).mean()
-        ma200      = float(ma200_ser.iloc[-1])
-        trend_bull = price > ma200
-        trend_bear = price < ma200
-
-        adx_ser, pdi_ser, ndi_ser = calc_adx(hist)
-        cur_adx = float(adx_ser.iloc[-1]) if adx_ser is not None else None
-        cur_pdi = float(pdi_ser.iloc[-1]) if pdi_ser is not None else None
-        cur_ndi = float(ndi_ser.iloc[-1]) if ndi_ser is not None else None
-        strong_trend = cur_adx is not None and cur_adx > 30
-
-        reversal_up     = rsi_turning_up(rsi_ser)
-        oversold        = cur_rsi < RSI_OVERSOLD or price < cur_bb_l
-        overbought      = cur_rsi > RSI_OVERBOUGHT or price > cur_bb_u
-        exhaustion      = cur_rsi < 30 and reversal_up
-        _raw_knife      = trend_bear and strong_trend and (cur_ndi or 0) > (cur_pdi or 0)
-        falling_knife   = _raw_knife and not exhaustion
-        melt_up         = trend_bull and strong_trend and (cur_pdi or 0) > (cur_ndi or 0)
-
-        macd_line, macd_sig, _ = calc_macd(closes)
-        macd_cross  = macd_crossover(macd_line, macd_sig)
-        macd_bull   = macd_cross == "bull"
-        macd_bear   = macd_cross == "bear"
-
-        vol_confirmed, cur_vol, avg_vol = volume_confirmation(hist)
-        cur_vix   = get_vix()
-        regime    = vix_regime(cur_vix)
-
-        bull_signals = sum([
-            cur_rsi < 30, price < cur_bb_l, reversal_up,
-            macd_bull, vol_confirmed, regime == "low"
-        ])
-        bear_signals = sum([
-            cur_rsi > RSI_OVERBOUGHT, price > cur_bb_u, macd_bear, vol_confirmed
-        ])
-
-        _wfo_p    = scan_state.get("wfo_params", {})
-        _bull_min = min(_wfo_p.get("bull_min", 1), 2)
-        _bear_min = min(_wfo_p.get("bear_min", 2), 2)
-        market_trend = get_market_trend()
-        if market_trend == "bull_strong": _bear_min = min(_bear_min + 1, 3)
-        elif market_trend == "bear_strong": _bear_min = max(1, _bear_min - 1)
-
-        green_candle = float(closes.iloc[-1]) > float(closes.iloc[-2])
-        red_candle   = float(closes.iloc[-1]) < float(closes.iloc[-2])
-        green_ok     = (not REQUIRE_GREEN_CANDLE) or green_candle
-        red_ok       = (not REQUIRE_RED_CANDLE)   or red_candle
-
-        has_sell_put  = (oversold or macd_bear) and price <= MAX_PRICE_SELL and not falling_knife
-        has_buy_call  = oversold and bull_signals >= _bull_min and not falling_knife and green_ok
-        has_buy_put   = (overbought or macd_bear) and bear_signals >= _bear_min and not melt_up and red_ok
+        # Exactly what the live scanner does — same engine, same parameters —
+        # so the breakdown can never drift from the real gate again.
+        _warm_market_caches()
+        fr  = indicator_frame(hist, spy_closes=_spy_cache.get("closes"), sym=sym, garch="last")
+        ind = ind_at(fr, -1)
+        ctx = live_market_ctx()
+        prm = live_params()
+        ev  = evaluate_entry(ind, ctx, prm, scan_condors=False)
 
         # Check if option chain is available
         opt_available = False
@@ -6619,64 +6832,26 @@ def api_debug_scan(sym):
         except Exception:
             pass
 
+        ind_out = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in ind.items() if k not in ("i", "date")}
+        ev_out  = {k: v for k, v in ev.items() if k != "flags"}
         return jsonify({
-            "ticker":        sym,
-            "price":         round(price, 2),
-            "rsi":           round(cur_rsi, 1),
-            "ma200":         round(ma200, 2),
-            "adx":           round(cur_adx, 1) if cur_adx else None,
-            "pdi":           round(cur_pdi, 1) if cur_pdi else None,
-            "ndi":           round(cur_ndi, 1) if cur_ndi else None,
-            "conditions": {
-                "oversold":        oversold,
-                "overbought":      overbought,
-                "trend_bull":      trend_bull,
-                "trend_bear":      trend_bear,
-                "strong_trend":    strong_trend,
-                "reversal_up":     reversal_up,
-                "exhaustion_bounce": exhaustion,
-                "falling_knife":   falling_knife,
-                "melt_up":         melt_up,
-                "macd_bull":       macd_bull,
-                "macd_bear":       macd_bear,
-                "vol_confirmed":   vol_confirmed,
-                "green_candle":    green_candle,
-                "red_candle":      red_candle,
-                "green_ok":        green_ok,
-                "red_ok":          red_ok,
-            },
-            "signals": {
-                "bull_signals":  bull_signals,
-                "bear_signals":  bear_signals,
-                "bull_min":      _bull_min,
-                "bear_min":      _bear_min,
-                "market_trend":  market_trend,
-                "vix":           cur_vix,
-                "vix_regime":    regime,
-            },
+            "ticker":         sym,
+            "bar_date":       str(ind["date"])[:10],
+            "price":          round(ind["price"], 2),
+            "params":         prm,
+            "context":        {k: v for k, v in ctx.items() if k != "macro"},
+            "macro":          ctx["macro"],
+            "indicators":     ind_out,
+            "evaluation":     ev_out,
+            "flags":          ev["flags"],
             "strategy_gates": {
-                "has_sell_put":  has_sell_put,
-                "has_buy_call":  has_buy_call,
-                "has_buy_put":   has_buy_put,
-                "price_ok_for_sell": price <= MAX_PRICE_SELL,
+                "has_sell_put":     ev["has_sell_put"],
+                "has_buy_call":     ev["has_buy_call"],
+                "has_buy_put":      ev["has_buy_put"],
+                "has_covered_call": ev["has_covered_call"],
+                "price_ok_for_sell": ind["price"] <= MAX_PRICE_SELL,
             },
-            "blockers": {
-                "sell_put":  f"price > ${MAX_PRICE_SELL:.0f} limit" if price > MAX_PRICE_SELL
-                             else "falling_knife" if falling_knife
-                             else "not oversold or no macd_bear" if not (oversold or macd_bear)
-                             else None,
-                "buy_call":  "falling_knife (not exhaustion_bounce)" if falling_knife and not exhaustion
-                             else "not oversold" if not oversold
-                             else f"bull_signals {bull_signals} < min {_bull_min}" if bull_signals < _bull_min
-                             else "green_candle filter (bypassed by exhaustion_bounce)" if (not green_ok and exhaustion)
-                             else "green_candle filter ON — needs green day or exhaustion bounce" if not green_ok
-                             else None,
-                "buy_put":   "melt_up" if melt_up
-                             else "not overbought or no macd_bear" if not (overbought or macd_bear)
-                             else f"bear_signals {bear_signals} < min {_bear_min}" if bear_signals < _bear_min
-                             else "red_candle filter" if not red_ok
-                             else None,
-            },
+            "blockers":       entry_blockers(ev, ind),
             "option_chain_available": opt_available,
         })
     except Exception as e:
