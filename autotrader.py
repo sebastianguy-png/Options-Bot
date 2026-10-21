@@ -75,6 +75,11 @@ DEFAULT_CONFIG = {
     "pending_order_timeout_mins": 20,           # cancel an unfilled broker order after this long
     "premarket_scan_time":    "07:35",          # ET; a full scan before the open so the cards are ready ("" = off)
     "entry_window_et":        "",               # "HH:MM-HH:MM" ET: open new positions only inside this window ("" = any time the market is open)
+    "work_orders":            True,             # start at the mid (+1 tick) and step toward the ask/bid instead of crossing the spread
+    "order_step_mins":        2,                # minutes an unfilled rung waits before the next one (checked each cycle)
+    "skip_earnings_days":     1,                # no entry when earnings are within this many days (0 = off)
+    "skip_fomc_day":          True,             # no entry on an FOMC decision day
+    "max_per_sector":         2,                # open auto positions per sector (0 = no cap)
 }
 _SECRET_KEYS   = ("alpaca_key_id", "alpaca_secret")
 _STRAT_BUCKET  = {"sell_put": "sell_puts", "buy_call": "buy_calls", "buy_put": "buy_puts"}   # covered calls need shares, condors are 4 legs
@@ -187,6 +192,11 @@ def _coerce(cfg: dict) -> dict:
         cfg["premarket_scan_time"] = f"{hh:02d}:{mm:02d}" if (0 <= hh < 24 and 0 <= mm < 60) else ""
     except ValueError:
         cfg["premarket_scan_time"] = ""
+    cfg["work_orders"]        = bool(cfg.get("work_orders", True))
+    cfg["order_step_mins"]    = i("order_step_mins", 1, 60)
+    cfg["skip_earnings_days"] = i("skip_earnings_days", 0, 10)
+    cfg["skip_fomc_day"]      = bool(cfg.get("skip_fomc_day", True))
+    cfg["max_per_sector"]     = i("max_per_sector", 0, 50)
     w = str(cfg.get("entry_window_et") or "").replace(" ", "")
     try:
         a, b = w.split("-")
@@ -327,6 +337,42 @@ def _account_info(br, max_age=60.0) -> dict | None:
     return _account["data"]
 
 
+def _tick(price: float) -> float:
+    return 0.01 if price < 3 else 0.05
+
+
+def _ladder(side: str, bid: float, ask: float) -> list:
+    """
+    Limit prices to try in order instead of crossing the spread at once:
+    buy  → mid + 1 tick, halfway to the ask, the ask
+    sell → mid − 1 tick, halfway to the bid, the bid
+    Falls back to the touch when the quote is one-sided.
+    """
+    if not (bid > 0 and ask > bid):
+        p = ask if side == "buy" else bid
+        return [round(p, 2)] if p > 0 else []
+    mid, t = (bid + ask) / 2, _tick((bid + ask) / 2)
+    out = []
+    if side == "buy":
+        for r in (mid + t, mid + (ask - mid) / 2, ask):
+            r = round(min(ask, r), 2)
+            if r > 0 and (not out or r > out[-1]):       # strictly worse each rung; a 2-tick spread collapses to the ask
+                out.append(r)
+    else:
+        for r in (mid - t, mid - (mid - bid) / 2, bid):
+            r = round(max(bid, r), 2)
+            if r > 0 and (not out or r < out[-1]):
+                out.append(r)
+    return out
+
+
+def _slippage_pct(side: str, fill: float, mid: float) -> float | None:
+    """Fill vs the quote mid, as % of the mid (positive = paid more than mid / received less)."""
+    if not (fill and mid and mid > 0):
+        return None
+    return round(((fill - mid) if side == "buy" else (mid - fill)) / mid * 100, 2)
+
+
 def _occ(pos_or_cand: dict) -> str | None:
     opt = pos_or_cand.get("option") or {}
     try:
@@ -450,10 +496,38 @@ def _settle_pending(br, cfg) -> int:
     with _state_lock:
         pending = list(_state["pending"])
     keep = []
+    step = timedelta(minutes=cfg["order_step_mins"])
     for p in pending:
         cand = p["candidate"]
         age  = datetime.now() - datetime.fromisoformat(p["submitted_at"])
         o, state, info = _order_state(br, p["order_id"])
+        ladder, attempt = p.get("ladder") or [], int(p.get("attempt", 0))
+        if state == "open" and ladder and attempt < len(ladder) - 1 and age > step:
+            # work the order: cancel this rung, book any partial fill, resubmit the rest one rung worse
+            o, state, info = _cancel_then_refetch(br, p["order_id"])
+            if state in ("failed", "missing"):
+                filled = int(o.filled_qty or 0) if o else 0
+                if filled > 0:
+                    _add_tracked(cand, filled, float(o.filled_avg_price or p["limit"]), o.id, br, quote=p.get("quote"))
+                    n += 1
+                remaining = int(p["qty"]) - filled
+                if remaining > 0:
+                    price = ladder[attempt + 1]
+                    try:
+                        o2 = br.submit_option_order(p["symbol"], p["side"], remaining, limit_price=price, ref_price=p.get("ref"))
+                    except BrokerError as e:
+                        _log("entry_error", ticker=cand["ticker"], strategy=cand["strategy"], detail=str(e))
+                        continue
+                    st2 = (o2.status or "").lower()
+                    if st2 in _ORDER_DONE and o2.filled_qty:
+                        _add_tracked(cand, int(o2.filled_qty), float(o2.filled_avg_price or price), o2.id, br, quote=p.get("quote"))
+                        n += 1
+                    elif st2 in _ORDER_FAILED:
+                        _log("entry_rejected", ticker=cand["ticker"], strategy=cand["strategy"], status=st2, detail=o2.message)
+                    else:
+                        keep.append({**p, "order_id": o2.id, "qty": remaining, "limit": price, "attempt": attempt + 1, "submitted_at": _now()})
+                        _log("entry_stepped", ticker=cand["ticker"], strategy=cand["strategy"], attempt=attempt + 1, limit=price, order=o2.id)
+                continue
         if state == "open" and age > timeout:
             o, state, info = _cancel_then_refetch(br, p["order_id"])
             if state == "open":
@@ -491,6 +565,19 @@ def _settle_pending(br, cfg) -> int:
             continue
         age = datetime.now() - datetime.fromisoformat(pc["submitted_at"])
         o, state, info = _order_state(br, pc["order_id"])
+        ladder, attempt = pc.get("ladder") or [], int(pc.get("attempt", 0))
+        if state == "open" and ladder and attempt < len(ladder) - 1 and age > step:
+            # unfilled at this rung: cancel; what filled is booked, the rest goes out again one rung worse
+            o, state, info = _cancel_then_refetch(br, pc["order_id"])
+            if state in ("failed", "missing"):
+                filled = int(o.filled_qty or 0) if o else 0
+                if filled > 0:
+                    _finalize_exit(pos["id"], float(o.filled_avg_price or pc["limit"]), pc.get("reason", ""), o.id, qty=filled)
+                    n += 1
+                _set_position_field(pos["id"], "pending_close", None)
+                _set_position_field(pos["id"], "close_attempt", attempt + 1)
+                _log("close_stepped", ticker=pos["ticker"], strategy=pos["strategy"], next_rung=ladder[attempt + 1], attempt=attempt + 1)
+                continue
         if state == "open" and age > timeout:
             o, state, info = _cancel_then_refetch(br, pc["order_id"])
         if state == "error":
@@ -562,10 +649,12 @@ def _manage_exits(br, cfg) -> int:
         mid = _ob._as_float(sig.get("current_option_mid"))
         bid = _ob._as_float(sig.get("current_bid"))
         ask = _ob._as_float(sig.get("current_ask"))
-        if is_short:                                     # buy to close
-            side, limit = "buy", (ask if ask > 0 else (mid * 1.03 if mid > 0 else 0))
-        else:                                            # sell to close
-            side, limit = "sell", (bid if bid > 0 else (mid * 0.97 if mid > 0 else 0))
+        side = "buy" if is_short else "sell"             # buy to close a short, sell to close a long
+        if not (bid > 0 and ask > 0) and mid > 0:        # one-sided quote: synthesise a touch around the mid
+            bid, ask = (bid or mid * 0.97), (ask or mid * 1.03)
+        ladder  = _ladder(side, bid, ask) if cfg["work_orders"] else ([ask] if side == "buy" else [bid])
+        attempt = min(int(pos.get("close_attempt", 0)), max(len(ladder) - 1, 0))
+        limit   = ladder[attempt] if ladder else 0
         if limit <= 0:
             _log("close_skipped", ticker=pos["ticker"], strategy=pos["strategy"], detail="no quote for the contract yet")
             continue
@@ -583,7 +672,7 @@ def _manage_exits(br, cfg) -> int:
         else:
             _set_position_field(pos["id"], "pending_close",
                                 {"order_id": o.id, "submitted_at": _now(), "side": side, "qty": qty,
-                                 "limit": round(limit, 2), "reason": reason})
+                                 "limit": round(limit, 2), "reason": reason, "ladder": ladder, "attempt": attempt})
             _log("close_submitted", ticker=pos["ticker"], strategy=pos["strategy"], qty=qty, limit=round(limit, 2),
                  order=o.id, status=st)
     return closed
@@ -614,6 +703,15 @@ def _finalize_exit(pos_id: str, exit_price: float, reason: str, order_id: str, q
             entry_date=str(pos.get("tracked_at") or "")[:10], exit_date=_today(),
             notes=f"autotrade · {reason}" + (f" (partial: {qty} of {held})" if partial else ""), source="autotrade")
         trade["broker"] = pos.get("broker"); trade["order_id"] = order_id
+        sig_q = pos.get("last_signal") or {}
+        trade["escape_case"]        = pos.get("escape_case")
+        trade["sector"]             = pos.get("sector")
+        trade["quote_at_entry"]     = pos.get("quote_at_entry")
+        trade["entry_slippage_pct"] = pos.get("entry_slippage_pct")
+        trade["quote_at_exit"]      = {"bid": sig_q.get("current_bid"), "ask": sig_q.get("current_ask"), "mid": sig_q.get("current_option_mid")}
+        trade["exit_slippage_pct"]  = _slippage_pct("buy" if pos.get("strategy") in _ob.SHORT_PREMIUM_STRATS else "sell",
+                                                    float(exit_price), _ob._as_float(sig_q.get("current_option_mid")))
+        trade["bars_held"]          = int(np.busday_count(np.datetime64(str(pos.get("tracked_at") or _today())[:10]), np.datetime64(date.today())))
         if partial:
             pos["contracts"] = held - qty
             pos.pop("pending_close", None)                # force_close / triggered stay set: the remainder closes next pass
@@ -743,14 +841,20 @@ def _candidates(cfg) -> tuple[list, list]:
         open_keys |= {f"{p['candidate']['ticker']}|{p['candidate']['strategy']}" for p in _state["pending"]}
         recent = dict(_state["recent_exits"])
     cooldown = int(cfg["reentry_cooldown_days"])
+    fomc_today = cfg["skip_fomc_day"] and date.today().isoformat() in set(getattr(_ob, "FOMC_DATES", ()) or ())
     skipped, out = [], []
     for strat in cfg["allowed_strategies"]:
         for r in results.get(_STRAT_BUCKET[strat], []) or []:
             key = f"{r.get('ticker')}|{strat}"
             opt = r.get("option") or {}
+            edte = r.get("earnings_dte")
             why = None
             if _ob._as_float(r.get("score")) < cfg["min_score"]:
                 why = f"score {r.get('score')} < {cfg['min_score']}"
+            elif fomc_today:
+                why = "FOMC decision day"
+            elif cfg["skip_earnings_days"] and edte is not None and 0 <= _ob._as_int(edte, 99) <= cfg["skip_earnings_days"]:
+                why = f"earnings in {edte} day(s)"
             elif key in open_keys:
                 why = "already open / pending"
             elif key in recent and cooldown > 0 and _busdays_since(recent[key]) < cooldown:
@@ -772,7 +876,10 @@ def _candidates(cfg) -> tuple[list, list]:
                 continue
             out.append({"ticker": r["ticker"], "name": r.get("name", ""), "strategy": strat,
                         "strategy_label": r.get("strategy_label", strat), "score": r.get("score"),
-                        "price": r.get("price"), "option": opt, "bar_date": r.get("bar_date")})
+                        "price": r.get("price"), "option": opt, "bar_date": r.get("bar_date"),
+                        "sector": r.get("sector") or "N/A", "earnings_dte": edte,
+                        "escape_case": (r.get("flags") or {}).get("sig_escape_breakout") and "breakout"
+                                       or (r.get("flags") or {}).get("sig_escape_reversion") and "reversion" or None})
     out.sort(key=lambda c: _ob._as_float(c.get("score")), reverse=True)
     return out, skipped
 
@@ -819,18 +926,37 @@ def _open_entries(br, cfg, market_open: bool = True) -> tuple[int, list]:
     account = _account_info(br)
     if account is None and _account["error"]:
         return 0, skipped + [f"broker account unavailable: {_account['error']}"]
+    # sector cap: count what is open or pending per sector
+    by_sector: dict = {}
+    if cfg["max_per_sector"]:
+        with _ob.track_lock:
+            for p in _ob.load_tracked():
+                if p.get("auto"):
+                    by_sector[p.get("sector") or "N/A"] = by_sector.get(p.get("sector") or "N/A", 0) + 1
+        with _state_lock:
+            for p in _state["pending"]:
+                s = (p.get("candidate") or {}).get("sector") or "N/A"
+                by_sector[s] = by_sector.get(s, 0) + 1
     entered = 0
     for c in cands:
         if entered >= slots:
             break
-        qty, limit, mid, why = _size(c, cfg, account)
+        sector = c.get("sector") or "N/A"
+        if cfg["max_per_sector"] and sector != "N/A" and by_sector.get(sector, 0) >= cfg["max_per_sector"]:
+            skipped.append(f"{c['ticker']} {c['strategy']}: sector cap ({sector} already has {by_sector[sector]})")
+            continue
+        qty, touch, mid, why = _size(c, cfg, account)
         if why:
             skipped.append(f"{c['ticker']} {c['strategy']}: {why}")
             continue
         sym  = _occ(c)
         side = "sell" if c["strategy"] in _ob.SHORT_PREMIUM_STRATS else "buy"
+        bid, ask = _ob._as_float(c["option"].get("bid")), _ob._as_float(c["option"].get("ask"))
+        ladder = _ladder(side, bid, ask) if cfg["work_orders"] else [round(touch, 2)]
+        limit  = ladder[0] if ladder else round(touch, 2)
+        quote  = {"bid": bid, "ask": ask, "mid": mid}
         try:
-            o = br.submit_option_order(sym, side, qty, limit_price=round(limit, 2), ref_price=mid)
+            o = br.submit_option_order(sym, side, qty, limit_price=limit, ref_price=mid)
         except BrokerError as e:
             _log("entry_error", ticker=c["ticker"], strategy=c["strategy"], detail=str(e))
             continue
@@ -838,8 +964,9 @@ def _open_entries(br, cfg, market_open: bool = True) -> tuple[int, list]:
         if st in _ORDER_DONE and o.filled_qty:
             filled = int(o.filled_qty)
             fill   = float(o.filled_avg_price or limit)
-            _add_tracked(c, filled, fill, o.id, br)
+            _add_tracked(c, filled, fill, o.id, br, quote=quote)
             entered += 1
+            by_sector[sector] = by_sector.get(sector, 0) + 1
             if account is not None:                       # keep the buying-power figure honest within the cycle
                 used = fill * 100 * filled if side == "buy" else _ob._as_float(c["option"].get("strike")) * 100 * filled
                 account = {**account, "buying_power": _ob._as_float(account.get("buying_power")) - used}
@@ -847,17 +974,22 @@ def _open_entries(br, cfg, market_open: bool = True) -> tuple[int, list]:
             _log("entry_rejected", ticker=c["ticker"], strategy=c["strategy"], status=st, detail=o.message)
         else:
             with _state_lock:
-                _state["pending"].append({"order_id": o.id, "candidate": c, "qty": qty, "limit": round(limit, 2),
+                _state["pending"].append({"order_id": o.id, "candidate": c, "qty": qty, "limit": limit, "symbol": sym,
+                                          "side": side, "ref": mid, "quote": quote, "ladder": ladder, "attempt": 0,
                                           "submitted_at": _now()})
             _save_state()                                 # an open order must survive a crash
             entered += 1
-            _log("entry_submitted", ticker=c["ticker"], strategy=c["strategy"], qty=qty, limit=round(limit, 2),
-                 order=o.id, status=st)
+            by_sector[sector] = by_sector.get(sector, 0) + 1
+            _log("entry_submitted", ticker=c["ticker"], strategy=c["strategy"], qty=qty, limit=limit,
+                 rungs=len(ladder), order=o.id, status=st)
     return entered, skipped
 
 
-def _add_tracked(cand: dict, qty: int, fill: float, order_id: str, br):
+def _add_tracked(cand: dict, qty: int, fill: float, order_id: str, br, quote: dict | None = None):
     """Register a filled entry as a tracked position (same shape as the dashboard's Track button)."""
+    side  = "sell" if cand["strategy"] in _ob.SHORT_PREMIUM_STRATS else "buy"
+    quote = quote or {"bid": _ob._as_float(cand["option"].get("bid")), "ask": _ob._as_float(cand["option"].get("ask")),
+                      "mid": _ob._as_float(cand["option"].get("mid"))}
     position = {
         "id":            str(uuid.uuid4())[:8],
         "tracked_at":    datetime.now().isoformat(),
@@ -880,6 +1012,10 @@ def _add_tracked(cand: dict, qty: int, fill: float, order_id: str, br):
         "broker_order_id": order_id,
         "score_at_entry": cand.get("score"),
         "bar_date":      cand.get("bar_date"),
+        "sector":        cand.get("sector") or "N/A",
+        "escape_case":   cand.get("escape_case"),
+        "quote_at_entry": quote,                                    # what the market showed when we decided
+        "entry_slippage_pct": _slippage_pct(side, fill, quote.get("mid")),   # fill vs mid: the spread actually paid
     }
     with _ob.track_lock:
         positions = _ob.load_tracked()

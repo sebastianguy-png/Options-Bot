@@ -9144,6 +9144,11 @@ const AT_FIELDS = [
   ['pending_order_timeout_mins','Cancel unfilled orders after (min)','number'],
   ['premarket_scan_time','Pre-market scan time (ET, blank = off)','text'],
   ['entry_window_et','Entry window (ET, e.g. 14:45-15:55; blank = all day)','text'],
+  ['work_orders','Work orders from the mid (not cross the spread)','bool'],
+  ['order_step_mins','Minutes per price rung','number'],
+  ['skip_earnings_days','Skip if earnings within (days, 0 = off)','number'],
+  ['skip_fomc_day','Skip FOMC decision days','bool'],
+  ['max_per_sector','Max open positions per sector (0 = off)','number'],
   ['paper_starting_cash','Paper starting cash $','number'],
   ['paper_slippage_pct','Paper slippage %','number'],
 ];
