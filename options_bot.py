@@ -414,6 +414,9 @@ HOLD_DAYS            = 21
 # Stock-based stop — close when the STOCK has moved this % against the position
 # since entry (bullish trades: down, buy puts: up).  0 = off.  Swept by the optimizer.
 STOCK_STOP_PCT       = 0
+# Stock-based trailing exit — close when the STOCK has given back this % from its
+# best close since entry (in the trade's direction).  0 = off.  Swept by the optimizer.
+STOCK_TRAIL_PCT      = 0
 # RSI reversal thresholds — exit when mean reversion is complete:
 SELL_RSI_BULL_TARGET = 52    # Buy Call: RSI back above this → bounce done, take profit (was 55)
 SELL_RSI_BEAR_TARGET = 48    # Buy Put:  RSI back below this → pullback done, take profit (was 45)
@@ -1678,18 +1681,20 @@ def _premarket_overlay(sym, hist):
         return hist, None
 
 
-def _best_exp(tkr_obj):
-    """Return the expiry closest to 30 DTE within [MIN_DTE, MAX_DTE]."""
+def _best_exp(tkr_obj, target=None):
+    """Return the expiry closest to `target` DTE (the live dte_target parameter, 30 by default) within [MIN_DTE, MAX_DTE]."""
     exps  = _option_expirations(tkr_obj)
     if not exps:
         return None, None
+    target = int(target or live_params().get("dte_target") or OPTION_DTE_TARGET)
+    hi     = max(MAX_DTE, target + 15)                    # a longer target widens the window; 30 keeps the classic one
     today = date.today()
     best_exp, best_dte = None, None
     for exp_str in exps:
         # Whole calendar days; subtracting datetime.now() truncated a 30-day expiry to 29.
         dte = (datetime.strptime(exp_str, "%Y-%m-%d").date() - today).days
-        if MIN_DTE <= dte <= MAX_DTE:
-            if best_dte is None or abs(dte - 30) < abs(best_dte - 30):
+        if MIN_DTE <= dte <= hi:
+            if best_dte is None or abs(dte - target) < abs(best_dte - target):
                 best_exp, best_dte = exp_str, dte
     return best_exp, best_dte
 
@@ -2052,6 +2057,9 @@ def live_params():
         "entry_mode":           w.get("entry_mode", "reversion"),          # reversion (the classic rules) / escape (band-escape classifier)
         "escape_normal":        w.get("escape_normal", "skip"),            # escape mode, normal-VIX lower escape: skip / call
         "escape_breakout_vol":  w.get("escape_breakout_vol", 2.0),         # escape mode: volume ratio that makes an upper escape a breakout
+        "otm_factor_call":      w.get("otm_factor_call", 1.0),             # contract selection: strike / stock price for calls (0.97 = slightly ITM)
+        "otm_factor_put":       w.get("otm_factor_put", 1.0),              # … for puts (1.03 = slightly ITM put)
+        "dte_target":           w.get("dte_target", OPTION_DTE_TARGET),    # expiry closest to this many days
         "require_green_candle": REQUIRE_GREEN_CANDLE,
         "require_red_candle":   REQUIRE_RED_CANDLE,
     }
@@ -2094,10 +2102,10 @@ def _spread_cost_pct(ticker, premium):
 
 
 EXIT_KEYS = ("stop_loss_pct", "profit_target_pct", "trail_activate_pct", "trail_lock_pct",
-             "stagnant_days", "stagnant_range", "hold_days", "stock_stop_pct")
+             "stagnant_days", "stagnant_range", "hold_days", "stock_stop_pct", "stock_trail_pct")
 # The exit rules as they shipped (the backtest's "default rules" baseline); a 0 switches a rule off.
 BT_DEFAULT_EXITS = {"stop_loss_pct": 15, "profit_target_pct": 30, "trail_activate_pct": 15, "trail_lock_pct": 8,
-                    "stagnant_days": 3, "stagnant_range": 5, "hold_days": 21, "stock_stop_pct": 0}
+                    "stagnant_days": 3, "stagnant_range": 5, "hold_days": 21, "stock_stop_pct": 0, "stock_trail_pct": 0}
 
 
 def live_exit_params():
@@ -2105,7 +2113,25 @@ def live_exit_params():
     return {"stop_loss_pct": SELL_STOP_LOSS, "profit_target_pct": SELL_PROFIT_TARGET,
             "trail_activate_pct": TRAIL_ACTIVATE_PCT, "trail_lock_pct": TRAIL_LOCK_PCT,
             "stagnant_days": STAGNANT_DAYS, "stagnant_range": STAGNANT_RANGE,
-            "hold_days": HOLD_DAYS, "stock_stop_pct": STOCK_STOP_PCT}
+            "hold_days": HOLD_DAYS, "stock_stop_pct": STOCK_STOP_PCT, "stock_trail_pct": STOCK_TRAIL_PCT}
+
+
+def _stock_best(strategy, prev_best, cur):
+    """Best close since entry in the trade's direction (highest for bullish trades, lowest for buy puts)."""
+    cur, prev = _as_float(cur), _as_float(prev_best)
+    if cur <= 0:
+        return prev if prev > 0 else None
+    if prev <= 0:
+        return cur
+    return min(prev, cur) if strategy == "buy_put" else max(prev, cur)
+
+
+def _stock_giveback(strategy, best, cur):
+    """% the stock has given back from its best close since entry (None when unknown)."""
+    best, cur = _as_float(best), _as_float(cur)
+    if best <= 0 or cur <= 0:
+        return None
+    return round(((cur - best) / best * 100) if strategy == "buy_put" else ((best - cur) / best * 100), 2)
 
 
 def live_market_ctx():
@@ -2659,20 +2685,22 @@ def _adverse_stock_move(strategy, entry_stock, cur_stock):
     return None
 
 
-def _price_exit_core(pct_change, prev_peak, days_held, ex=None, stock_move_pct=None):
+def _price_exit_core(pct_change, prev_peak, days_held, ex=None, stock_move_pct=None, stock_giveback_pct=None):
     """
     Price-based exits in the live tracker's order:
-      profit target → premium stop → stock stop → trailing stop → stagnation → max hold.
-    ex             : the exit parameters (live_exit_params() live, the combo's exits in the
-                     backtest); a 0 switches that rule off
-    days_held      : trading days held (np.busday_count live, bars in the backtest)
-    stock_move_pct : % the stock has moved AGAINST the position since entry (None = unknown)
+      profit target → premium stop → stock stop → stock trail → trailing stop → stagnation → max hold.
+    ex                 : the exit parameters (live_exit_params() live, the combo's exits in the
+                         backtest); a 0 switches that rule off
+    days_held          : trading days held (np.busday_count live, bars in the backtest)
+    stock_move_pct     : % the stock has moved AGAINST the position since entry (None = unknown)
+    stock_giveback_pct : % the stock has given back from its best close since entry (None = unknown)
     Returns (triggered, reasons, peak_pct, code).
     """
     ex = ex or live_exit_params()
     tp = float(ex.get("profit_target_pct") or 0)
     sl = float(ex.get("stop_loss_pct") or 0)
     ss = float(ex.get("stock_stop_pct") or 0)
+    st = float(ex.get("stock_trail_pct") or 0)
     ta = float(ex.get("trail_activate_pct") or 0)
     tl = float(ex.get("trail_lock_pct") or 0)
     sd = int(ex.get("stagnant_days") or 0)
@@ -2688,6 +2716,9 @@ def _price_exit_core(pct_change, prev_peak, days_held, ex=None, stock_move_pct=N
     if not triggered and ss > 0 and stock_move_pct is not None and stock_move_pct >= ss:
         triggered, code = True, "stock_stop"
         reasons.append(f"🧯 Stock stop: underlying moved {stock_move_pct:.1f}% against the position (limit {ss:g}%)")
+    if not triggered and st > 0 and stock_giveback_pct is not None and stock_giveback_pct >= st:
+        triggered, code = True, "stock_trail"
+        reasons.append(f"📉 Stock trail: underlying gave back {stock_giveback_pct:.1f}% from its best close (limit {st:g}%)")
 
     peak_pct = max(_as_float(prev_peak, -999.0), pct_change)
     if ta > 0 and peak_pct >= ta and not triggered:
@@ -3045,7 +3076,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
         # re-states only part of the condition.
         # ── 1. SELL PUT ───────────────────────────────────────
         if has_sell_put:
-            opt = pick_option(tkr, price, "put", otm_factor=1.0,
+            opt = pick_option(tkr, price, "put", otm_factor=float(prm.get("otm_factor_put", 1.0) or 1.0),
                               chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["bid"] >= 0.01:
                 iv_rank = calc_iv_rank(closes, opt["iv"])
@@ -3070,7 +3101,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
 
         # ── 2. BUY CALL ───────────────────────────────────────
         if has_buy_call:
-            opt = pick_option(tkr, price, "call", otm_factor=1.0,
+            opt = pick_option(tkr, price, "call", otm_factor=float(prm.get("otm_factor_call", 1.0) or 1.0),
                               chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["ask"] >= 0.01:
                 score = _score_buy_call(cur_rsi, price, cur_bb_l, reversal_up,
@@ -3094,7 +3125,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
 
         # ── 3. BUY PUT ────────────────────────────────────────
         if has_buy_put:
-            opt = pick_option(tkr, price, "put", otm_factor=1.0,
+            opt = pick_option(tkr, price, "put", otm_factor=float(prm.get("otm_factor_put", 1.0) or 1.0),
                               chain=pf_chain, exp=pf_exp, dte=pf.get("dte"))
             if opt and opt["ask"] >= 0.01:
                 score = _score_buy_put(cur_rsi, price, cur_bb_u,
@@ -3511,7 +3542,7 @@ def _option_price_detail(row_series):
 # to compute (current - entry) regardless of strategy, so a short put that
 # decayed from 1.00 → 0.85 (a win) showed -15% and fired the stop loss.
 SHORT_PREMIUM_STRATS = {"sell_put", "covered_call", "iron_condor"}
-PRICE_EXIT_MARKERS   = ("🎯", "🛑", "🧯", "📉 Trailing", "⏳", "⌛ Max hold")   # reasons produced by _price_exit_check
+PRICE_EXIT_MARKERS   = ("🎯", "🛑", "🧯", "📉 Trailing", "📉 Stock trail", "⏳", "⌛ Max hold")   # reasons produced by _price_exit_check
 
 
 def _position_pnl(strategy, entry_price, current_price, contracts=1):
@@ -3565,7 +3596,7 @@ def _fetch_option_quote(sym, exp, strike, otype, tkr=None, chain=None):
         return 0.0, 0.0, 0.0, "unavailable", chain
 
 
-def _price_exit_check(pct_change, prev_peak, tracked_at, stock_move_pct=None):
+def _price_exit_check(pct_change, prev_peak, tracked_at, stock_move_pct=None, stock_giveback_pct=None):
     """
     Live wrapper around the shared price-exit rules (_price_exit_core, defined
     with the signal engine): converts the position's tracked_at timestamp into
@@ -3573,8 +3604,8 @@ def _price_exit_check(pct_change, prev_peak, tracked_at, stock_move_pct=None):
     Returns (triggered, reasons, peak_pct).
     """
     days_held = _trading_days_since(tracked_at) if tracked_at else None
-    triggered, reasons, peak, _ = _price_exit_core(pct_change, prev_peak, days_held,
-                                                   ex=live_exit_params(), stock_move_pct=stock_move_pct)
+    triggered, reasons, peak, _ = _price_exit_core(pct_change, prev_peak, days_held, ex=live_exit_params(),
+                                                   stock_move_pct=stock_move_pct, stock_giveback_pct=stock_giveback_pct)
     return triggered, reasons, peak
 
 
@@ -3594,8 +3625,11 @@ def _apply_price_update(position, sig, mid, bid, ask, quality):
         return sig
     sig["pct_change"]    = pct
     sig["dollar_change"] = usd
-    stock_move = _adverse_stock_move(position.get("strategy", ""), position.get("price"), sig.get("current_price"))
-    triggered, reasons, peak = _price_exit_check(pct, sig.get("peak_pct_change"), position.get("tracked_at"), stock_move)
+    strat_ = position.get("strategy", "")
+    stock_move = _adverse_stock_move(strat_, position.get("price"), sig.get("current_price"))
+    sig["stock_best"] = _stock_best(strat_, sig.get("stock_best"), sig.get("current_price"))
+    triggered, reasons, peak = _price_exit_check(pct, sig.get("peak_pct_change"), position.get("tracked_at"), stock_move,
+                                                 _stock_giveback(strat_, sig.get("stock_best"), sig.get("current_price")))
     sig["peak_pct_change"] = peak
     kept = [r for r in (sig.get("reasons") or []) if not r.startswith(PRICE_EXIT_MARKERS)]
     sig["reasons"]   = kept + reasons
@@ -4092,9 +4126,11 @@ def get_sell_signal(position: dict) -> dict:
         if pct_change is not None:
             result["pct_change"]    = pct_change
             result["dollar_change"] = dollar_change
+            result["stock_best"] = _stock_best(strategy, prev_sig.get("stock_best"), price)
             trig, reasons, peak = _price_exit_check(pct_change, prev_sig.get("peak_pct_change"),
                                                      position.get("tracked_at"),
-                                                     _adverse_stock_move(strategy, position.get("price"), price))
+                                                     _adverse_stock_move(strategy, position.get("price"), price),
+                                                     _stock_giveback(strategy, result["stock_best"], price))
             result["peak_pct_change"] = peak
             result["reasons"].extend(reasons)
             result["triggered"] = result["triggered"] or trig
@@ -4282,6 +4318,7 @@ BT_DEFAULT_PARAMS = {
     "rsi_oversold": 35, "rsi_overbought": 65, "bull_min": 1, "bear_min": 2,
     "adx_threshold": 30, "garch_mode": "off", "put_trend_gate": "off", "yield_block_calls": False,
     "max_spread_pct": 100, "entry_mode": "reversion", "escape_normal": "skip", "escape_breakout_vol": 2.0,
+    "otm_factor_call": 1.0, "otm_factor_put": 1.0, "dte_target": 30,
     "require_green_candle": False, "require_red_candle": False,
 }
 _CTX_COLS = ("vix", "vix3m", "regime", "vix_ts", "market_trend", "pre_fed", "post_fed",
@@ -4431,32 +4468,36 @@ def _bt_walk_exit(fr, idx, K, iv_est, exits, strategy, entry_opt):
     is_short = strategy in SHORT_PREMIUM_STRATS
     closes, rsi, bb_u, bb_l = fr["price"], fr["rsi"], fr["bb_u"], fr["bb_l"]
     n = fr["n"]
-    T_entry = OPTION_DTE_TARGET / 365.0
-    cap  = min(int(ex.get("hold_days") or OPTION_DTE_BARS), OPTION_DTE_BARS)
-    ex_w = {**ex, "hold_days": cap if cap < OPTION_DTE_BARS else 0}   # at the contract's own expiry the label is "expired"
+    dte_days = float(ex.get("dte_days") or OPTION_DTE_TARGET)          # the contract's life (contract-selection parameter)
+    dte_bars = int(ex.get("dte_bars") or OPTION_DTE_BARS)
+    T_entry = dte_days / 365.0
+    cap  = min(int(ex.get("hold_days") or dte_bars), dte_bars)
+    ex_w = {**ex, "hold_days": cap if cap < dte_bars else 0}          # at the contract's own expiry the label is "expired"
     entry_stock = float(closes[idx])
 
     def _pnl(curr_opt):
         return ((entry_opt - curr_opt) if is_short else (curr_opt - entry_opt)) / entry_opt * 100.0
 
-    peak = -999.0
+    peak, best = -999.0, entry_stock
     for i in range(1, cap + 1):
         j = idx + i
         if j >= n:
             return None                                   # right-censored: outcome unknown
         close = float(closes[j])
-        if i >= OPTION_DTE_BARS:
+        if i >= dte_bars:
             cur_opt = max(0.0, (close - K) if opt_type == "call" else (K - close))   # expiry: intrinsic
         else:
             T_rem   = max(T_entry - i / 252.0, 0.5 / 365.0)
             cur_opt = _bt_option_price(close, K, T_rem, iv_est, opt_type)
         pnl   = _pnl(cur_opt)
         pnl_r = round(pnl, 1)
+        best  = _stock_best(strategy, best, close)
         trig, _, peak, code = _price_exit_core(pnl_r, peak, i, ex=ex_w,
-                                               stock_move_pct=_adverse_stock_move(strategy, entry_stock, close))
+                                               stock_move_pct=_adverse_stock_move(strategy, entry_stock, close),
+                                               stock_giveback_pct=_stock_giveback(strategy, best, close))
         if not trig:
             trig, _, _, _, code = _strategy_exit_check(strategy, close, float(rsi[j]), float(bb_u[j]), float(bb_l[j]), strike=K)
-        if not trig and i >= OPTION_DTE_BARS:
+        if not trig and i >= dte_bars:
             trig, code = True, "expired"
         if trig:
             if code == "stop_loss":
@@ -4538,13 +4579,19 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
     trades  = []
     fr      = precomp
     n_bars  = fr["n"]
-    cap     = min(int(xp["hold_days"] or OPTION_DTE_BARS), OPTION_DTE_BARS)
+    # Contract selection (entry parameters): expiry closest to dte_target days, strike at otm_factor × price
+    dte_days = int(p.get("dte_target", OPTION_DTE_TARGET) or OPTION_DTE_TARGET)
+    dte_bars = max(2, int(round(dte_days * 252 / 365)))
+    xp["dte_days"], xp["dte_bars"] = dte_days, dte_bars
+    otm = {"buy_call": float(p.get("otm_factor_call", 1.0) or 1.0), "buy_put": float(p.get("otm_factor_put", 1.0) or 1.0),
+           "sell_put": float(p.get("otm_factor_put", 1.0) or 1.0)}
+    cap     = min(int(xp["hold_days"] or dte_bars), dte_bars)
     start   = max(BT_WARMUP_BARS, idx_start)
     # Entries stop `cap` bars before the window end so every trade resolves inside
     # the window: nothing is dropped for running off the data (which kept only the
     # fast exits), and a walk-forward training trade can never read validation bars.
     end     = (idx_end or n_bars) - cap
-    T_entry = OPTION_DTE_TARGET / 365.0
+    T_entry = dte_days / 365.0
     # One open position per strategy at a time (the tracker rejects a duplicate
     # ticker+strategy while one is open).
     busy_until = {"buy_call": -1, "buy_put": -1, "sell_put": -1}
@@ -4563,7 +4610,7 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                                ("sell_put", ev["has_sell_put"])):
             if not flag or idx < busy_until[strategy]:
                 continue
-            K         = _bt_strike(price)
+            K         = _bt_strike(price * otm[strategy])
             opt_type  = "call" if strategy == "buy_call" else "put"
             entry_opt = _bt_option_price(price, K, T_entry, iv_est, opt_type)
             if entry_opt <= 0.01:                          # live: mid >= 0.01 / ask >= 0.01
@@ -4595,7 +4642,7 @@ def run_backtest_ticker(ticker, hold_days=21, params=None, hist=None,
                         break
                     ep    = float(fr["price"][j])
                     T_rem = max(T_entry - d / 252.0, 0.5 / 365.0)
-                    ex_val = (max(0.0, (ep - K) if opt_type == "call" else (K - ep)) if d >= OPTION_DTE_BARS
+                    ex_val = (max(0.0, (ep - K) if opt_type == "call" else (K - ep)) if d >= dte_bars
                               else _bt_option_price(ep, K, T_rem, iv_est, opt_type))
                     pnl_path[d] = round(((entry_opt - ex_val) if strategy == "sell_put" else (ex_val - entry_opt))
                                         / entry_opt * 100, 1)
@@ -4930,7 +4977,7 @@ def _apply_wfo_params(suggestion: dict) -> dict:
     _exit_const = {"stop_loss_pct": "SELL_STOP_LOSS", "profit_target_pct": "SELL_PROFIT_TARGET",
                    "trail_activate_pct": "TRAIL_ACTIVATE_PCT", "trail_lock_pct": "TRAIL_LOCK_PCT",
                    "stagnant_days": "STAGNANT_DAYS", "stagnant_range": "STAGNANT_RANGE",
-                   "stock_stop_pct": "STOCK_STOP_PCT"}
+                   "stock_stop_pct": "STOCK_STOP_PCT", "stock_trail_pct": "STOCK_TRAIL_PCT"}
     for key, const in _exit_const.items():
         if key in suggestion:
             val = _as_int(suggestion[key], 0) if key == "stagnant_days" else _as_float(suggestion[key], 0.0)
