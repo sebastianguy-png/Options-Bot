@@ -28,6 +28,12 @@ BASE = {**ob.BT_DEFAULT_PARAMS, "entry_mode": "escape", "escape_normal": "skip",
         "max_spread_pct": 15, "otm_factor_call": 0.97, "dte_target": 30, "stop_loss_pct": 0, "profit_target_pct": 0,
         "trail_activate_pct": 0, "stagnant_days": 0, "hold_days": 21, "stock_stop_pct": 0, "stock_trail_pct": 7}
 VARIANTS = {"gate off": None, "breadth_chg5_min -0.20": -0.20, "breadth_chg5_min -0.15": -0.15, "breadth_chg5_min -0.10": -0.10}
+# extra variants (patch dicts) for the re-validation on the refit-every-bar engine
+EXTRA = {"GARCH off, breadth -0.15":            {"garch_mode": "off", "breadth_chg5_min": -0.15},
+         "GARCH off, no breadth gate":          {"garch_mode": "off", "breadth_chg5_min": None},
+         "breadth -0.15, NO breakouts":         {"breadth_chg5_min": -0.15, "escape_breakout_vol": 99.0},
+         "breadth -0.20, NO breakouts":         {"breadth_chg5_min": -0.20, "escape_breakout_vol": 99.0},
+         "GARCH off, breadth -0.15, NO breakouts": {"garch_mode": "off", "breadth_chg5_min": -0.15, "escape_breakout_vol": 99.0}}
 CASES = ("sig_escape_reversion", "sig_escape_breakout", "sig_escape_momentum")
 GRID = {"breadth_chg5_min": [None, -0.20, -0.15], "hold_days": [10, 21], "escape_breakout_vol": [2.0, 99.0]}
 
@@ -41,19 +47,23 @@ def main():
     first = min(pc["index"][0] for pc in precomp.values()); last = max(pc["index"][-1] for pc in precomp.values())
     report = {"first": str(first)[:10], "last": str(last)[:10], "variants": {}}
 
-    print("\n=== six years, applied rules + GARCH gate ===")
-    for name, thr in VARIANTS.items():
-        trades = run(precomp, {**BASE, "breadth_chg5_min": thr})
+    print("\n=== six years, applied rules + GARCH gate — CALLS ONLY (what the bot trades) in the first line, all strategies second ===")
+    combos = {name: {"breadth_chg5_min": thr} for name, thr in VARIANTS.items()}
+    combos.update(EXTRA)
+    for name, patch in combos.items():
+        trades = run(precomp, {**BASE, **patch})
+        calls = [t for t in trades if t["strategy"] == "buy_call"]
         by_year = defaultdict(list); by_case = defaultdict(list)
-        for t in trades:
+        for t in calls:
             by_year[t["entry_date"][:4]].append(t)
             by_case[next((k[11:] for k in CASES if t.get(k)), "?")].append(t)
-        p = [t["pnl_pct"] for t in trades]
+        p = [t["pnl_pct"] for t in calls]
         lo, md, hi = bootstrap_pf(p) if len(p) > 20 else (0, 0, 0)
         yrs = "  ".join(f"{y[2:]}:{stats(v)['pf']}({len(v)})" for y, v in sorted(by_year.items()))
         cases = "  ".join(f"{c} {stats(v)['pf']}({len(v)})" for c, v in by_case.items())
-        print(f"  {name:<24} n={len(p):4d} net {np.mean(p) if p else 0:+6.2f}% PF {pf_of(p):<5} CI90 [{lo}, {hi}]   {yrs}   [{cases}]")
-        report["variants"][name] = {"threshold": thr, "all": {**stats(trades), "pf_ci90": [lo, hi]},
+        print(f"  {name:<40} CALLS n={len(p):4d} net {np.mean(p) if p else 0:+6.2f}% PF {pf_of(p):<5} CI90 [{lo}, {hi}]   {yrs}   [{cases}]")
+        print(f"  {'':<40} all   {stats(trades)}")
+        report["variants"][name] = {"patch": patch, "calls": {**stats(calls), "pf_ci90": [lo, hi]}, "all": stats(trades),
                                     "by_year": {y: stats(v) for y, v in by_year.items()}, "by_case": {c: stats(v) for c, v in by_case.items()}}
 
     print("\n=== rolling walk-forward: train 18 months → test 6 months, gate in the grid ===")

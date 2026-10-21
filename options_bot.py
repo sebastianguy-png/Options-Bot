@@ -557,7 +557,9 @@ def calc_garch_vol(closes, fallback_window=20):
 
 
 GARCH_WINDOW      = 240      # returns used per fit — a 1y download has ~249, so live and backtest fit the same window
-GARCH_REFIT_BARS  = 5        # backtest: refit every N bars, hold the forecast in between
+GARCH_REFIT_BARS  = 1        # backtest: refit EVERY bar (= the live scanner's fresh daily fit).  Was 5 with the refit grid
+                             # anchored to the first bar of the download: sliding the download window by one day moved every
+                             # refit date, changed the gate on many bars and swung the six-year PF 1.67 ↔ 1.17 (handoff 7k).
 GARCH_CACHE_FILE  = "garch_cache.pkl"
 _garch_cache      = {}       # (sym, window, date_str) → annualised forecast (float)
 _garch_cache_lock = threading.Lock()
@@ -2060,6 +2062,7 @@ def live_params():
         "escape_breakout_trend": w.get("escape_breakout_trend", "any"),    # any / bull_only: breakout calls only when SPY is in an uptrend
         "escape_require_uptrend": bool(w.get("escape_require_uptrend", False)),   # whole escape strategy off while SPY < MA200
         "breadth_chg5_min":     w.get("breadth_chg5_min"),                 # escape mode: no entry while breadth (share of the universe above MA50) fell more than this in 5 sessions (None = off)
+        "escape_put_on_collapse": bool(w.get("escape_put_on_collapse", False)),   # escape mode: a lower escape while breadth is collapsing → buy put (the mirror trade; off unless tested positive)
         "otm_factor_call":      w.get("otm_factor_call", 1.0),             # contract selection: strike / stock price for calls (0.97 = slightly ITM)
         "otm_factor_put":       w.get("otm_factor_put", 1.0),              # … for puts (1.03 = slightly ITM put)
         "dte_target":           w.get("dte_target", OPTION_DTE_TARGET),    # expiry closest to this many days
@@ -2642,8 +2645,11 @@ def evaluate_entry(ind, ctx, params, scan_condors=False):
         if escape_case and p.get("escape_require_uptrend", False) and not str(market_trend).startswith("bull"):
             escape_case = None                        # regime switch: no long premium while SPY is under its 200-day MA (2022)
         bmin = p.get("breadth_chg5_min")
-        if escape_case and bmin is not None and breadth_chg5 is not None and breadth_chg5 < float(bmin):
+        collapsing = bmin is not None and breadth_chg5 is not None and breadth_chg5 < float(bmin)
+        if escape_case and collapsing:
             escape_case = None                        # breadth collapsing = a market-wide selloff in progress: the escape is a crash, not a dip
+        if collapsing and lower_escape and gap_pct > -3.0 and p.get("escape_put_on_collapse", False):
+            escape_case = "momentum"                  # the mirror trade (tests/collapse_put_check.py): ride the crash with a put
         has_buy_call     = escape_case in ("reversion", "breakout") and gap_ok_buy_call
         has_buy_put      = escape_case == "momentum" and gap_ok_buy_put
         has_sell_put     = escape_case == "reversion" and price <= MAX_PRICE_SELL and gap_ok_buy_call
@@ -4383,7 +4389,7 @@ BT_DEFAULT_PARAMS = {
     "adx_threshold": 30, "garch_mode": "off", "put_trend_gate": "off", "yield_block_calls": False,
     "max_spread_pct": 100, "entry_mode": "reversion", "escape_normal": "skip", "escape_breakout_vol": 2.0,
     "otm_factor_call": 1.0, "otm_factor_put": 1.0, "dte_target": 30, "escape_breakout_trend": "any", "escape_require_uptrend": False,
-    "breadth_chg5_min": None,
+    "breadth_chg5_min": None, "escape_put_on_collapse": False,
     "require_green_candle": False, "require_red_candle": False,
 }
 _CTX_COLS = ("vix", "vix3m", "regime", "vix_ts", "market_trend", "pre_fed", "post_fed",

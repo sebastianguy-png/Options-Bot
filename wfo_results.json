@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-10-21T15:14:29.372635",
+  "saved_at": "2026-10-21T17:04:46.595601",
   "results": {
     "leaderboard": [],
     "best": {
@@ -15,7 +15,7 @@
         "max_spread_pct": 15,
         "entry_mode": "escape",
         "escape_normal": "skip",
-        "escape_breakout_vol": 2.0,
+        "escape_breakout_vol": 99.0,
         "otm_factor_call": 0.97,
         "otm_factor_put": 1.0,
         "dte_target": 30,
@@ -33,7 +33,7 @@
         "breadth_chg5_min": -0.15
       },
       "val_sharpe": 0.1,
-      "note": "six-year regime check + breadth gate"
+      "note": "refit-every-bar re-validation: breakouts off"
     },
     "suggestion": {
       "rsi_oversold": 35,
@@ -47,7 +47,7 @@
       "max_spread_pct": 15,
       "entry_mode": "escape",
       "escape_normal": "skip",
-      "escape_breakout_vol": 2.0,
+      "escape_breakout_vol": 99.0,
       "otm_factor_call": 0.97,
       "otm_factor_put": 1.0,
       "dte_target": 30,
@@ -66,123 +66,125 @@
     },
     "split_date": "2026-01-22",
     "tickers_used": [],
-    "completed_at": "2026-10-21T09:51:43.551603",
+    "completed_at": "2026-10-21T17:04:46.595601",
     "force_apply": true,
-    "note": "band-escape classifier, calls only, GARCH gate ON, BREADTH GATE ON (breadth_chg5_min -0.15: no escape entry while the share of focus tickers above their 50-day MA fell >15 points in 5 sessions \u2014 handoff 7i: 6y PF 1.09 \u2192 1.67 net of spreads MEASURED in the entry window (317 trades, CI 1.30\u20132.16; open-session spreads: 1.17 \u2192 1.94 on 205), 2022 0.64 \u2192 1.17); ITM 0.97, 21-day max hold, 7% stock trailing exit, no premium stop/target, spread cap 15",
+    "note": "band-escape REVERSION calls only (breakouts OFF \u2014 escape_breakout_vol 99: the breakout leg lost in every test, PF 0.70, one-bar holds), GARCH gate ON, BREADTH GATE ON (breadth_chg5_min -0.15), ITM 0.97, 30 DTE, 21-day max hold, 7% stock trailing exit, no premium stop/target, spread cap 15. Evidence (handoff 7k, GARCH refit every bar, entry-window spreads, six years, calls only): PF 1.76 on 203 trades, +23%/trade, 90% CI 1.36\u20132.28; 2022 1.02, 2023 4.98, 2024 no trades, 2025 1.57, 2026 5.05; walk-forward re-chose 'no breakouts' in 6/6 windows.",
     "six_year_evidence": {
-      "all": {
-        "n": 317,
-        "net": 12.43,
-        "win": 51.1,
-        "pf": 1.67,
-        "bars": 4.0,
+      "calls": {
+        "n": 203,
+        "net": 23.12,
+        "win": 49.3,
+        "pf": 1.76,
+        "bars": 8.8,
         "pf_ci90": [
-          1.3,
-          2.16
+          1.36,
+          2.28
         ]
       },
       "by_year": {
-        "2024": {
-          "n": 71,
-          "net": 2.0,
-          "win": 53.5,
-          "pf": 1.18,
-          "bars": 1.0
-        },
-        "2026": {
-          "n": 36,
-          "net": 38.6,
-          "win": 69.4,
-          "pf": 4.02,
-          "bars": 3.9
-        },
         "2022": {
-          "n": 87,
-          "net": 5.4,
-          "win": 41.4,
-          "pf": 1.17,
-          "bars": 7.5
-        },
-        "2025": {
-          "n": 50,
-          "net": 10.64,
-          "win": 50.0,
-          "pf": 1.87,
-          "bars": 3.2
+          "n": 128,
+          "net": 0.67,
+          "win": 39.1,
+          "pf": 1.02,
+          "bars": 8.1
         },
         "2023": {
-          "n": 71,
-          "net": 19.38,
-          "win": 52.1,
-          "pf": 2.21,
-          "bars": 3.3
+          "n": 32,
+          "net": 70.52,
+          "win": 75.0,
+          "pf": 4.98,
+          "bars": 8.8
         },
-        "2021": {
-          "n": 2,
-          "net": 14.9,
-          "win": 50.0,
-          "pf": 3.57,
-          "bars": 9.5
+        "2026": {
+          "n": 24,
+          "net": 87.48,
+          "win": 66.7,
+          "pf": 5.05,
+          "bars": 10.3
+        },
+        "2025": {
+          "n": 19,
+          "net": 13.23,
+          "win": 52.6,
+          "pf": 1.57,
+          "bars": 11.6
         }
       },
       "by_case": {
-        "momentum": {
-          "n": 84,
-          "net": 2.75,
-          "win": 53.6,
-          "pf": 1.26,
-          "bars": 1.0
-        },
         "reversion": {
-          "n": 127,
-          "net": 28.43,
-          "win": 54.3,
-          "pf": 2.01,
-          "bars": 8.5
-        },
-        "breakout": {
-          "n": 106,
-          "net": 0.93,
-          "win": 45.3,
-          "pf": 1.07,
-          "bars": 1.0
+          "n": 203,
+          "net": 23.12,
+          "win": 49.3,
+          "pf": 1.76,
+          "bars": 8.8
         }
       },
-      "without_breadth_gate": {
+      "all_strategies": {
+        "n": 312,
+        "net": 14.87,
+        "win": 48.7,
+        "pf": 1.62,
+        "bars": 6.1
+      },
+      "with_breakouts": {
         "n": 421,
-        "net": 2.31,
-        "win": 45.6,
-        "pf": 1.09,
-        "bars": 5.3,
+        "net": 8.98,
+        "win": 42.3,
+        "pf": 1.41,
+        "bars": 4.8,
         "pf_ci90": [
-          0.88,
-          1.36
+          1.12,
+          1.77
+        ]
+      },
+      "gate_off": {
+        "n": 560,
+        "net": 0.42,
+        "win": 39.1,
+        "pf": 1.02,
+        "bars": 6.0,
+        "pf_ci90": [
+          0.85,
+          1.22
+        ]
+      },
+      "garch_off": {
+        "n": 389,
+        "net": 11.61,
+        "win": 46.5,
+        "pf": 1.37,
+        "bars": 8.6,
+        "pf_ci90": [
+          1.13,
+          1.67
         ]
       },
       "walk_forward_union": {
         "off": {
-          "n": 169,
-          "net": 16.6,
-          "win": 52.7,
-          "pf": 2.21,
-          "bars": 2.8
+          "n": 290,
+          "net": 12.97,
+          "win": 45.9,
+          "pf": 1.88,
+          "bars": 3.2
         },
         "gate_-0.15": {
-          "n": 159,
-          "net": 17.02,
-          "win": 52.2,
-          "pf": 2.22,
-          "bars": 2.8
+          "n": 271,
+          "net": 13.84,
+          "win": 46.1,
+          "pf": 1.94,
+          "bars": 3.1
         },
         "chosen": {
-          "n": 100,
-          "net": 27.61,
-          "win": 57.0,
-          "pf": 2.84,
-          "bars": 3.8
+          "n": 145,
+          "net": 29.93,
+          "win": 57.2,
+          "pf": 2.9,
+          "bars": 5.2
         }
       },
-      "costs": "measured spreads inside the entry window (spread_model.json, 15:06 ET); open-session model: PF 1.94 on 205 trades",
+      "engine": "GARCH_REFIT_BARS=1 (refit every bar, alignment-proof)",
+      "costs": "measured spreads inside the entry window (spread_model.json, 15:06 ET)",
       "source": "tests/breadth_gate_report.json"
     }
   }
