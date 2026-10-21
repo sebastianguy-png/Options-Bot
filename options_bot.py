@@ -2059,6 +2059,7 @@ def live_params():
         "escape_breakout_vol":  w.get("escape_breakout_vol", 2.0),         # escape mode: volume ratio that makes an upper escape a breakout
         "escape_breakout_trend": w.get("escape_breakout_trend", "any"),    # any / bull_only: breakout calls only when SPY is in an uptrend
         "escape_require_uptrend": bool(w.get("escape_require_uptrend", False)),   # whole escape strategy off while SPY < MA200
+        "breadth_chg5_min":     w.get("breadth_chg5_min"),                 # escape mode: no entry while breadth (share of the universe above MA50) fell more than this in 5 sessions (None = off)
         "otm_factor_call":      w.get("otm_factor_call", 1.0),             # contract selection: strike / stock price for calls (0.97 = slightly ITM)
         "otm_factor_put":       w.get("otm_factor_put", 1.0),              # … for puts (1.03 = slightly ITM put)
         "dte_target":           w.get("dte_target", OPTION_DTE_TARGET),    # expiry closest to this many days
@@ -2136,12 +2137,65 @@ def _stock_giveback(strategy, best, cur):
     return round(((cur - best) / best * 100) if strategy == "buy_put" else ((best - cur) / best * 100), 2)
 
 
+_live_breadth = {"breadth50": None, "breadth50_chg5": None, "n": 0, "ts": None}
+
+
+def breadth_series(hist_map, min_tickers=20):
+    """
+    Market breadth from a dict of OHLCV histories: per date, the share of tickers
+    closing above their 50-day MA (breadth50) and its change over five sessions
+    (breadth50_chg5).  Dates with fewer than `min_tickers` values are NaN.
+    """
+    cols = {}
+    for sym, h in (hist_map or {}).items():
+        if h is None or len(h) < 55:
+            continue
+        c = _naive_daily_index(h["Close"])
+        ma = c.rolling(50).mean()
+        cols[sym] = (c > ma).where(ma.notna())
+    if not cols:
+        return pd.DataFrame(columns=["breadth50", "breadth50_chg5"])
+    m = pd.DataFrame(cols).sort_index()
+    m = m[~m.index.duplicated(keep="last")]
+    b = m.mean(axis=1).where(m.notna().sum(axis=1) >= min_tickers)
+    return pd.DataFrame({"breadth50": b, "breadth50_chg5": b - b.shift(5)})
+
+
+def _attach_breadth(hist_map, label="Context"):
+    """Backtest: add the universe's breadth columns to the cached market-context history (same dates)."""
+    ctx = market_context_history()
+    b = breadth_series(hist_map)
+    if b.empty:
+        return
+    ctx["breadth50"] = b["breadth50"].reindex(ctx.index)
+    ctx["breadth50_chg5"] = b["breadth50_chg5"].reindex(ctx.index)
+    ok = ctx["breadth50_chg5"].notna().mean() * 100
+    print(f"  [{label}] Breadth attached from {len(hist_map)} tickers ({ok:.0f}% of dates have a 5-day change)")
+
+
+def _set_live_breadth(hist_map):
+    """Live scan: today's breadth from the bulk download, read by live_market_ctx()."""
+    b = breadth_series(hist_map)
+    if b.empty or b["breadth50"].dropna().empty:
+        _live_breadth.update(breadth50=None, breadth50_chg5=None, n=0, ts=datetime.now().isoformat())
+        return
+    last = b.dropna(subset=["breadth50"]).iloc[-1]
+    chg = last["breadth50_chg5"]
+    _live_breadth.update(breadth50=round(float(last["breadth50"]), 3),
+                         breadth50_chg5=None if chg != chg else round(float(chg), 3),
+                         n=len(hist_map), ts=datetime.now().isoformat())
+    chg_txt = "n/a" if _live_breadth["breadth50_chg5"] is None else f"{_live_breadth['breadth50_chg5'] * 100:+.0f} pts"
+    print(f"  [Breadth] {_live_breadth['breadth50'] * 100:.0f}% of {len(hist_map)} tickers above their 50-day MA; 5-day change {chg_txt}")
+
+
 def live_market_ctx():
     """Market context for the live scanner, same keys as ctx_at() builds for a past bar."""
     vix   = get_vix()
     vix3m = get_vix3m()
     fed   = get_fed_context() or {}
     return {
+        "breadth50":      _live_breadth.get("breadth50"),
+        "breadth50_chg5": _live_breadth.get("breadth50_chg5"),
         "vix":            vix,
         "vix3m":          vix3m,
         "regime":         vix_regime(vix),
@@ -2524,6 +2578,7 @@ def evaluate_entry(ind, ctx, params, scan_condors=False):
     bull_min = min(int(p.get("bull_min", 1)), 3)
     bear_min = min(int(p.get("bear_min", 2)), 3)
     market_trend = ctx.get("market_trend", "neutral")
+    breadth_chg5 = ctx.get("breadth50_chg5")                 # None until a scan / backtest has computed the universe's breadth
     if market_trend == "bull_strong":
         bear_min = min(bear_min + 1, 4)
     elif market_trend == "bear_strong":
@@ -2586,6 +2641,9 @@ def evaluate_entry(ind, ctx, params, scan_condors=False):
             escape_case = "breakout"                      # bull_only: no breakout calls while SPY is under its 200-day MA (2022 lesson)
         if escape_case and p.get("escape_require_uptrend", False) and not str(market_trend).startswith("bull"):
             escape_case = None                        # regime switch: no long premium while SPY is under its 200-day MA (2022)
+        bmin = p.get("breadth_chg5_min")
+        if escape_case and bmin is not None and breadth_chg5 is not None and breadth_chg5 < float(bmin):
+            escape_case = None                        # breadth collapsing = a market-wide selloff in progress: the escape is a crash, not a dip
         has_buy_call     = escape_case in ("reversion", "breakout") and gap_ok_buy_call
         has_buy_put      = escape_case == "momentum" and gap_ok_buy_put
         has_sell_put     = escape_case == "reversion" and price <= MAX_PRICE_SELL and gap_ok_buy_call
@@ -2616,6 +2674,7 @@ def evaluate_entry(ind, ctx, params, scan_condors=False):
         "gap_pct": gap_pct, "gap_ok_buy_call": gap_ok_buy_call, "gap_ok_buy_put": gap_ok_buy_put,
         "trend_ok_buy": trend_ok_buy, "put_trend_ok": put_trend_ok, "yield_blocked": yield_blocked,
         "market_trend": market_trend, "entry_mode": p.get("entry_mode", "reversion"), "escape_case": escape_case,
+        "breadth50_chg5": breadth_chg5,
         "vol_ratio": vol_ratio, "squeeze_release": squeeze_release,
         "has_sell_put": has_sell_put, "has_buy_call": has_buy_call, "has_buy_put": has_buy_put,
         "has_covered_call": has_covered_call, "has_iron_condor": has_iron_condor,
@@ -4324,11 +4383,13 @@ BT_DEFAULT_PARAMS = {
     "adx_threshold": 30, "garch_mode": "off", "put_trend_gate": "off", "yield_block_calls": False,
     "max_spread_pct": 100, "entry_mode": "reversion", "escape_normal": "skip", "escape_breakout_vol": 2.0,
     "otm_factor_call": 1.0, "otm_factor_put": 1.0, "dte_target": 30, "escape_breakout_trend": "any", "escape_require_uptrend": False,
+    "breadth_chg5_min": None,
     "require_green_candle": False, "require_red_candle": False,
 }
 _CTX_COLS = ("vix", "vix3m", "regime", "vix_ts", "market_trend", "pre_fed", "post_fed",
              "yield_inverted", "yield_steep",
-             "macro_buy_call", "macro_buy_put", "macro_sell_put", "macro_covered_call", "macro_iron_condor")
+             "macro_buy_call", "macro_buy_put", "macro_sell_put", "macro_covered_call", "macro_iron_condor",
+             "breadth50", "breadth50_chg5")
 
 
 def _precompute_indicators(hist, sym=None, ctx_hist=None, spy_closes=None, garch="all"):
@@ -4438,6 +4499,8 @@ def ctx_at(fr, i):
         "yield_inverted": _b(g("yield_inverted", False)),
         "yield_steep":    _b(g("yield_steep", False)),
         "macro": {k: _b(g(f"macro_{k}", True)) for k in ("buy_call", "buy_put", "sell_put", "covered_call", "iron_condor")},
+        "breadth50":      None if g("breadth50") is None else float(g("breadth50")),
+        "breadth50_chg5": None if g("breadth50_chg5") is None else float(g("breadth50_chg5")),
     }
 
 
@@ -5262,6 +5325,7 @@ def _wfo_prepare(tickers, label="WFO"):
     hist_map = _bulk_download(tickers, BT_HISTORY_PERIOD, min_rows=BT_WARMUP_BARS + OPTION_DTE_BARS + 2)
     if not hist_map:
         return None
+    _attach_breadth(hist_map, label=label)                 # breadth of this universe → ctx columns (the breadth gate)
     print(f"  [{label}] Pre-computing indicators for {len(hist_map)} tickers…")
     precomp_map = _precompute_many(hist_map, label=label)
     hist_map    = {s: h for s, h in hist_map.items() if s in precomp_map}
@@ -6633,6 +6697,7 @@ def _run_scan(mode=None):
         print(f"  [Bulk download] Fetching {LIVE_HISTORY_PERIOD} OHLCV for {len(tickers)} tickers…")
         bulk_hist = _bulk_download(tickers, LIVE_HISTORY_PERIOD)
         print(f"  [Bulk download] Done — {len(bulk_hist)}/{len(tickers)} tickers have data")
+        _set_live_breadth(bulk_hist)                       # today's breadth for the escape gate (live_market_ctx)
 
         # ── Scan ─────────────────────────────────────────────────────────────
         # The indicator gate runs on the bulk history alone.  Only tickers that
@@ -8057,6 +8122,20 @@ def api_autotrade_log():
 def api_autotrade_close(position_id):
     ok = autotrader.request_close(position_id)
     return jsonify({"ok": ok, "message": "" if ok else "No auto position with that id"}), (200 if ok else 404)
+
+
+@app.route("/api/autotrade/manual", methods=["POST"])
+def api_autotrade_manual():
+    """Operator entry: {"ticker", "strategy", "note"} → one position now through the autotrader's own pipeline."""
+    data = request.get_json(silent=True) or {}
+    sym = str(data.get("ticker") or "").upper().strip()
+    if not sym:
+        return jsonify({"ok": False, "message": "ticker required"}), 400
+    try:
+        res = autotrader.manual_entry(sym, data.get("strategy") or "buy_call", str(data.get("note") or ""))
+    except Exception as e:
+        return jsonify({"ok": False, "message": str(e)}), 500
+    return jsonify(res), (200 if res.get("ok") else 409)
 
 
 # ══════════════════════════════════════════════════════════════

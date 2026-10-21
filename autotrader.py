@@ -975,48 +975,156 @@ def _open_entries(br, cfg, market_open: bool = True) -> tuple[int, list]:
     for c in cands:
         if entered >= slots:
             break
-        sector = c.get("sector") or "N/A"
-        if cfg["max_per_sector"] and sector != "N/A" and by_sector.get(sector, 0) >= cfg["max_per_sector"]:
-            skipped.append(f"{c['ticker']} {c['strategy']}: sector cap ({sector} already has {by_sector[sector]})")
-            continue
-        qty, touch, mid, why = _size(c, cfg, account)
-        if why:
-            skipped.append(f"{c['ticker']} {c['strategy']}: {why}")
-            continue
-        sym  = _occ(c)
-        side = "sell" if c["strategy"] in _ob.SHORT_PREMIUM_STRATS else "buy"
-        bid, ask = _ob._as_float(c["option"].get("bid")), _ob._as_float(c["option"].get("ask"))
-        ladder = _ladder(side, bid, ask) if cfg["work_orders"] else [round(touch, 2)]
-        limit  = ladder[0] if ladder else round(touch, 2)
-        quote  = {"bid": bid, "ask": ask, "mid": mid}
-        try:
-            o = br.submit_option_order(sym, side, qty, limit_price=limit, ref_price=mid)
-        except BrokerError as e:
-            _log("entry_error", ticker=c["ticker"], strategy=c["strategy"], detail=str(e))
-            continue
-        st = (o.status or "").lower()
-        if st in _ORDER_DONE and o.filled_qty:
-            filled = int(o.filled_qty)
-            fill   = float(o.filled_avg_price or limit)
-            _add_tracked(c, filled, fill, o.id, br, quote=quote)
-            entered += 1
-            by_sector[sector] = by_sector.get(sector, 0) + 1
-            if account is not None:                       # keep the buying-power figure honest within the cycle
-                used = fill * 100 * filled if side == "buy" else _ob._as_float(c["option"].get("strike")) * 100 * filled
-                account = {**account, "buying_power": _ob._as_float(account.get("buying_power")) - used}
-        elif st in _ORDER_FAILED:
-            _log("entry_rejected", ticker=c["ticker"], strategy=c["strategy"], status=st, detail=o.message)
-        else:
-            with _state_lock:
-                _state["pending"].append({"order_id": o.id, "candidate": c, "qty": qty, "limit": limit, "symbol": sym,
-                                          "side": side, "ref": mid, "quote": quote, "ladder": ladder, "attempt": 0,
-                                          "submitted_at": _now()})
-            _save_state()                                 # an open order must survive a crash
-            entered += 1
-            by_sector[sector] = by_sector.get(sector, 0) + 1
-            _log("entry_submitted", ticker=c["ticker"], strategy=c["strategy"], qty=qty, limit=limit,
-                 rungs=len(ladder), order=o.id, status=st)
+        ok, account = _submit_candidate(br, cfg, c, account, by_sector, skipped)
+        entered += int(ok)
     return entered, skipped
+
+
+def _submit_candidate(br, cfg, c: dict, account: dict | None, by_sector: dict, skipped: list) -> tuple[bool, dict | None]:
+    """
+    Sector cap → size → ladder → submit → track (filled) or queue (working).
+    Returns (entered, account with buying power reduced by what was spent).
+    """
+    sector = c.get("sector") or "N/A"
+    if cfg["max_per_sector"] and sector != "N/A" and by_sector.get(sector, 0) >= cfg["max_per_sector"]:
+        skipped.append(f"{c['ticker']} {c['strategy']}: sector cap ({sector} already has {by_sector[sector]})")
+        return False, account
+    qty, touch, mid, why = _size(c, cfg, account)
+    if why:
+        skipped.append(f"{c['ticker']} {c['strategy']}: {why}")
+        return False, account
+    sym  = _occ(c)
+    side = "sell" if c["strategy"] in _ob.SHORT_PREMIUM_STRATS else "buy"
+    bid, ask = _ob._as_float(c["option"].get("bid")), _ob._as_float(c["option"].get("ask"))
+    ladder = _ladder(side, bid, ask) if cfg["work_orders"] else [round(touch, 2)]
+    limit  = ladder[0] if ladder else round(touch, 2)
+    quote  = {"bid": bid, "ask": ask, "mid": mid}
+    try:
+        o = br.submit_option_order(sym, side, qty, limit_price=limit, ref_price=mid)
+    except BrokerError as e:
+        _log("entry_error", ticker=c["ticker"], strategy=c["strategy"], detail=str(e))
+        skipped.append(f"{c['ticker']} {c['strategy']}: broker error {e}")
+        return False, account
+    st = (o.status or "").lower()
+    if st in _ORDER_DONE and o.filled_qty:
+        filled = int(o.filled_qty)
+        fill   = float(o.filled_avg_price or limit)
+        _add_tracked(c, filled, fill, o.id, br, quote=quote)
+        by_sector[sector] = by_sector.get(sector, 0) + 1
+        if account is not None:                       # keep the buying-power figure honest within the cycle
+            used = fill * 100 * filled if side == "buy" else _ob._as_float(c["option"].get("strike")) * 100 * filled
+            account = {**account, "buying_power": _ob._as_float(account.get("buying_power")) - used}
+        return True, account
+    if st in _ORDER_FAILED:
+        _log("entry_rejected", ticker=c["ticker"], strategy=c["strategy"], status=st, detail=o.message)
+        skipped.append(f"{c['ticker']} {c['strategy']}: order {st} ({o.message})")
+        return False, account
+    with _state_lock:
+        _state["pending"].append({"order_id": o.id, "candidate": c, "qty": qty, "limit": limit, "symbol": sym,
+                                  "side": side, "ref": mid, "quote": quote, "ladder": ladder, "attempt": 0,
+                                  "submitted_at": _now()})
+    _save_state()                                 # an open order must survive a crash
+    by_sector[sector] = by_sector.get(sector, 0) + 1
+    _log("entry_submitted", ticker=c["ticker"], strategy=c["strategy"], qty=qty, limit=limit,
+         rungs=len(ladder), order=o.id, status=st)
+    return True, account
+
+
+_MANUAL_LABEL = {"buy_call": "Buy Call", "buy_put": "Buy Put", "sell_put": "Sell Put"}
+
+
+def manual_entry(ticker: str, strategy: str = "buy_call", note: str = "") -> dict:
+    """
+    Operator entry (dashboard / API): one position now, through the normal order
+    pipeline — the live parameters pick the contract from the live chain, then the
+    same sizing, ladder, pending-order and tracking code as a scan entry, so the
+    position is managed and exited exactly like one the scanner found.
+    Skips the signal / score, entry-window and scan-age checks; keeps the broker,
+    quote, spread, DTE, open-slot, sector and loss-cap checks.
+    """
+    if _ob is None:
+        raise RuntimeError("autotrader.init(options_bot) was never called")
+    ticker = (ticker or "").upper().strip()
+    strategy = _ob._norm_strategy(strategy or "buy_call")
+    if strategy not in _MANUAL_LABEL:
+        return {"ok": False, "message": f"manual entry handles buy_call / buy_put / sell_put, not {strategy}"}
+    cfg = load_config()
+    with _cycle_lock:
+        if kill_switch_active():
+            return {"ok": False, "message": f"kill switch ({KILL_FILE}) is active"}
+        br = _get_broker(cfg)
+        if not br.is_market_open():
+            return {"ok": False, "message": "market is closed"}
+        d = _daily()
+        if cfg["daily_loss_cap_usd"] > 0 and d["realized"] <= -cfg["daily_loss_cap_usd"]:
+            return {"ok": False, "message": f"daily loss cap hit (realised {d['realized']:+,.2f})"}
+        with _ob.track_lock:
+            positions = _ob.load_tracked()
+        n_open = sum(1 for p in positions if p.get("auto"))
+        with _state_lock:
+            n_pending = len(_state["pending"])
+            pending_keys = {f"{p['candidate']['ticker']}|{p['candidate']['strategy']}" for p in _state["pending"]}
+        if n_open + n_pending >= cfg["max_open_positions"]:
+            return {"ok": False, "message": f"{n_open} open + {n_pending} pending ≥ max {cfg['max_open_positions']}"}
+        key = f"{ticker}|{strategy}"
+        if key in pending_keys or any(p["ticker"] == ticker and _ob._norm_strategy(p.get("strategy", "")) == strategy for p in positions):
+            return {"ok": False, "message": f"{ticker} {strategy} is already open or pending"}
+
+        # ── contract: live params, live chain (Alpaca feed when up, else Yahoo) ──
+        prm = _ob.live_params()
+        tkr, hist = _ob._fetch_history(ticker, "3mo")
+        if hist is None or len(hist) == 0:
+            return {"ok": False, "message": f"{ticker}: no price history"}
+        price = float(hist["Close"].iloc[-1])
+        ad = _ob._alpaca_data()
+        if ad is not None:
+            try:
+                px, _ts = ad.stock_last(ticker)
+                if px:
+                    price = float(px)
+            except Exception:
+                pass
+        exp, dte = _ob._best_exp(tkr, prm.get("dte_target"))
+        if not exp:
+            return {"ok": False, "message": f"{ticker}: no expiry in the allowed DTE range"}
+        if strategy == "buy_call":
+            opt = _ob.pick_option(tkr, price, "call", otm_factor=float(prm.get("otm_factor_call", 1.0) or 1.0), exp=exp, dte=dte)
+        else:
+            opt = _ob.pick_option(tkr, price, "put", otm_factor=float(prm.get("otm_factor_put", 1.0) or 1.0), exp=exp, dte=dte)
+        if not opt:
+            return {"ok": False, "message": f"{ticker}: no liquid contract near the target strike for {exp}"}
+        bid, ask = _ob._as_float(opt.get("bid")), _ob._as_float(opt.get("ask"))
+        if not (bid > 0 and ask > 0):
+            return {"ok": False, "message": f"{ticker}: no two-sided quote on {opt.get('strike')} {exp}"}
+        mid = (bid + ask) / 2
+        spread = (ask - bid) / mid * 100 if mid > 0 else 1e9
+        if spread > cfg["max_spread_pct"]:
+            return {"ok": False, "message": f"{ticker}: spread {spread:.0f}% > {cfg['max_spread_pct']:.0f}%"}
+        if not (cfg["min_dte"] <= int(opt.get("dte") or 0) <= cfg["max_dte"]):
+            return {"ok": False, "message": f"{ticker}: dte {opt.get('dte')} outside {cfg['min_dte']}-{cfg['max_dte']}"}
+        try:
+            info = _ob._yf_call(lambda: tkr.info) or {}
+        except Exception:
+            info = {}
+        cand = {"ticker": ticker, "name": info.get("shortName") or ticker, "strategy": strategy,
+                "strategy_label": f"{_MANUAL_LABEL[strategy]} (manual)", "score": None,
+                "price": round(price, 3), "option": opt, "bar_date": str(hist.index[-1].date()),
+                "sector": info.get("sector") or "N/A", "earnings_dte": None, "hv30": None, "vix_regime": None,
+                "flags": {"manual": True}, "escape_case": None, "manual": True, "note": note}
+        account = _account_info(br)
+        if account is None and _account["error"]:
+            return {"ok": False, "message": f"broker account unavailable: {_account['error']}"}
+        skipped: list = []
+        ok, _acct = _submit_candidate(br, cfg, cand, account, {}, skipped)
+        _log("manual_entry", ticker=ticker, strategy=strategy, ok=ok, strike=opt.get("strike"), exp=exp,
+             detail=(note or "operator request") if ok else (skipped[-1] if skipped else "order not placed"))
+        _save_state()
+    if not ok:
+        return {"ok": False, "message": skipped[-1] if skipped else "order not placed"}
+    _wake.set()                                   # the loop settles the working order on its next pass
+    return {"ok": True, "message": f"{ticker} {_MANUAL_LABEL[strategy]} {opt.get('strike')} exp {exp} submitted "
+                                   f"(bid {bid:.2f} / ask {ask:.2f}, spread {spread:.0f}%)",
+            "candidate": {k: v for k, v in cand.items() if k != "option"}, "option": opt}
 
 
 def _add_tracked(cand: dict, qty: int, fill: float, order_id: str, br, quote: dict | None = None):

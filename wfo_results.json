@@ -1,5 +1,5 @@
 {
-  "saved_at": "2026-10-21T09:10:07.256099",
+  "saved_at": "2026-10-21T09:51:43.551642",
   "results": {
     "leaderboard": [],
     "best": {
@@ -29,10 +29,11 @@
         "stagnant_days": 0,
         "hold_days": 21,
         "stock_stop_pct": 0,
-        "stock_trail_pct": 7
+        "stock_trail_pct": 7,
+        "breadth_chg5_min": -0.15
       },
       "val_sharpe": 0.1,
-      "note": "six-year regime check"
+      "note": "six-year regime check + breadth gate"
     },
     "suggestion": {
       "rsi_oversold": 35,
@@ -60,60 +61,61 @@
       "stagnant_days": 0,
       "hold_days": 21,
       "stock_stop_pct": 0,
-      "stock_trail_pct": 7
+      "stock_trail_pct": 7,
+      "breadth_chg5_min": -0.15
     },
     "split_date": "2026-01-22",
     "tickers_used": [],
-    "completed_at": "2026-10-21T09:10:07.256080",
+    "completed_at": "2026-10-21T09:51:43.551603",
     "force_apply": true,
-    "note": "band-escape classifier, calls only, GARCH gate ON (six-year check, handoff 7h: the gate improves every year 2022-26, PF 1.17 over 6y); ITM 0.97, 21-day max hold, 7% stock trailing exit, no premium stop/target, spread cap 15",
+    "note": "band-escape classifier, calls only, GARCH gate ON, BREADTH GATE ON (breadth_chg5_min -0.15: no escape entry while the share of focus tickers above their 50-day MA fell >15 points in 5 sessions \u2014 handoff 7i: 6y PF 1.18 \u2192 1.70, every year \u2265 1.26, 2022 0.74 \u2192 1.26); ITM 0.97, 21-day max hold, 7% stock trailing exit, no premium stop/target, spread cap 15",
     "six_year_evidence": {
       "all": {
-        "n": 445,
-        "net": 4.09,
-        "win": 46.7,
-        "pf": 1.17,
-        "bars": 5.4,
+        "n": 341,
+        "net": 12.67,
+        "win": 52.2,
+        "pf": 1.7,
+        "bars": 4.2,
         "pf_ci90": [
-          0.96,
-          1.44
+          1.33,
+          2.15
         ]
       },
       "by_year": {
-        "2022": {
-          "n": 168,
-          "net": -10.21,
-          "win": 34.5,
-          "pf": 0.74,
-          "bars": 8.8
-        },
         "2024": {
-          "n": 84,
-          "net": 4.15,
-          "win": 54.8,
-          "pf": 1.39,
-          "bars": 1.2
+          "n": 76,
+          "net": 3.33,
+          "win": 55.3,
+          "pf": 1.31,
+          "bars": 1.0
         },
         "2026": {
-          "n": 35,
-          "net": 34.53,
-          "win": 65.7,
-          "pf": 2.9,
-          "bars": 4.6
+          "n": 39,
+          "net": 32.14,
+          "win": 69.2,
+          "pf": 2.97,
+          "bars": 4.2
+        },
+        "2022": {
+          "n": 92,
+          "net": 7.97,
+          "win": 42.4,
+          "pf": 1.26,
+          "bars": 7.5
         },
         "2025": {
-          "n": 64,
-          "net": 11.31,
-          "win": 51.6,
-          "pf": 1.84,
-          "bars": 4.4
+          "n": 52,
+          "net": 9.64,
+          "win": 51.9,
+          "pf": 1.71,
+          "bars": 3.3
         },
         "2023": {
-          "n": 92,
-          "net": 13.28,
-          "win": 51.1,
-          "pf": 1.75,
-          "bars": 4.0
+          "n": 80,
+          "net": 19.32,
+          "win": 52.5,
+          "pf": 2.3,
+          "bars": 3.6
         },
         "2021": {
           "n": 2,
@@ -124,135 +126,63 @@
         }
       },
       "by_case": {
-        "reversion": {
-          "n": 235,
-          "net": 5.97,
-          "win": 45.5,
-          "pf": 1.17,
-          "bars": 9.4
-        },
         "momentum": {
-          "n": 95,
-          "net": 1.98,
-          "win": 52.6,
-          "pf": 1.18,
+          "n": 91,
+          "net": 2.68,
+          "win": 54.9,
+          "pf": 1.25,
           "bars": 1.0
         },
+        "reversion": {
+          "n": 142,
+          "net": 27.22,
+          "win": 55.6,
+          "pf": 2.0,
+          "bars": 8.6
+        },
         "breakout": {
-          "n": 115,
-          "net": 1.99,
-          "win": 44.3,
-          "pf": 1.16,
+          "n": 108,
+          "net": 1.96,
+          "win": 45.4,
+          "pf": 1.15,
           "bars": 1.0
         }
       },
-      "by_year_case": {
-        "2022/reversion": {
-          "n": 157,
-          "net": -10.2,
-          "win": 35.7,
-          "pf": 0.75,
-          "bars": 9.4
-        },
-        "2024/momentum": {
-          "n": 54,
-          "net": 2.8,
-          "win": 55.6,
-          "pf": 1.3,
-          "bars": 1.0
-        },
-        "2026/momentum": {
-          "n": 7,
-          "net": 3.57,
-          "win": 71.4,
-          "pf": 1.21,
-          "bars": 1.1
-        },
-        "2025/breakout": {
-          "n": 37,
-          "net": 4.19,
-          "win": 45.9,
-          "pf": 1.43,
-          "bars": 1.0
-        },
-        "2023/breakout": {
-          "n": 26,
-          "net": -3.8,
-          "win": 38.5,
-          "pf": 0.73,
-          "bars": 1.0
-        },
-        "2023/momentum": {
-          "n": 29,
-          "net": 0.85,
-          "win": 41.4,
-          "pf": 1.06,
-          "bars": 1.1
-        },
-        "2024/breakout": {
-          "n": 28,
-          "net": 1.99,
-          "win": 50.0,
-          "pf": 1.14,
-          "bars": 1.0
-        },
-        "2026/reversion": {
-          "n": 15,
-          "net": 63.49,
-          "win": 66.7,
-          "pf": 3.52,
-          "bars": 9.3
-        },
-        "2022/breakout": {
-          "n": 11,
-          "net": -10.37,
-          "win": 18.2,
-          "pf": 0.36,
-          "bars": 1.0
-        },
-        "2023/reversion": {
-          "n": 37,
-          "net": 35.03,
-          "win": 67.6,
-          "pf": 2.49,
-          "bars": 8.3
-        },
-        "2026/breakout": {
-          "n": 13,
-          "net": 17.78,
-          "win": 61.5,
-          "pf": 2.64,
-          "bars": 1.0
-        },
-        "2025/reversion": {
-          "n": 22,
-          "net": 26.45,
-          "win": 59.1,
-          "pf": 2.33,
-          "bars": 11.0
-        },
-        "2025/momentum": {
-          "n": 5,
-          "net": -2.64,
-          "win": 60.0,
-          "pf": 0.77,
-          "bars": 1.0
-        },
-        "2021/reversion": {
-          "n": 2,
+      "without_breadth_gate": {
+        "n": 449,
+        "net": 4.15,
+        "win": 47.2,
+        "pf": 1.18,
+        "bars": 5.4,
+        "pf_ci90": [
+          0.96,
+          1.45
+        ]
+      },
+      "walk_forward_union": {
+        "off": {
+          "n": 180,
           "net": 17.0,
-          "win": 50.0,
-          "pf": 6.96,
-          "bars": 9.5
+          "win": 53.9,
+          "pf": 2.27,
+          "bars": 3.0
         },
-        "2024/reversion": {
-          "n": 2,
-          "net": 70.75,
-          "win": 100.0,
-          "pf": 99.0,
-          "bars": 10.0
+        "gate_-0.15": {
+          "n": 169,
+          "net": 17.09,
+          "win": 53.3,
+          "pf": 2.23,
+          "bars": 2.9
+        },
+        "chosen": {
+          "n": 100,
+          "net": 25.39,
+          "win": 58.0,
+          "pf": 2.7,
+          "bars": 4.2
         }
-      }
+      },
+      "source": "tests/breadth_gate_report.json"
     }
   }
 }
