@@ -1497,7 +1497,7 @@ def calc_put_call_ratio(tkr_obj, chain=None, exp=None):
         if not exp:
             return None
         if chain is None:
-            chain = _yf_call(tkr_obj.option_chain, exp)
+            chain = _option_chain(tkr_obj, exp)
         put_vol  = float(chain.puts["volume"].fillna(0).sum())
         call_vol = float(chain.calls["volume"].fillna(0).sum())
         if call_vol <= 0:
@@ -1560,9 +1560,125 @@ def safe_list(series, n=60):
 #  OPTIONS-CHAIN HELPERS
 # ══════════════════════════════════════════════════════════════
 
+# ── Option data source: Alpaca when configured, Yahoo otherwise ──────────────
+_opt_data = {"obj": None, "ts": 0.0}
+
+
+def implied_vol(price, S, K, T, r, option_type):
+    """Black-Scholes implied volatility (decimal) by bisection; None outside the no-arbitrage bounds."""
+    try:
+        price, S, K, T = float(price), float(S), float(K), float(T)
+    except (TypeError, ValueError):
+        return None
+    if price <= 0 or S <= 0 or K <= 0 or T <= 0:
+        return None
+
+    def f(sig):
+        bs = black_scholes(S, K, T, r, sig, option_type)
+        return (bs["fair_value"] if bs else 0.0) - price
+    lo, hi = 0.01, 5.0
+    if f(lo) > 0 or f(hi) < 0:
+        return None
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if f(mid) > 0:
+            hi = mid
+        else:
+            lo = mid
+        if hi - lo < 1e-4:
+            break
+    return round((lo + hi) / 2, 4)
+
+
+def _alpaca_data():
+    """
+    The Alpaca option/stock feed (alpaca_data.AlpacaData) when API keys are in
+    autotrade_config.json and a probe call succeeds; None otherwise (Yahoo is
+    used).  A failed probe is retried every 30 minutes.
+    """
+    if _opt_data["obj"] is not None:
+        return _opt_data["obj"]
+    if time.time() - _opt_data["ts"] < 1800:
+        return None
+    _opt_data["ts"] = time.time()
+    try:
+        cfg = autotrader.load_config()
+        if not (cfg.get("alpaca_key_id") and cfg.get("alpaca_secret")):
+            return None
+        import alpaca_data
+        ad = alpaca_data.AlpacaData(cfg["alpaca_key_id"], cfg["alpaca_secret"], paper=bool(cfg.get("paper", True)),
+                                    iv_solver=implied_vol, risk_free=lambda: RISK_FREE_RATE, max_dte=MAX_DTE + 15)
+        ad.probe()
+        _opt_data["obj"] = ad
+        print("  [Data] Alpaca feed active — option chains keep their closing quotes off-hours, IEX pre-market prices")
+        return ad
+    except Exception as e:
+        print(f"  [Data] Alpaca feed unavailable ({e}) — using Yahoo option chains")
+        return None
+
+
+def _option_expirations(tkr_obj, sym=None):
+    """Listed expiries for a ticker: Alpaca when the feed is up, else Yahoo."""
+    sym = sym or getattr(tkr_obj, "ticker", None)
+    ad = _alpaca_data()
+    if ad is not None and sym:
+        try:
+            return ad.expirations(sym)
+        except Exception as e:
+            print(f"  [Data] {sym} Alpaca expirations failed ({e}) — Yahoo")
+    return _yf_call(lambda: tkr_obj.options)
+
+
+def _option_chain(tkr_obj, exp, sym=None):
+    """One expiry's option chain (.calls / .puts): Alpaca when the feed is up, else Yahoo."""
+    sym = sym or getattr(tkr_obj, "ticker", None)
+    ad = _alpaca_data()
+    if ad is not None and sym:
+        try:
+            return ad.chain(sym, exp)
+        except Exception as e:
+            print(f"  [Data] {sym} Alpaca chain failed ({e}) — Yahoo")
+    return _yf_call(tkr_obj.option_chain, exp)
+
+
+def _premarket_overlay(sym, hist):
+    """
+    Before the open (04:00–09:30 ET, Alpaca feed only): append today's latest
+    pre-market trade as a provisional daily bar so the gate sees the gap.
+    Returns (hist, premarket_price or None).
+    """
+    ad = _alpaca_data()
+    if ad is None or hist is None or len(hist) == 0:
+        return hist, None
+    try:
+        from broker import _eastern_now
+        now = _eastern_now()
+        minutes = now.hour * 60 + now.minute
+        if now.weekday() >= 5 or not (4 * 60 <= minutes < 9 * 60 + 30):
+            return hist, None
+        last_bar = pd.Timestamp(hist.index[-1])
+        last_day = (last_bar.tz_localize(None) if last_bar.tzinfo is None else last_bar.tz_convert(None)).date()
+        if last_day >= now.date():
+            return hist, None
+        px, ts = ad.stock_last(sym)
+        if not px or ts is None:
+            return hist, None
+        ts_et = ts.astimezone(now.tzinfo) if ts.tzinfo else ts
+        if ts_et.date() != now.date():
+            return hist, None                                  # no print yet today
+        idx = pd.Timestamp(now.date())
+        if hist.index.tz is not None:
+            idx = idx.tz_localize(hist.index.tz)
+        row = pd.DataFrame({c: [px if c != "Volume" else 0.0] for c in hist.columns}, index=[idx])
+        return pd.concat([hist, row]), float(px)
+    except Exception as e:
+        print(f"  [Data] {sym} pre-market overlay skipped: {e}")
+        return hist, None
+
+
 def _best_exp(tkr_obj):
     """Return the expiry closest to 30 DTE within [MIN_DTE, MAX_DTE]."""
-    exps  = _yf_call(lambda: tkr_obj.options)
+    exps  = _option_expirations(tkr_obj)
     if not exps:
         return None, None
     today = date.today()
@@ -1590,7 +1706,7 @@ def pick_option(tkr_obj, stock_price, option_type="put",
 
     try:
         if chain is None:
-            chain = _yf_call(tkr_obj.option_chain, exp)
+            chain = _option_chain(tkr_obj, exp)
         opts  = chain.puts if option_type == "put" else chain.calls
         if opts is None or opts.empty:
             return None
@@ -1862,7 +1978,7 @@ def _prefetch_ticker(sym, tkr=None):
             result["exp"] = exp
             result["dte"] = dte
             try:
-                result["chain"] = _yf_call(tkr.option_chain, exp)
+                result["chain"] = _option_chain(tkr, exp, sym)
             except Exception as e:
                 print(f"  [Prefetch] {sym} option chain failed: {e}")
     except Exception as e:
@@ -2617,6 +2733,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
 
         if hist is None or len(hist) < 60:
             return None
+        hist, premarket_px = _premarket_overlay(sym, hist)    # before the open: today's pre-market print as a provisional bar
 
         price = float(hist["Close"].iloc[-1])
         # Minimum price filter applies to all strategies (skip sub-penny stocks)
@@ -2745,6 +2862,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
             "ticker": sym, "name": name, "sector": sector,
             "price": round(price, 3),
             "bar_date": str(fr["index"][-1].date()),   # the bar whose close is `price` (the signal log resolves from it)
+            "premarket_price": premarket_px,            # set when `price` is today's pre-market print (Alpaca feed, before the open)
             "rsi":   round(cur_rsi, 1),
             "bb_upper": round(cur_bb_u, 3),
             "bb_mid":   round(cur_bb_m, 3),
@@ -3360,7 +3478,7 @@ def _fetch_option_quote(sym, exp, strike, otype, tkr=None, chain=None):
     try:
         if chain is None:
             tkr   = tkr or yf.Ticker(sym)
-            chain = _yf_call(tkr.option_chain, exp)
+            chain = _option_chain(tkr, exp, sym)
         opts = chain.calls if otype == "call" else chain.puts
         row  = opts[(opts["strike"] - float(strike)).abs() < 0.01]
         if row.empty:
@@ -4859,10 +4977,10 @@ def _load_wfo_results():
         suggestion = results.get("suggestion") or {}
         best       = results.get("best") or {}
         val_sharpe = _as_float(best.get("val_sharpe"), -99.0)
-        if suggestion and val_sharpe > 0:
+        if suggestion and (val_sharpe > 0 or results.get("force_apply")):
             _apply_wfo_params(suggestion)
             print(f"  [WFO] Restored results from {WFO_FILE} (saved {saved_at[:10]}) — "
-                  f"params auto-applied (val Sharpe {val_sharpe:.2f})")
+                  f"params applied ({'chosen by hand: ' + str(results.get('note', '')) if results.get('force_apply') else f'val Sharpe {val_sharpe:.2f}'})")
         else:
             print(f"  [WFO] Restored results from {WFO_FILE} (saved {saved_at[:10]}) — "
                   f"NOT applied (val Sharpe {val_sharpe:.2f} ≤ 0)")
@@ -7508,7 +7626,7 @@ def api_track_update_option(position_id):
                    dte=max((exp_date - date.today()).days, 0))
     entry_price_auto = None
     try:
-        chain = _yf_call(yf.Ticker(ticker).option_chain, new_exp)
+        chain = _option_chain(yf.Ticker(ticker), new_exp, ticker)
         opts  = chain.calls if new_type == "call" else chain.puts
         row   = opts[(opts["strike"] - new_strike).abs() < 0.01]
         if not row.empty:
@@ -8975,6 +9093,7 @@ const AT_FIELDS = [
   ['scan_if_stale_hours','Rescan when results older than (h)','number'],
   ['reentry_cooldown_days','Re-entry cooldown (trading days)','number'],
   ['pending_order_timeout_mins','Cancel unfilled orders after (min)','number'],
+  ['premarket_scan_time','Pre-market scan time (ET, blank = off)','text'],
   ['paper_starting_cash','Paper starting cash $','number'],
   ['paper_slippage_pct','Paper slippage %','number'],
 ];

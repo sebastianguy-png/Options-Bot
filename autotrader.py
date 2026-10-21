@@ -73,6 +73,7 @@ DEFAULT_CONFIG = {
     "scan_if_stale_hours":    3.0,              # start a scan when the newest results are older than this
     "reentry_cooldown_days":  3,                # trading days before the same ticker+strategy can be re-entered
     "pending_order_timeout_mins": 20,           # cancel an unfilled broker order after this long
+    "premarket_scan_time":    "07:35",          # ET; a full scan before the open so the cards are ready ("" = off)
 }
 _SECRET_KEYS   = ("alpaca_key_id", "alpaca_secret")
 _STRAT_BUCKET  = {"sell_put": "sell_puts", "buy_call": "buy_calls", "buy_put": "buy_puts"}   # covered calls need shares, condors are 4 legs
@@ -102,7 +103,9 @@ _state = {
     "pending":      [],        # entry orders still open at the broker: {order_id, candidate, qty, limit, submitted_at}
     "recent_exits": {},        # "TICKER|strategy" → ISO date of the last auto exit (re-entry cooldown)
     "daily":        {},        # "YYYY-MM-DD" → {"realized": $, "entries": n, "exits": n}
+    "last_premarket_scan": "", # ISO date of the last pre-market scan this loop started
 }
+_PERSIST_KEYS = ("pending", "recent_exits", "daily", "last_premarket_scan")
 
 
 # ──────────────────────────────────────────────────────────────
@@ -177,6 +180,12 @@ def _coerce(cfg: dict) -> dict:
     cfg["scan_if_stale_hours"]= f("scan_if_stale_hours", 0.25, 48.0)
     cfg["reentry_cooldown_days"] = i("reentry_cooldown_days", 0, 30)
     cfg["pending_order_timeout_mins"] = i("pending_order_timeout_mins", 1, 390)
+    t = str(cfg.get("premarket_scan_time") or "").strip()
+    try:
+        hh, mm = (int(x) for x in t.split(":"))
+        cfg["premarket_scan_time"] = f"{hh:02d}:{mm:02d}" if (0 <= hh < 24 and 0 <= mm < 60) else ""
+    except ValueError:
+        cfg["premarket_scan_time"] = ""
     return cfg
 
 
@@ -214,7 +223,7 @@ def _load_state():
     saved = _ob._load_json(STATE_FILE, {}, "Autotrade") if _ob else {}
     if isinstance(saved, dict):
         with _state_lock:
-            for k in ("pending", "recent_exits", "daily"):
+            for k in _PERSIST_KEYS:
                 if isinstance(saved.get(k), type(_state[k])):
                     _state[k] = saved[k]
 
@@ -226,7 +235,7 @@ def _save_state():
         _state["recent_exits"] = {k: v for k, v in _state["recent_exits"].items() if str(v) >= cutoff}
         keys = sorted(_state["daily"])[-60:]
         _state["daily"] = {k: _state["daily"][k] for k in keys}
-        snap = {k: copy.deepcopy(_state[k]) for k in ("pending", "recent_exits", "daily")}
+        snap = {k: copy.deepcopy(_state[k]) for k in _PERSIST_KEYS}
     try:
         _ob._atomic_json_write(STATE_FILE, snap)
     except Exception as e:
@@ -384,6 +393,7 @@ def run_cycle(force: bool = False) -> dict:
             br = _get_broker(cfg)
             market_open = bool(br.is_market_open())
             _state["market_open"] = market_open
+            summary["premarket"] = _maybe_premarket_scan(cfg)
             if cfg["market_hours_only"] and not market_open and not force:
                 summary["reason"] = "market closed"
                 return summary
@@ -391,8 +401,8 @@ def run_cycle(force: bool = False) -> dict:
             summary["ran"] = True
             summary["settled"] = _settle_pending(br, cfg)
             summary["exits"]   = _manage_exits(br, cfg)
-            summary["scan"]    = _maybe_scan(cfg, market_open or force)
-            summary["entries"], summary["skipped"] = _open_entries(br, cfg)
+            summary["scan"]    = _maybe_scan(cfg, market_open or force, market_open)
+            summary["entries"], summary["skipped"] = _open_entries(br, cfg, market_open)
             _mark_paper(br)
             _state["last_error"] = None
         except Exception as e:
@@ -618,36 +628,83 @@ def _set_position_field(pos_id: str, key: str, value):
         _ob.save_tracked(positions)
 
 
-def _results_age_h():
-    """Hours since the NEWEST scan or live refresh (None when nothing has run), and whether a scan is running."""
+def _results_newest():
+    """(newest scan/refresh timestamp or None, scan running?)."""
     with _ob.scan_lock:
         stamps  = [s for s in (_ob.scan_state.get("last_scan"), _ob.scan_state.get("last_refresh")) if s]
         running = bool(_ob.scan_state.get("running"))
-    if not stamps:
-        return None, running
     try:
-        newest = max(datetime.fromisoformat(s) for s in stamps)
-        return (datetime.now() - newest).total_seconds() / 3600, running
+        return (max(datetime.fromisoformat(s) for s in stamps) if stamps else None), running
     except ValueError:
         return None, running
 
 
-def _maybe_scan(cfg, allowed: bool) -> str:
-    """Start a full scan in the background when the newest results are stale."""
+def _results_age_h():
+    """Hours since the NEWEST scan or live refresh (None when nothing has run), and whether a scan is running."""
+    newest, running = _results_newest()
+    return (None if newest is None else (datetime.now() - newest).total_seconds() / 3600), running
+
+
+def _session_open_dt():
+    """Today's 09:30 ET as a naive local datetime (the bot's timestamps are local time)."""
+    from broker import _eastern_now
+    et = _eastern_now()
+    open_et = et.replace(hour=9, minute=30, second=0, microsecond=0)
+    return datetime.now() - (et - open_et)
+
+
+def _results_pre_open() -> bool:
+    """True when the newest results were produced before today's open (closing / pre-market quotes)."""
+    newest, _ = _results_newest()
+    return newest is not None and newest < _session_open_dt()
+
+
+def _start_scan(reason: str, name: str) -> bool:
+    with _ob.scan_lock:
+        if _ob.scan_state.get("running"):
+            return False
+        _ob.scan_state["running"] = True                     # claim the slot like /api/scan/start does
+    threading.Thread(target=_ob._run_scan, daemon=True, name=name).start()
+    _log("scan_started", detail=reason)
+    return True
+
+
+def _maybe_premarket_scan(cfg) -> str:
+    """One full scan at premarket_scan_time ET on trading days, so the cards are ready before the open."""
+    t = cfg.get("premarket_scan_time") or ""
+    if not t:
+        return "off"
+    from broker import _eastern_now, _NYSE_HOLIDAYS
+    now = _eastern_now()
+    if now.weekday() >= 5 or now.strftime("%Y-%m-%d") in _NYSE_HOLIDAYS:
+        return "not a trading day"
+    hh, mm = (int(x) for x in t.split(":"))
+    minutes = now.hour * 60 + now.minute
+    if minutes < hh * 60 + mm or minutes >= 9 * 60 + 30:
+        return "outside the pre-market window"
+    today = now.date().isoformat()
+    with _state_lock:
+        if _state.get("last_premarket_scan") == today:
+            return "done today"
+        _state["last_premarket_scan"] = today
+    _save_state()
+    return "started" if _start_scan(f"{t} ET pre-market scan", "premarket-scan") else "scan already running"
+
+
+def _maybe_scan(cfg, allowed: bool, market_open: bool = False) -> str:
+    """Start a full scan when the newest results are stale — or were taken before today's open while the market is open."""
     age_h, running = _results_age_h()
     if running:
         return "scan running"
-    if age_h is not None and age_h < cfg["scan_if_stale_hours"]:
+    stale   = age_h is None or age_h >= cfg["scan_if_stale_hours"]
+    pre_open = market_open and _results_pre_open()
+    if not (stale or pre_open):
         return f"results {age_h:.1f}h old"
     if not allowed:
         return f"results {age_h:.1f}h old" if age_h is not None else "no scan yet"
-    with _ob.scan_lock:
-        if _ob.scan_state.get("running"):
-            return "scan running"
-        _ob.scan_state["running"] = True                     # claim the slot like /api/scan/start does
-    threading.Thread(target=_ob._run_scan, daemon=True, name="autotrade-scan").start()
-    _log("scan_started", detail=f"results were {age_h:.1f}h old" if age_h is not None else "no results yet")
-    return "scan started"
+    reason = ("first in-session scan (results are from before the open)" if pre_open
+              else f"results were {age_h:.1f}h old" if age_h is not None else "no results yet")
+    return "scan started" if _start_scan(reason, "autotrade-scan") else "scan running"
 
 
 def _candidates(cfg) -> tuple[list, list]:
@@ -723,12 +780,14 @@ def _size(cand: dict, cfg: dict, account: dict | None) -> tuple[int, float, floa
     return (qty, ask, mid, None) if qty >= 1 else (0, 0.0, mid, "not enough buying power for one contract")
 
 
-def _open_entries(br, cfg) -> tuple[int, list]:
+def _open_entries(br, cfg, market_open: bool = True) -> tuple[int, list]:
     with _state_lock:
         d = dict(_daily())
         n_pending = len(_state["pending"])
     if cfg["daily_loss_cap_usd"] > 0 and d["realized"] <= -cfg["daily_loss_cap_usd"]:
         return 0, [f"daily loss cap hit (realised {d['realized']:+,.2f})"]
+    if market_open and _results_pre_open():
+        return 0, ["results are from before the open (closing / pre-market quotes) — waiting for the first in-session scan"]
     with _ob.track_lock:
         n_open = sum(1 for p in _ob.load_tracked() if p.get("auto"))
     slots = min(cfg["max_open_positions"] - n_open - n_pending, cfg["max_new_per_cycle"])
