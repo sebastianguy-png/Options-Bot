@@ -7266,8 +7266,25 @@ def api_tracked_get():
 
 
 @app.route("/api/track/<position_id>", methods=["DELETE"])
+def _auto_position_block(position_id):
+    """
+    Positions the autotrader opened are held at a broker: the Track tab must not
+    drop or re-point them behind its back (the broker contract would be orphaned).
+    Returns a JSON error response for such a position, else None.
+    """
+    with track_lock:
+        pos = next((p for p in load_tracked() if p["id"] == position_id), None)
+    if pos and pos.get("auto"):
+        return jsonify({"ok": False, "message": "This position was opened by the autotrader — close it from the "
+                                                "🤖 Autotrade tab so the broker position is closed as well."}), 409
+    return None
+
+
 def api_track_remove(position_id):
     """Remove a position from tracking."""
+    blocked = _auto_position_block(position_id)
+    if blocked:
+        return blocked
     with track_lock:
         positions = [p for p in load_tracked() if p["id"] != position_id]
         save_tracked(positions)
@@ -7280,6 +7297,9 @@ def api_track_update_option(position_id):
     Update the option details (strike / expiration / type) for a tracked position.
     Tries to fetch a fresh price for the new option from yfinance.
     """
+    blocked = _auto_position_block(position_id)
+    if blocked:
+        return blocked
     data       = request.get_json(silent=True) or {}
     new_strike = _as_float(data.get("strike"))
     new_exp    = str(data.get("expiration") or "").strip()
@@ -7516,6 +7536,9 @@ def api_performance_from_tracker():
     data       = request.get_json(silent=True) or {}
     pos_id     = data.get("position_id")
     exit_date  = data.get("exit_date", "")
+    blocked = _auto_position_block(pos_id)
+    if blocked:
+        return blocked
 
     with track_lock:
         positions = load_tracked()
@@ -8886,7 +8909,7 @@ async function atSaveConfig() {
     const v = el.value;
     if (type === 'password') { if (v) patch[key] = v; }
     else if (type === 'bool') patch[key] = (v === 'true');
-    else if (type === 'number') patch[key] = parseFloat(v);
+    else if (type === 'number') { const n = parseFloat(v); if (!Number.isNaN(n)) patch[key] = n; }   // blank = keep the stored value
     else if (key === 'allowed_strategies') patch[key] = v.split(',').map(s=>s.trim()).filter(Boolean);
     else patch[key] = v;
   }
@@ -12002,7 +12025,7 @@ HEADLESS = ("--headless" in sys.argv) or os.environ.get("OPTIONS_BOT_HEADLESS") 
 class _TeeStream:
     """stdout/stderr → the console AND logs\\bot_<date>.log (a new file each day; never raises)."""
     def __init__(self, stream):
-        self.stream, self._day, self._fh, self._lock = stream, None, None, threading.Lock()
+        self.stream, self._day, self._fh, self._lock = stream, None, None, threading.RLock()   # re-entrant: a warning raised mid-write must not deadlock
 
     def _file(self):
         day = date.today().isoformat()

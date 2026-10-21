@@ -4,9 +4,11 @@ Broker adapters for the Options Bot autotrader.
 Two implementations behind one small interface:
 
   LocalPaperBroker  — no network at all.  Fills at the price the bot passes in
-                      (the option mid from the scan / tracker), keeps a ledger in
-                      paper_ledger.json.  This is the default and the only mode
-                      that needs nothing from you.
+                      (the option mid from the scan / tracker) with a little
+                      slippage, keeps a ledger in paper_ledger.json and reserves
+                      strike × 100 of cash for every short put (cash-secured).
+                      This is the default and the only mode that needs nothing
+                      from you.
   AlpacaBroker      — Alpaca Markets REST API (https://docs.alpaca.markets).
                       Paper trading by default (paper-api.alpaca.markets); the
                       live endpoint is only used when the config says
@@ -17,17 +19,27 @@ Two implementations behind one small interface:
 Option contracts are addressed by their OCC symbol, e.g. AAPL251121P00340000
 (ticker, YYMMDD expiry, C/P, strike × 1000 zero-padded to 8 digits).
 
-Nothing in here decides WHAT to trade — the autotrader in options_bot.py does
+Contract the autotrader relies on:
+  submit_option_order  → an Order whose status is "filled" (paper), or an open
+                         status the caller must poll with get_order()
+  get_order            → None ONLY when the broker has no such order (404);
+                         raises BrokerError when the broker cannot be reached,
+                         so a blip is never mistaken for "order gone"
+  cancel_order         → True when the cancel was accepted; a cancel can still
+                         race a fill, so callers re-fetch the order afterwards
+
+Nothing in here decides WHAT to trade — the autotrader in autotrader.py does
 that; this module only knows how to place, query and close orders.
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, date, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 try:
@@ -56,6 +68,19 @@ def parse_occ(symbol: str) -> dict:
     ticker = s[:-15]
     exp = datetime.strptime(yymmdd, "%y%m%d").strftime("%Y-%m-%d")
     return {"ticker": ticker, "expiration": exp, "type": "call" if cp == "C" else "put", "strike": strike}
+
+
+def option_tick(price: float, side: str) -> float:
+    """
+    Snap a limit price to a valid option tick: $0.01 below $3, $0.05 at or
+    above (every penny-increment class accepts $0.05 steps too).  Buys round
+    up and sells round down, so the order is never less aggressive than meant.
+    """
+    p = float(price)
+    step = 0.01 if p < 3 else 0.05
+    n = p / step
+    n = math.ceil(n - 1e-9) if side == "buy" else math.floor(n + 1e-9)
+    return round(max(n * step, step), 2)
 
 
 def _atomic_write(path: str, obj) -> None:
@@ -99,7 +124,10 @@ class Order:
 
 
 class BrokerError(Exception):
-    pass
+    """status = HTTP status for a rejected request, None for a transport failure."""
+    def __init__(self, message, status: Optional[int] = None):
+        super().__init__(message)
+        self.status = status
 
 
 # ──────────────────────────────────────────────────────────────
@@ -111,7 +139,7 @@ class Broker:
     paper = True
 
     def account(self) -> dict:
-        """{'cash': float, 'equity': float, 'buying_power': float}"""
+        """{'cash': float, 'equity': float, 'buying_power': float}  (buying_power = what options can be bought/secured with)"""
         raise NotImplementedError
 
     def positions(self) -> list:
@@ -124,6 +152,7 @@ class Broker:
         raise NotImplementedError
 
     def get_order(self, order_id: str) -> Optional[Order]:
+        """None only when the broker has no such order; raises BrokerError when unreachable."""
         raise NotImplementedError
 
     def cancel_order(self, order_id: str) -> bool:
@@ -190,11 +219,25 @@ class LocalPaperBroker(Broker):
     def _save(self):
         _atomic_write(self.path, self.ledger)
 
+    @staticmethod
+    def _collateral(symbol: str, qty: int) -> float:
+        """Cash reserved for a short: strike × 100 per contract (a short call is treated the same)."""
+        try:
+            return abs(int(qty)) * parse_occ(symbol)["strike"] * 100
+        except Exception:
+            return 0.0
+
+    def _reserved(self) -> float:
+        return sum(self._collateral(s, p["qty"]) for s, p in self.ledger["positions"].items() if p["qty"] < 0)
+
     # -- interface
     def account(self) -> dict:
         mv = sum(p["qty"] * p.get("last_price", p["avg_price"]) * 100 for p in self.ledger["positions"].values())
-        return {"cash": round(self.ledger["cash"], 2), "equity": round(self.ledger["cash"] + mv, 2),
-                "buying_power": round(self.ledger["cash"], 2), "starting_cash": self.ledger.get("starting_cash")}
+        cash = self.ledger["cash"]
+        return {"cash": round(cash, 2), "equity": round(cash + mv, 2),
+                "buying_power": round(cash - self._reserved(), 2),       # cash not already securing a short
+                "collateral_reserved": round(self._reserved(), 2),
+                "starting_cash": self.ledger.get("starting_cash")}
 
     def positions(self) -> list:
         return [{"symbol": s, "qty": p["qty"], "avg_price": p["avg_price"],
@@ -208,14 +251,16 @@ class LocalPaperBroker(Broker):
             p["last_price"] = float(price)
             self._save()
 
+    def _reject(self, symbol, side, qty, order_type, limit_price, message) -> Order:
+        o = Order(str(uuid.uuid4())[:8], symbol, side, qty, order_type, limit_price, "rejected", message=message)
+        self.ledger["orders"].append(o.to_dict()); self._save()
+        return o
+
     def submit_option_order(self, symbol, side, qty, limit_price=None, order_type="limit", tif="day", ref_price=None):
         qty = int(qty)
         price = ref_price if ref_price else limit_price
         if not price or price <= 0 or qty <= 0:
-            o = Order(str(uuid.uuid4())[:8], symbol, side, qty, order_type, limit_price, "rejected",
-                      message="no reference price / zero qty")
-            self.ledger["orders"].append(o.to_dict()); self._save()
-            return o
+            return self._reject(symbol, side, qty, order_type, limit_price, "no reference price / zero qty")
         fill = round(price * (1 + self.slippage) if side == "buy" else price * (1 - self.slippage), 3)
         if limit_price and ((side == "buy" and fill > limit_price) or (side == "sell" and fill < limit_price)):
             fill = float(limit_price)                       # a limit order fills no worse than its limit
@@ -225,11 +270,11 @@ class LocalPaperBroker(Broker):
             if pos["qty"] < 0:                               # closing a short
                 self.ledger["cash"] -= cost
             else:
-                if cost > self.ledger["cash"]:
-                    o = Order(str(uuid.uuid4())[:8], symbol, side, qty, order_type, limit_price, "rejected",
-                              message=f"insufficient cash ({self.ledger['cash']:.2f} < {cost:.2f})")
-                    self.ledger["orders"].append(o.to_dict()); self._save()
-                    return o
+                if cost > self.ledger["cash"] - self._reserved():
+                    if pos["qty"] == 0:
+                        self.ledger["positions"].pop(symbol, None)
+                    return self._reject(symbol, side, qty, order_type, limit_price,
+                                        f"insufficient buying power ({self.ledger['cash'] - self._reserved():.2f} < {cost:.2f})")
                 new_qty = pos["qty"] + qty
                 pos["avg_price"] = (pos["avg_price"] * pos["qty"] + fill * qty) / new_qty if new_qty else fill
                 self.ledger["cash"] -= cost
@@ -237,7 +282,13 @@ class LocalPaperBroker(Broker):
         else:
             if pos["qty"] > 0:                               # closing a long
                 self.ledger["cash"] += cost
-            else:                                            # opening a short (premium received)
+            else:                                            # opening a short: premium received, strike × 100 reserved
+                need = self._collateral(symbol, qty)
+                if need > self.ledger["cash"] - self._reserved():
+                    if pos["qty"] == 0:
+                        self.ledger["positions"].pop(symbol, None)
+                    return self._reject(symbol, side, qty, order_type, limit_price,
+                                        f"insufficient cash to secure the short ({self.ledger['cash'] - self._reserved():.2f} < {need:.2f})")
                 new_qty = pos["qty"] - qty
                 pos["avg_price"] = (pos["avg_price"] * abs(pos["qty"]) + fill * qty) / abs(new_qty) if new_qty else fill
                 self.ledger["cash"] += cost
@@ -289,6 +340,8 @@ class AlpacaBroker(Broker):
     PAPER_URL = "https://paper-api.alpaca.markets"
     LIVE_URL  = "https://api.alpaca.markets"
     DATA_URL  = "https://data.alpaca.markets"
+    _OPEN_STATUSES = ("new", "accepted", "pending_new", "partially_filled", "pending_cancel", "pending_replace",
+                      "accepted_for_bidding", "calculated", "held")
 
     def __init__(self, key_id: str, secret: str, paper: bool = True, timeout: int = 15):
         if requests is None:
@@ -304,28 +357,33 @@ class AlpacaBroker(Broker):
         self.s.headers.update({"APCA-API-KEY-ID": key_id, "APCA-API-SECRET-KEY": secret,
                                "Accept": "application/json", "Content-Type": "application/json"})
 
-    def _req(self, method: str, path: str, base: Optional[str] = None, **kw):
+    def _req(self, method: str, path: str, base: Optional[str] = None, retry: bool = True, **kw):
+        """retry=False for anything that must not be resent blindly (order submission)."""
         url = (base or self.base) + path
-        for attempt in range(3):
+        attempts = 3 if retry else 1
+        for attempt in range(attempts):
             try:
                 r = self.s.request(method, url, timeout=self.timeout, **kw)
             except requests.RequestException as e:
-                if attempt == 2:
+                if attempt == attempts - 1:
                     raise BrokerError(f"{method} {path}: {e}")
                 time.sleep(1 + attempt)
                 continue
-            if r.status_code == 429 and attempt < 2:
+            if r.status_code == 429 and attempt < attempts - 1:
                 time.sleep(2 + attempt * 2)
                 continue
             if r.status_code >= 400:
-                raise BrokerError(f"{method} {path} → {r.status_code}: {r.text[:300]}")
+                raise BrokerError(f"{method} {path} → {r.status_code}: {r.text[:300]}", status=r.status_code)
             return r.json() if r.text else {}
         raise BrokerError(f"{method} {path}: retries exhausted")
 
     def account(self) -> dict:
         a = self._req("GET", "/v2/account")
-        return {"cash": float(a.get("cash", 0)), "equity": float(a.get("equity", 0)),
-                "buying_power": float(a.get("buying_power", 0)),
+        regt = float(a.get("buying_power", 0) or 0)
+        opt  = a.get("options_buying_power")                 # options are not marginable: this is the real limit
+        return {"cash": float(a.get("cash", 0) or 0), "equity": float(a.get("equity", 0) or 0),
+                "buying_power": float(opt) if opt not in (None, "") else regt,
+                "regt_buying_power": regt,
                 "options_approved_level": a.get("options_approved_level"), "status": a.get("status")}
 
     def positions(self) -> list:
@@ -336,18 +394,30 @@ class AlpacaBroker(Broker):
             qty = int(float(p.get("qty", 0)))
             if p.get("side") == "short":
                 qty = -abs(qty)
-            out.append({"symbol": p["symbol"], "qty": qty, "avg_price": float(p.get("avg_entry_price", 0)),
-                        "market_value": float(p.get("market_value", 0)),
-                        "unrealized_pl": float(p.get("unrealized_pl", 0))})
+            out.append({"symbol": p["symbol"], "qty": qty, "avg_price": float(p.get("avg_entry_price", 0) or 0),
+                        "market_value": float(p.get("market_value", 0) or 0),
+                        "unrealized_pl": float(p.get("unrealized_pl", 0) or 0)})
         return out
 
     def submit_option_order(self, symbol, side, qty, limit_price=None, order_type="limit", tif="day", ref_price=None):
-        body = {"symbol": symbol, "qty": str(int(qty)), "side": side, "type": order_type, "time_in_force": tif}
+        coid = f"ob-{uuid.uuid4().hex[:20]}"                 # lets us find the order again if the POST times out
+        body = {"symbol": symbol, "qty": str(int(qty)), "side": side, "type": order_type, "time_in_force": tif,
+                "client_order_id": coid}
         if order_type == "limit":
             if not limit_price:
                 raise BrokerError("limit order without limit_price")
-            body["limit_price"] = f"{float(limit_price):.2f}"
-        r = self._req("POST", "/v2/orders", json=body)
+            body["limit_price"] = f"{option_tick(limit_price, side):.2f}"
+        try:
+            r = self._req("POST", "/v2/orders", retry=False, json=body)
+        except BrokerError as e:
+            if e.status is not None and e.status < 500:
+                raise                                        # a real rejection: nothing was placed
+            # transport failure / 5xx: Alpaca may have accepted the order — look it up before giving up
+            time.sleep(1.0)
+            try:
+                r = self._req("GET", f"/v2/orders:by_client_order_id?client_order_id={coid}")
+            except BrokerError:
+                raise e
         return self._order_from(r)
 
     def _order_from(self, r: dict) -> Order:
@@ -360,15 +430,17 @@ class AlpacaBroker(Broker):
     def get_order(self, order_id):
         try:
             return self._order_from(self._req("GET", f"/v2/orders/{order_id}"))
-        except BrokerError:
-            return None
+        except BrokerError as e:
+            if e.status == 404:
+                return None
+            raise
 
     def cancel_order(self, order_id):
         try:
             self._req("DELETE", f"/v2/orders/{order_id}")
             return True
         except BrokerError:
-            return False
+            return False                                     # 422 = not cancelable any more (filled): caller re-fetches
 
     def is_market_open(self) -> bool:
         try:
@@ -398,7 +470,7 @@ def make_broker(cfg: dict) -> Broker:
     """
     cfg keys: broker ("local_paper" | "alpaca"), paper (bool),
               alpaca_key_id / alpaca_secret (or env ALPACA_KEY_ID / ALPACA_SECRET),
-              paper_starting_cash, paper_slippage_pct
+              paper_starting_cash, paper_slippage_pct, paper_ledger_path
     """
     kind = (cfg.get("broker") or "local_paper").lower()
     if kind == "alpaca":

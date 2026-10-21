@@ -5,10 +5,11 @@ folder, and the scan results are synthetic candidates.
 
     py tests/autotrade_dryrun.py
 
-Exercises: entries with sizing + quote filters, exits on a triggered signal and
-on expiry, performance logging, re-entry cooldown, the daily loss cap, the kill
-switch, pending (non-instant) broker orders for both entries and closes, a
-manual close request, and the status() payload.
+Exercises: entries with sizing + quote filters, short-put collateral, exits on a
+triggered signal and on expiry, performance logging, re-entry cooldown, the
+daily loss cap, the kill switch, pending (non-instant) broker orders for both
+entries and closes including a broker outage and partial fills, a manual close
+request, option tick rounding, config normalisation and the status() payload.
 """
 import json, os, shutil, sys, tempfile, uuid, warnings
 from datetime import date, datetime, timedelta
@@ -19,7 +20,7 @@ os.chdir(ROOT)
 
 import options_bot as ob                              # noqa: E402
 import autotrader as at                               # noqa: E402
-from broker import LocalPaperBroker, Order            # noqa: E402
+from broker import LocalPaperBroker, Order, BrokerError, option_tick   # noqa: E402
 
 TMP = tempfile.mkdtemp(prefix="autotrade_dry_")
 ob.TRACK_FILE       = os.path.join(TMP, "tracked.json")
@@ -71,12 +72,19 @@ def log_actions():
 
 
 class FakeSlowBroker(LocalPaperBroker):
-    """Accepts an order first and fills it on the next get_order() — the Alpaca-like pending path."""
+    """
+    Accepts an order first and fills it on the next get_order() — the Alpaca-like
+    pending path.  partial_next=True makes the next poll report "canceled" with
+    all but one contract filled (partial fill, then cancelled).  fail_next=True
+    makes the next poll raise (broker unreachable).
+    """
     name = "fake_slow"
 
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
         self._queue = {}
+        self.partial_next = False
+        self.fail_next = False
 
     def submit_option_order(self, symbol, side, qty, limit_price=None, order_type="limit", tif="day", ref_price=None):
         oid = str(uuid.uuid4())[:8]
@@ -84,8 +92,16 @@ class FakeSlowBroker(LocalPaperBroker):
         return Order(oid, symbol, side, qty, order_type, limit_price, "accepted")
 
     def get_order(self, order_id):
+        if self.fail_next:
+            self.fail_next = False
+            raise BrokerError("simulated outage")
         if order_id in self._queue:
             sym, side, qty, lim, ref = self._queue.pop(order_id)
+            if self.partial_next and qty > 1:
+                self.partial_next = False
+                o = super().submit_option_order(sym, side, qty - 1, limit_price=lim, ref_price=ref)
+                o.id, o.status, o.qty = order_id, "canceled", qty
+                return o
             o = super().submit_option_order(sym, side, qty, limit_price=lim, ref_price=ref)
             o.id = order_id
             return o
@@ -118,6 +134,10 @@ def main():
     check(0.30 <= by["F"]["entry_price"] < 0.32, f"short fill between bid and mid ({by['F']['entry_price']})")
     acct = at._get_broker(at.load_config()).account()
     check(acct["cash"] < 20000, f"paper cash moved ({acct['cash']})")
+    check(abs(acct["collateral_reserved"] - 4800) < 0.01 and acct["buying_power"] < acct["cash"] - 4700,
+          f"short put collateral reserved (bp {acct['buying_power']} vs cash {acct['cash']})")
+    rej = at._get_broker(at.load_config()).submit_option_order("XYZ261120P00990000", "sell", 100, limit_price=1.0, ref_price=1.0)
+    check(rej.status == "rejected" and "secure" in rej.message, "paper broker rejects a short it cannot secure")
 
     print("\n2. exits: profit target + expiry")
     with ob.track_lock:
@@ -184,21 +204,50 @@ def main():
                 p["last_signal"] = {"triggered": False, "reasons": [], "current_option_mid": 2.0, "current_bid": 1.9, "current_ask": 2.1}
         ob.save_tracked(ps)
     meta = next(p for p in tracked() if p["ticker"] == "META")
+    check(meta["contracts"] == 2, "META holds 2 contracts")
     check(at.request_close(meta["id"]), "manual close requested")
     r = at.run_now()
     meta = next(p for p in tracked() if p["ticker"] == "META")
     check(meta.get("pending_close") is not None, "close accepted → pending_close on the position")
+    at._broker.fail_next = True                           # broker unreachable on the poll
     r = at.run_now()
-    check(not any(p["ticker"] == "META" for p in tracked()), "pending close filled → position gone")
+    meta = next(p for p in tracked() if p["ticker"] == "META")
+    check(meta.get("pending_close") is not None and "close_check_error" in log_actions(), "broker outage keeps pending_close (no second order)")
+    at._broker.partial_next = True                        # 1 of 2 fills, then the order is cancelled
+    r = at.run_now()
+    meta = next((p for p in tracked() if p["ticker"] == "META"), None)
+    check(meta is not None and meta["contracts"] == 1 and meta.get("pending_close") is not None,
+          "partial close: 1 contract booked, 1 still open and already re-submitted")
+    check(any(x["ticker"] == "META" and x["contracts"] == 1 and "partial" in x["notes"] for x in perf()), "partial exit logged to performance")
+    r = at.run_now()                                      # the remainder fills on this poll
+    check(not any(p["ticker"] == "META" for p in tracked()), "remaining contract closed → position gone")
+    check(sum(x["contracts"] for x in perf() if x["ticker"] == "META") == 2, "both META closes in performance (1 + 1)")
     check(any(x["ticker"] == "META" and "manual close" in x["notes"] for x in perf()), "manual close logged to performance")
+
+    print("\n6b. pending entry that partially fills, then is cancelled")
+    set_results(buy_calls=[cand("GOOG", "buy_call", 170, 2.0, 2.2, 90)])
+    r = at.run_now()                                      # accepted → pending
+    at._broker.partial_next = True
+    r = at.run_now()
+    goog = next((p for p in tracked() if p["ticker"] == "GOOG"), None)
+    check(goog is not None and goog["contracts"] == 1 and at.status()["pending_entries"] == 0, "partial entry tracked with the filled qty only")
+    check("entry_partial" in log_actions(), "partial entry logged")
+
+    print("\n6c. option tick rounding")
+    check(option_tick(2.123, "buy") == 2.13 and option_tick(2.123, "sell") == 2.12, "penny ticks below $3 (buy up, sell down)")
+    check(option_tick(3.27, "buy") == 3.30 and option_tick(3.27, "sell") == 3.25, "nickel ticks at/above $3")
 
     print("\n7. status + log")
     s = at.status()
     json.dumps(s, default=str)
-    check(s["broker"] == "local_paper" and s["open_auto_positions"] == 1 and s["cycles"] >= 8, "status() complete")
+    check(s["broker"] == "local_paper" and s["open_auto_positions"] == 2 and s["cycles"] >= 8, "status() complete")
     acts = log_actions()
-    for a in ("entry", "exit", "kill_switch", "entry_submitted", "close_submitted", "close_requested"):
+    for a in ("entry", "exit", "kill_switch", "entry_submitted", "close_submitted", "close_requested", "exit_partial"):
         check(a in acts, f"log has '{a}'")
+    cfg2 = at.set_config({"allowed_strategies": "Sell Put, buy_calls, nonsense", "min_score": None})
+    check(cfg2["allowed_strategies"] == ["sell_put", "buy_call"] and cfg2["min_score"] == 50, "config normalises strategies; null keeps the stored number")
+    saved = json.load(open(at.STATE_FILE))
+    check("recent_exits" in saved and "daily" in saved and "pending" in saved, "state persisted to disk")
 
     print()
     if FAILS:
