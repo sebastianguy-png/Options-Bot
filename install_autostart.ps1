@@ -1,7 +1,7 @@
-# Registers a Windows Scheduled Task "OptionsBot" that starts the bot (headless, no
+﻿# Registers a Windows Scheduled Task "OptionsBot" that starts the bot (headless, no
 # console window) every time you log on, and starts it right now.
 #
-#   Right-click PowerShell → Run as administrator, then:
+#   Right-click PowerShell -> Run as administrator, then:
 #       cd C:\Users\sebas\Options-Bot
 #       Set-ExecutionPolicy -Scope Process Bypass
 #       .\install_autostart.ps1

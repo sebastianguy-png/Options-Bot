@@ -1,5 +1,5 @@
-# One-time setup so the dashboard can be opened from your phone over Tailscale
-# (a private network between your own devices — nothing is exposed to the internet).
+﻿# One-time setup so the dashboard can be opened from your phone over Tailscale
+# (a private network between your own devices - nothing is exposed to the internet).
 #
 #   Double-click setup_tailscale.bat (it asks for admin once, for the installer).
 #
@@ -12,11 +12,11 @@ $ts = "C:\Program Files\Tailscale\tailscale.exe"
 if (-not (Test-Path $ts)) {
     Write-Host "Installing Tailscale (winget, ~30 MB from pkgs.tailscale.com)..."
     winget install --id Tailscale.Tailscale -e --accept-package-agreements --accept-source-agreements
-    if (-not (Test-Path $ts)) { throw "Tailscale did not install — open https://tailscale.com/download/windows and install it by hand, then run this again." }
+    if (-not (Test-Path $ts)) { throw "Tailscale did not install - open https://tailscale.com/download/windows and install it by hand, then run this again." }
 }
 
 Write-Host ""
-Write-Host "Signing in: a browser window opens — use the SAME account you will use on the phone (Google / Apple / Microsoft / GitHub)."
+Write-Host "Signing in: a browser window opens - use the SAME account you will use on the phone (Google / Apple / Microsoft / GitHub)."
 try { & $ts up --accept-routes=false 2>&1 | ForEach-Object { Write-Host $_ } } catch { }
 
 $deadline = (Get-Date).AddMinutes(10)
