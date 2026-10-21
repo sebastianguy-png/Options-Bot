@@ -36,10 +36,13 @@ def summarize(trades, label):
 
 
 def run_params(precomp_map, split_map, params, hold_days, window):
+    entry, exits = ob._split_combo(params)             # a WFO combo carries exit keys too
+    if "hold_days" not in exits:
+        exits["hold_days"] = hold_days
     trades = []
     for sym, pc in precomp_map.items():
         kw = {"idx_end": split_map[sym]} if window == "train" else {"idx_start": split_map[sym]} if window == "val" else {}
-        trades += ob.run_backtest_ticker(sym, hold_days, params=params, precomp=pc, **kw)
+        trades += ob.run_backtest_ticker(sym, params=entry, exits=exits, precomp=pc, **kw)
     return trades
 
 
@@ -77,7 +80,7 @@ def main():
             tr = run_params(precomp, split_map, params, hold, window)
             report["baselines"].append(summarize(tr, f"{label} [{window}]"))
     if res.get("best"):
-        bp = dict(res["best"]["params"]); hold = bp.pop("hold_days", 21)
+        bp = dict(res["best"]["params"]); hold = bp.get("hold_days", 21)
         for window in ("train", "val", "all"):
             tr = run_params(precomp, split_map, bp, hold, window)
             report["baselines"].append(summarize(tr, f"WFO best {res['best']['params']} [{window}]"))

@@ -63,7 +63,9 @@ def freeze_context(legacy):
     legacy.get_vix          = lambda: ctx["vix"]
     legacy.get_vix3m        = lambda: ctx["vix3m"]
     legacy.get_market_trend = lambda: ctx["market_trend"]
-    legacy.get_macro_regime = lambda: dict(ctx["macro"])
+    # The legacy gate had the inverted-curve rule baked into the macro dict; the
+    # engine takes it from ctx["yield_inverted"] + the yield_block_calls parameter.
+    legacy.get_macro_regime = lambda: {**ctx["macro"], "buy_call": bool(ctx["macro"].get("buy_call", True)) and not ctx["yield_inverted"]}
     legacy.get_fed_context  = lambda: {"pre_fed_window": ctx["pre_fed"], "post_fed_window": ctx["post_fed"],
                                        "yield_inverted": ctx["yield_inverted"], "yield_steep": ctx["yield_steep"],
                                        "irx": ctx["irx"], "fvx": ctx["fvx"], "yield_spread": ctx["yield_spread"],
@@ -80,7 +82,8 @@ def freeze_context(legacy):
 def new_engine(hist, sym, ctx):
     fr  = ob.indicator_frame(hist, spy_closes=ob._spy_cache.get("closes"), sym=sym, garch=None)
     ind = ob.ind_at(fr, -1)
-    ev  = ob.evaluate_entry(ind, ctx, ob.live_params(), scan_condors=False)
+    # legacy semantics: the yield-curve block on calls always on, no put trend gate
+    ev  = ob.evaluate_entry(ind, ctx, {**ob.live_params(), "yield_block_calls": True, "put_trend_gate": "off"}, scan_condors=False)
     out = dict(ev)
     out.update({
         "macd_bull": ind["macd_bull"], "macd_bear": ind["macd_bear"],
