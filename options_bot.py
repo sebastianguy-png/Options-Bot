@@ -2757,6 +2757,23 @@ def _strategy_exit_check(strategy, price, rsi, bb_u, bb_l, strike=None, short_pu
     return triggered, reasons, still_valid, note, code
 
 
+def _atm_iv(chain, price):
+    """(call IV %, put IV %) of the strikes nearest the stock price, from a chain object; (None, None) when unknown."""
+    out = []
+    for df in ((getattr(chain, "calls", None), getattr(chain, "puts", None)) if chain is not None else (None, None)):
+        iv = None
+        try:
+            if df is not None and not df.empty:
+                d = df[df["impliedVolatility"].fillna(0) > 0]
+                if not d.empty:
+                    row = d.loc[(d["strike"] - price).abs().idxmin()]
+                    iv = round(float(row["impliedVolatility"]) * 100, 1)
+        except Exception:
+            iv = None
+        out.append(iv)
+    return out[0], out[1]
+
+
 def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch_fn=None):
     """
     Evaluate one ticker for all strategies.
@@ -2877,6 +2894,12 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
         # ── Put/Call ratio for nearest expiry ─────────────────
         pf_chain = pf.get("chain")
         pf_exp   = pf.get("exp")
+        # Real implied vol at the money (Alpaca / Yahoo chain): skew and the IV-vs-forecast gap the
+        # backtest can't see — recorded on the card and in the signal log for later analysis.
+        iv_call_atm, iv_put_atm = _atm_iv(pf_chain, price)
+        iv_skew     = round(iv_put_atm / iv_call_atm, 3) if (iv_call_atm and iv_put_atm) else None
+        iv_vs_garch = (round(((iv_call_atm + iv_put_atm) / 2) / (ind["garch_vol"] * 100), 3)
+                       if (iv_call_atm and iv_put_atm and ind.get("garch_vol")) else None)
         pc_ratio = calc_put_call_ratio(tkr, chain=pf_chain, exp=pf_exp)
         pc_bearish = pc_ratio is not None and pc_ratio > 1.2
         pc_bullish = pc_ratio is not None and pc_ratio < 0.7
@@ -2910,6 +2933,7 @@ def scan_ticker(sym, pre_hist=None, scan_condors=False, pre_fetch=None, prefetch
             "price": round(price, 3),
             "bar_date": str(fr["index"][-1].date()),   # the bar whose close is `price` (the signal log resolves from it)
             "premarket_price": premarket_px,            # set when `price` is today's pre-market print (Alpaca feed, before the open)
+            "iv_call_atm": iv_call_atm, "iv_put_atm": iv_put_atm, "iv_skew": iv_skew, "iv_vs_garch": iv_vs_garch,
             "rsi":   round(cur_rsi, 1),
             "bb_upper": round(cur_bb_u, 3),
             "bb_mid":   round(cur_bb_m, 3),
@@ -6094,6 +6118,10 @@ def _log_new_signals(totals: dict):
                     # Market IV vs model vol at signal time — the only place the
                     # real IV-vs-GARCH edge can be measured (no historical IV exists)
                     "iv_at_signal":    (rec.get("option") or {}).get("iv"),
+                    "iv_call_atm":     rec.get("iv_call_atm"), "iv_put_atm": rec.get("iv_put_atm"),
+                    "iv_skew":         rec.get("iv_skew"),     "iv_vs_garch": rec.get("iv_vs_garch"),
+                    "escape_case":     next((k[11:] for k in ("sig_escape_reversion", "sig_escape_momentum", "sig_escape_breakout")
+                                             if (rec.get("flags") or {}).get(k)), None),
                     "garch_at_signal": rec.get("garch_vol"),
                     "hv30_at_signal":  rec.get("hv30"),
                     "garch_expand":    rec.get("garch_expand"),
@@ -9151,6 +9179,9 @@ const AT_FIELDS = [
   ['skip_earnings_days','Skip if earnings within (days, 0 = off)','number'],
   ['skip_fomc_day','Skip FOMC decision days','bool'],
   ['max_per_sector','Max open positions per sector (0 = off)','number'],
+  ['vol_scale_sizing','Scale $ per trade by volatility','bool'],
+  ['conviction_boost','Conviction boost × (squeeze breakout / high-VIX reversion)','number'],
+  ['weekly_loss_cap_usd','Weekly loss cap $ (0 = off)','number'],
   ['paper_starting_cash','Paper starting cash $','number'],
   ['paper_slippage_pct','Paper slippage %','number'],
 ];

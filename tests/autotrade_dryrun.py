@@ -113,7 +113,7 @@ def main():
     cfg = at.set_config({"enabled": True, "broker": "local_paper", "min_score": 50, "max_open_positions": 3,
                          "max_new_per_cycle": 3, "paper_starting_cash": 20000, "max_position_usd": 500,
                          "max_collateral_usd": 5000, "daily_loss_cap_usd": 300, "max_spread_pct": 15,
-                         "reentry_cooldown_days": 3, "market_hours_only": True})
+                         "reentry_cooldown_days": 3, "market_hours_only": True, "premarket_scan_time": ""})
     check(cfg["enabled"] and cfg["paper_starting_cash"] == 20000, "config saved and coerced")
 
     print("\n1. entries")
@@ -165,6 +165,7 @@ def main():
     set_results(buy_calls=[cand("AAPL", "buy_call", 190, 2.0, 2.2, 80)], buy_puts=[cand("NVDA", "buy_put", 120, 1.5, 1.7, 75)],
                 sell_puts=[cand("F", "sell_put", 12, 0.30, 0.34, 70)])
     r = at.run_now()
+    print("   result:", json.dumps(r, default=str)[:400])
     check(r["entries"] == 0, "no re-entries")
     check(any("AAPL" in s and "cooldown" in s for s in r["skipped"]), "AAPL blocked by cooldown")
     check(any("NVDA" in s and "already" in s for s in r["skipped"]), "NVDA blocked as already open")

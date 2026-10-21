@@ -80,6 +80,9 @@ DEFAULT_CONFIG = {
     "skip_earnings_days":     1,                # no entry when earnings are within this many days (0 = off)
     "skip_fomc_day":          True,             # no entry on an FOMC decision day
     "max_per_sector":         2,                # open auto positions per sector (0 = no cap)
+    "vol_scale_sizing":       True,             # scale the $ per trade by 35% / HV30 (clamped 0.5–1.5×): calmer names get more, wild ones less
+    "conviction_boost":       1.25,             # × budget for a breakout on a band squeeze release / a reversion in a high-VIX regime
+    "weekly_loss_cap_usd":    800.0,            # realised auto P&L this week ≤ −this → no new entries until next week (0 = off)
 }
 _SECRET_KEYS   = ("alpaca_key_id", "alpaca_secret")
 _STRAT_BUCKET  = {"sell_put": "sell_puts", "buy_call": "buy_calls", "buy_put": "buy_puts"}   # covered calls need shares, condors are 4 legs
@@ -197,6 +200,9 @@ def _coerce(cfg: dict) -> dict:
     cfg["skip_earnings_days"] = i("skip_earnings_days", 0, 10)
     cfg["skip_fomc_day"]      = bool(cfg.get("skip_fomc_day", True))
     cfg["max_per_sector"]     = i("max_per_sector", 0, 50)
+    cfg["vol_scale_sizing"]   = bool(cfg.get("vol_scale_sizing", True))
+    cfg["conviction_boost"]   = f("conviction_boost", 1.0, 3.0)
+    cfg["weekly_loss_cap_usd"] = f("weekly_loss_cap_usd", 0.0, 1e8)
     w = str(cfg.get("entry_window_et") or "").replace(" ", "")
     try:
         a, b = w.split("-")
@@ -877,11 +883,31 @@ def _candidates(cfg) -> tuple[list, list]:
             out.append({"ticker": r["ticker"], "name": r.get("name", ""), "strategy": strat,
                         "strategy_label": r.get("strategy_label", strat), "score": r.get("score"),
                         "price": r.get("price"), "option": opt, "bar_date": r.get("bar_date"),
-                        "sector": r.get("sector") or "N/A", "earnings_dte": edte,
+                        "sector": r.get("sector") or "N/A", "earnings_dte": edte, "hv30": r.get("hv30"),
+                        "vix_regime": r.get("vix_regime"), "flags": r.get("flags") or {},
                         "escape_case": (r.get("flags") or {}).get("sig_escape_breakout") and "breakout"
                                        or (r.get("flags") or {}).get("sig_escape_reversion") and "reversion" or None})
     out.sort(key=lambda c: _ob._as_float(c.get("score")), reverse=True)
     return out, skipped
+
+
+def _budget(cand: dict, cfg: dict) -> tuple[float, str]:
+    """
+    $ budget for one long trade: max_position_usd, scaled by volatility (35% / HV30,
+    clamped 0.5–1.5×) and by conviction (squeeze-release breakout or high-VIX reversion).
+    Returns (budget, note).
+    """
+    budget, notes = float(cfg["max_position_usd"]), []
+    hv = _ob._as_float(cand.get("hv30"))                              # % on the card (e.g. 42.3)
+    if cfg["vol_scale_sizing"] and hv > 0:
+        k = max(0.5, min(1.5, 35.0 / hv))
+        budget *= k; notes.append(f"vol×{k:.2f}")
+    flags = cand.get("flags") or {}
+    strong = (cand.get("escape_case") == "breakout" and flags.get("sig_squeeze_release")) or \
+             (cand.get("escape_case") == "reversion" and cand.get("vix_regime") == "high")
+    if strong and cfg["conviction_boost"] > 1:
+        budget *= cfg["conviction_boost"]; notes.append(f"conviction×{cfg['conviction_boost']:g}")
+    return round(budget, 2), " ".join(notes)
 
 
 def _size(cand: dict, cfg: dict, account: dict | None) -> tuple[int, float, float, str | None]:
@@ -898,10 +924,12 @@ def _size(cand: dict, cfg: dict, account: dict | None) -> tuple[int, float, floa
         if account is not None:
             qty = min(qty, int(max(bp, 0) // collateral))        # cash-secured
         return (qty, bid, mid, None) if qty >= 1 else (0, 0.0, mid, "not enough buying power for one cash-secured contract")
+    budget, note = _budget(cand, cfg)
+    cand["budget_note"] = note
     cost = ask * 100
-    if cost <= 0 or cost > cfg["max_position_usd"]:
-        return 0, 0.0, mid, f"premium ${cost:,.0f} > max ${cfg['max_position_usd']:,.0f} per trade"
-    qty = int(cfg["max_position_usd"] // cost)
+    if cost <= 0 or cost > budget:
+        return 0, 0.0, mid, f"premium ${cost:,.0f} > budget ${budget:,.0f} per trade" + (f" ({note})" if note else "")
+    qty = int(budget // cost)
     if account is not None:
         qty = min(qty, int(max(bp, 0) // cost))
     return (qty, ask, mid, None) if qty >= 1 else (0, 0.0, mid, "not enough buying power for one contract")
@@ -913,6 +941,12 @@ def _open_entries(br, cfg, market_open: bool = True) -> tuple[int, list]:
         n_pending = len(_state["pending"])
     if cfg["daily_loss_cap_usd"] > 0 and d["realized"] <= -cfg["daily_loss_cap_usd"]:
         return 0, [f"daily loss cap hit (realised {d['realized']:+,.2f})"]
+    if cfg["weekly_loss_cap_usd"] > 0:
+        week_start = (date.today() - timedelta(days=date.today().weekday())).isoformat()
+        with _state_lock:
+            week = round(sum(v.get("realized", 0.0) for k, v in _state["daily"].items() if k >= week_start), 2)
+        if week <= -cfg["weekly_loss_cap_usd"]:
+            return 0, [f"weekly loss cap hit (realised this week {week:+,.2f})"]
     if market_open and _results_pre_open():
         return 0, ["results are from before the open (closing / pre-market quotes) — waiting for the first in-session scan"]
     if market_open and not _in_entry_window(cfg):
@@ -1015,6 +1049,7 @@ def _add_tracked(cand: dict, qty: int, fill: float, order_id: str, br, quote: di
         "sector":        cand.get("sector") or "N/A",
         "escape_case":   cand.get("escape_case"),
         "quote_at_entry": quote,                                    # what the market showed when we decided
+        "budget_note":   cand.get("budget_note") or "",
         "entry_slippage_pct": _slippage_pct(side, fill, quote.get("mid")),   # fill vs mid: the spread actually paid
     }
     with _ob.track_lock:
