@@ -9143,6 +9143,7 @@ const AT_FIELDS = [
   ['reentry_cooldown_days','Re-entry cooldown (trading days)','number'],
   ['pending_order_timeout_mins','Cancel unfilled orders after (min)','number'],
   ['premarket_scan_time','Pre-market scan time (ET, blank = off)','text'],
+  ['entry_window_et','Entry window (ET, e.g. 14:45-15:55; blank = all day)','text'],
   ['paper_starting_cash','Paper starting cash $','number'],
   ['paper_slippage_pct','Paper slippage %','number'],
 ];

@@ -74,6 +74,7 @@ DEFAULT_CONFIG = {
     "reentry_cooldown_days":  3,                # trading days before the same ticker+strategy can be re-entered
     "pending_order_timeout_mins": 20,           # cancel an unfilled broker order after this long
     "premarket_scan_time":    "07:35",          # ET; a full scan before the open so the cards are ready ("" = off)
+    "entry_window_et":        "",               # "HH:MM-HH:MM" ET: open new positions only inside this window ("" = any time the market is open)
 }
 _SECRET_KEYS   = ("alpaca_key_id", "alpaca_secret")
 _STRAT_BUCKET  = {"sell_put": "sell_puts", "buy_call": "buy_calls", "buy_put": "buy_puts"}   # covered calls need shares, condors are 4 legs
@@ -186,7 +187,26 @@ def _coerce(cfg: dict) -> dict:
         cfg["premarket_scan_time"] = f"{hh:02d}:{mm:02d}" if (0 <= hh < 24 and 0 <= mm < 60) else ""
     except ValueError:
         cfg["premarket_scan_time"] = ""
+    w = str(cfg.get("entry_window_et") or "").replace(" ", "")
+    try:
+        a, b = w.split("-")
+        (h1, m1), (h2, m2) = (int(x) for x in a.split(":")), (int(x) for x in b.split(":"))
+        cfg["entry_window_et"] = f"{h1:02d}:{m1:02d}-{h2:02d}:{m2:02d}" if (h1 * 60 + m1) < (h2 * 60 + m2) else ""
+    except ValueError:
+        cfg["entry_window_et"] = ""
     return cfg
+
+
+def _in_entry_window(cfg) -> bool:
+    """True when no entry window is set, or the current Eastern time falls inside it."""
+    w = cfg.get("entry_window_et") or ""
+    if not w:
+        return True
+    from broker import _eastern_now
+    now = _eastern_now()
+    a, b = w.split("-")
+    lo = int(a[:2]) * 60 + int(a[3:5]); hi = int(b[:2]) * 60 + int(b[3:5])
+    return lo <= now.hour * 60 + now.minute < hi
 
 
 def save_config(cfg: dict) -> None:
@@ -788,6 +808,8 @@ def _open_entries(br, cfg, market_open: bool = True) -> tuple[int, list]:
         return 0, [f"daily loss cap hit (realised {d['realized']:+,.2f})"]
     if market_open and _results_pre_open():
         return 0, ["results are from before the open (closing / pre-market quotes) — waiting for the first in-session scan"]
+    if market_open and not _in_entry_window(cfg):
+        return 0, [f"outside the entry window {cfg['entry_window_et']} ET (the backtest enters at the day's close)"]
     with _ob.track_lock:
         n_open = sum(1 for p in _ob.load_tracked() if p.get("auto"))
     slots = min(cfg["max_open_positions"] - n_open - n_pending, cfg["max_new_per_cycle"])
