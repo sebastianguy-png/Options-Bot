@@ -367,6 +367,24 @@ FOCUS_LIST = [
     "SPY","QQQ","IWM","XLF","XLE","XLK","ARKK","GLD","SLV","TLT",
 ]
 
+# ── Small/mid-cap extension of the focus list (handoff 7l, 22 Oct 2026) ──────────
+# S&P 400/600 names that passed the screen (price $8–150, ≥ $15M/day, ≥ 250 bars) AND
+# had a ~30-DTE option spread inside the live 15% cap at the close.  Six years of the
+# applied rules on focus + these: PF 1.78 on 278 calls vs 1.76 on 200 (focus alone);
+# the names themselves PF 2.08 on 75.  Switch off with INCLUDE_SMALLMID = False.
+INCLUDE_SMALLMID = True
+SMALLMID_LIST = [
+    "ROAD","WHD","DOCS","HIMS","PRGO","CHWY","PENG","XRAY","UTI","PRDO",
+    "MP","PBF","PINS","BCO","PZZA","WHR","SPHR","TTMI","GTES","MXL",
+    "DXC","LEU","BOX","KMX","STRA","TCBI","GME","DOCN","RMBS","TOST",
+    "FLR","JXN","VFC","DINO","LYFT","DV","KRMN","RYN","BROS","UPWK","SEI",
+]
+
+
+def focus_universe():
+    """The live focus universe: FOCUS_LIST plus the small/mid-cap extension when enabled (de-duplicated)."""
+    return list(dict.fromkeys(FOCUS_LIST + (SMALLMID_LIST if INCLUDE_SMALLMID else [])))
+
 # ── Monte Carlo ───────────────────────────────────────────────
 N_MC_SIMS            = 10_000  # Simulations per signal (higher = slower but more accurate)
 RISK_FREE_RATE       = 0.044   # Fallback: ~current 6-month T-bill. Auto-updated on startup via FRED.
@@ -1784,7 +1802,7 @@ def get_universe(force_mode=None):
     import requests
     effective_mode = force_mode or SCAN_MODE
     if effective_mode == "focus":
-        tickers = list(dict.fromkeys(FOCUS_LIST))
+        tickers = focus_universe()
         print(f"  → Focus mode: {len(tickers)} tickers")
         return tickers
     tickers = []
@@ -5495,7 +5513,7 @@ def _calibration_universe(universe):
         tickers = get_universe(force_mode="full")
         print(f"  [CAL] Universe: S&P 500 — {len(tickers)} tickers")
     else:
-        tickers = list(dict.fromkeys(FOCUS_LIST))
+        tickers = focus_universe()
         print(f"  [CAL] Universe: Focus list — {len(tickers)} tickers")
     return tickers
 
@@ -5858,9 +5876,9 @@ def _run_logistic_calibration(source="signal_log", months=12, universe="focus"):
                         _snp = [x for x in _snp if 1 < len(x) <= 6]
                 except Exception as e:
                     print(f"  [LR] S&P fetch failed ({e}), falling back to focus list")
-                tickers = list(dict.fromkeys(_snp)) if _snp else list(dict.fromkeys(FOCUS_LIST))
+                tickers = list(dict.fromkeys(_snp)) if _snp else focus_universe()
             else:
-                tickers = list(dict.fromkeys(FOCUS_LIST))
+                tickers = focus_universe()
 
             print(f"  [LR] Downloading {BT_HISTORY_PERIOD} history for {len(tickers)} tickers…")
             with _lr_lock:
@@ -5998,7 +6016,7 @@ def _run_hold_sweep_job(months=12, universe="focus"):
         if universe == "snp500":
             tickers = get_universe(force_mode="full")
         else:
-            tickers = list(dict.fromkeys(FOCUS_LIST))
+            tickers = focus_universe()
         if not tickers:
             with _hs_lock:
                 _hs_state.update(stage="No tickers found")
@@ -7036,7 +7054,7 @@ def api_backtest_run():
         if not tickers:
             return jsonify({"ok": False, "message": "No signals found — run a scan first"}), 400
     else:
-        tickers = list(dict.fromkeys(FOCUS_LIST))
+        tickers = focus_universe()
     busy = _start_job(_bt_state, _bt_lock, _run_backtest_job, (tickers, hold_days), name="Backtest")
     return busy or jsonify({"ok": True, "tickers": len(tickers), "hold_days": hold_days})
 
@@ -7220,7 +7238,7 @@ def api_optimizer_run():
     elif mode == "full":
         tickers = get_universe(force_mode="full")
     else:
-        tickers = list(dict.fromkeys(FOCUS_LIST))
+        tickers = focus_universe()
     busy = _start_job(_wfo_state, _wfo_lock, _run_wfo_job, (tickers,), name="Optimizer")
     return busy or jsonify({"ok": True, "tickers": len(tickers)})
 

@@ -1,0 +1,712 @@
+{
+ "universe": [
+  "AAPL",
+  "MSFT",
+  "NVDA",
+  "GOOGL",
+  "AMZN",
+  "META",
+  "TSLA",
+  "AVGO",
+  "ORCL",
+  "AMD",
+  "INTC",
+  "QCOM",
+  "MU",
+  "AMAT",
+  "ARM",
+  "PLTR",
+  "CRM",
+  "SNOW",
+  "ADBE",
+  "NOW",
+  "JPM",
+  "BAC",
+  "GS",
+  "MS",
+  "C",
+  "WFC",
+  "AXP",
+  "COF",
+  "SCHW",
+  "BLK",
+  "UNH",
+  "LLY",
+  "ABBV",
+  "MRK",
+  "PFE",
+  "TMO",
+  "AMGN",
+  "GILD",
+  "VRTX",
+  "MRNA",
+  "XOM",
+  "CVX",
+  "COP",
+  "SLB",
+  "OXY",
+  "HAL",
+  "MPC",
+  "VLO",
+  "WMT",
+  "COST",
+  "TGT",
+  "HD",
+  "MCD",
+  "SBUX",
+  "NKE",
+  "BKNG",
+  "CMG",
+  "NFLX",
+  "DIS",
+  "CMCSA",
+  "T",
+  "VZ",
+  "TMUS",
+  "SNAP",
+  "SPOT",
+  "RBLX",
+  "TTD",
+  "GE",
+  "HON",
+  "CAT",
+  "DE",
+  "BA",
+  "RTX",
+  "LMT",
+  "UPS",
+  "FDX",
+  "RIVN",
+  "NIO",
+  "PLUG",
+  "FCEL",
+  "BLNK",
+  "CHPT",
+  "PYPL",
+  "XYZ",
+  "COIN",
+  "HOOD",
+  "SOFI",
+  "AFRM",
+  "UPST",
+  "SPY",
+  "QQQ",
+  "IWM",
+  "XLF",
+  "XLE",
+  "XLK",
+  "ARKK",
+  "GLD",
+  "SLV",
+  "TLT",
+  "TTMI",
+  "PENG",
+  "MXL",
+  "DOCN",
+  "HIMS",
+  "GME",
+  "DINO",
+  "TOST",
+  "PINS",
+  "MP",
+  "PBF",
+  "SEI",
+  "KMX",
+  "BROS",
+  "VFC",
+  "RMBS",
+  "CHWY",
+  "LYFT",
+  "SPHR",
+  "FLR",
+  "KRMN",
+  "LEU",
+  "JXN",
+  "BOX",
+  "WHR",
+  "DOCS",
+  "RYN",
+  "DXC",
+  "TCBI",
+  "ROAD",
+  "GTES",
+  "BCO",
+  "XRAY",
+  "PRGO",
+  "WHD",
+  "UTI",
+  "DV",
+  "PZZA",
+  "STRA",
+  "UPWK",
+  "PRDO"
+ ],
+ "n_tickers": 140,
+ "params": {
+  "rsi_oversold": 35,
+  "rsi_overbought": 65,
+  "bull_min": 1,
+  "bear_min": 2,
+  "adx_threshold": 30,
+  "garch_mode": "gate",
+  "put_trend_gate": "off",
+  "yield_block_calls": false,
+  "max_spread_pct": 15,
+  "entry_mode": "escape",
+  "escape_normal": "skip",
+  "escape_breakout_vol": 99.0,
+  "otm_factor_call": 0.97,
+  "otm_factor_put": 1.0,
+  "dte_target": 30,
+  "escape_breakout_trend": "any",
+  "escape_require_uptrend": false,
+  "breadth_chg5_min": -0.15,
+  "escape_put_on_collapse": false,
+  "require_green_candle": false,
+  "require_red_candle": false,
+  "stop_loss_pct": 0,
+  "profit_target_pct": 0,
+  "trail_activate_pct": 0,
+  "stagnant_days": 0,
+  "hold_days": 21,
+  "stock_stop_pct": 0,
+  "stock_trail_pct": 7
+ },
+ "calls": {
+  "n": 278,
+  "net": 22.91,
+  "win": 51.8,
+  "pf": 1.78,
+  "bars": 8.5
+ },
+ "by_year": {
+  "2022": {
+   "n": 174,
+   "net": 2.55,
+   "win": 42.0,
+   "pf": 1.07,
+   "bars": 8.0
+  },
+  "2023": {
+   "n": 44,
+   "net": 69.07,
+   "win": 77.3,
+   "pf": 5.17,
+   "bars": 8.9
+  },
+  "2025": {
+   "n": 27,
+   "net": 13.09,
+   "win": 55.6,
+   "pf": 1.61,
+   "bars": 10.4
+  },
+  "2026": {
+   "n": 33,
+   "net": 76.72,
+   "win": 66.7,
+   "pf": 4.71,
+   "bars": 9.4
+  }
+ },
+ "by_index": {
+  "focus": {
+   "n": 200,
+   "net": 22.96,
+   "win": 49.5,
+   "pf": 1.76,
+   "bars": 8.8
+  },
+  "sp400": {
+   "n": 42,
+   "net": 19.99,
+   "win": 54.8,
+   "pf": 1.64,
+   "bars": 6.8
+  },
+  "sp600": {
+   "n": 36,
+   "net": 26.05,
+   "win": 61.1,
+   "pf": 2.22,
+   "bars": 9.2
+  }
+ },
+ "with_focus": true,
+ "exits": {
+  "rsi_target": 166,
+  "stock_trail": 111,
+  "expired": 1
+ },
+ "per_ticker": {
+  "AAPL": {
+   "n": 2,
+   "net_sum": 117.2
+  },
+  "MSFT": {
+   "n": 2,
+   "net_sum": -81.6
+  },
+  "NVDA": {
+   "n": 2,
+   "net_sum": 232.3
+  },
+  "GOOGL": {
+   "n": 4,
+   "net_sum": 318.2
+  },
+  "AMZN": {
+   "n": 3,
+   "net_sum": 157.2
+  },
+  "META": {
+   "n": 4,
+   "net_sum": -78.5
+  },
+  "TSLA": {
+   "n": 3,
+   "net_sum": -185.6
+  },
+  "AVGO": {
+   "n": 1,
+   "net_sum": 169.5
+  },
+  "ORCL": {
+   "n": 4,
+   "net_sum": 207.4
+  },
+  "INTC": {
+   "n": 1,
+   "net_sum": 177.6
+  },
+  "QCOM": {
+   "n": 4,
+   "net_sum": 336.2
+  },
+  "MU": {
+   "n": 1,
+   "net_sum": 233.2
+  },
+  "AMAT": {
+   "n": 2,
+   "net_sum": 224.3
+  },
+  "PLTR": {
+   "n": 2,
+   "net_sum": -22.6
+  },
+  "CRM": {
+   "n": 3,
+   "net_sum": -1.7
+  },
+  "SNOW": {
+   "n": 6,
+   "net_sum": 192.7
+  },
+  "ADBE": {
+   "n": 3,
+   "net_sum": -9.4
+  },
+  "NOW": {
+   "n": 2,
+   "net_sum": 336.4
+  },
+  "JPM": {
+   "n": 5,
+   "net_sum": -75.0
+  },
+  "BAC": {
+   "n": 2,
+   "net_sum": 88.3
+  },
+  "GS": {
+   "n": 3,
+   "net_sum": 232.3
+  },
+  "MS": {
+   "n": 3,
+   "net_sum": 27.7
+  },
+  "C": {
+   "n": 3,
+   "net_sum": 384.4
+  },
+  "WFC": {
+   "n": 3,
+   "net_sum": -229.9
+  },
+  "AXP": {
+   "n": 4,
+   "net_sum": -34.1
+  },
+  "COF": {
+   "n": 2,
+   "net_sum": 31.4
+  },
+  "SCHW": {
+   "n": 3,
+   "net_sum": 276.8
+  },
+  "BLK": {
+   "n": 3,
+   "net_sum": 63.7
+  },
+  "UNH": {
+   "n": 3,
+   "net_sum": 223.9
+  },
+  "LLY": {
+   "n": 1,
+   "net_sum": -102.6
+  },
+  "ABBV": {
+   "n": 2,
+   "net_sum": -34.2
+  },
+  "PFE": {
+   "n": 4,
+   "net_sum": -111.0
+  },
+  "AMGN": {
+   "n": 1,
+   "net_sum": -10.3
+  },
+  "GILD": {
+   "n": 1,
+   "net_sum": 9.8
+  },
+  "MRNA": {
+   "n": 1,
+   "net_sum": 94.5
+  },
+  "XOM": {
+   "n": 2,
+   "net_sum": 1.1
+  },
+  "CVX": {
+   "n": 3,
+   "net_sum": -81.0
+  },
+  "COP": {
+   "n": 1,
+   "net_sum": -53.5
+  },
+  "SLB": {
+   "n": 1,
+   "net_sum": 104.7
+  },
+  "MPC": {
+   "n": 2,
+   "net_sum": -42.1
+  },
+  "VLO": {
+   "n": 4,
+   "net_sum": -150.6
+  },
+  "WMT": {
+   "n": 1,
+   "net_sum": 44.8
+  },
+  "COST": {
+   "n": 2,
+   "net_sum": -168.7
+  },
+  "TGT": {
+   "n": 2,
+   "net_sum": 133.9
+  },
+  "HD": {
+   "n": 1,
+   "net_sum": -59.9
+  },
+  "MCD": {
+   "n": 3,
+   "net_sum": 28.2
+  },
+  "SBUX": {
+   "n": 2,
+   "net_sum": 76.5
+  },
+  "NKE": {
+   "n": 3,
+   "net_sum": -85.3
+  },
+  "BKNG": {
+   "n": 3,
+   "net_sum": 62.0
+  },
+  "CMG": {
+   "n": 5,
+   "net_sum": 81.2
+  },
+  "NFLX": {
+   "n": 1,
+   "net_sum": 57.3
+  },
+  "DIS": {
+   "n": 1,
+   "net_sum": 189.6
+  },
+  "CMCSA": {
+   "n": 3,
+   "net_sum": -208.7
+  },
+  "T": {
+   "n": 1,
+   "net_sum": 54.1
+  },
+  "VZ": {
+   "n": 3,
+   "net_sum": -80.1
+  },
+  "TMUS": {
+   "n": 2,
+   "net_sum": -3.1
+  },
+  "SNAP": {
+   "n": 5,
+   "net_sum": 101.5
+  },
+  "SPOT": {
+   "n": 1,
+   "net_sum": -70.5
+  },
+  "TTD": {
+   "n": 4,
+   "net_sum": -16.3
+  },
+  "GE": {
+   "n": 2,
+   "net_sum": -29.8
+  },
+  "BA": {
+   "n": 3,
+   "net_sum": -6.6
+  },
+  "RTX": {
+   "n": 2,
+   "net_sum": -83.1
+  },
+  "UPS": {
+   "n": 4,
+   "net_sum": 215.0
+  },
+  "FDX": {
+   "n": 3,
+   "net_sum": -44.1
+  },
+  "PLUG": {
+   "n": 1,
+   "net_sum": -74.8
+  },
+  "FCEL": {
+   "n": 1,
+   "net_sum": -73.7
+  },
+  "BLNK": {
+   "n": 2,
+   "net_sum": 293.2
+  },
+  "CHPT": {
+   "n": 3,
+   "net_sum": 493.7
+  },
+  "PYPL": {
+   "n": 2,
+   "net_sum": 26.8
+  },
+  "HOOD": {
+   "n": 2,
+   "net_sum": 202.4
+  },
+  "SOFI": {
+   "n": 1,
+   "net_sum": 125.5
+  },
+  "AFRM": {
+   "n": 1,
+   "net_sum": -70.3
+  },
+  "UPST": {
+   "n": 2,
+   "net_sum": 122.0
+  },
+  "SPY": {
+   "n": 4,
+   "net_sum": -145.8
+  },
+  "QQQ": {
+   "n": 5,
+   "net_sum": 238.6
+  },
+  "IWM": {
+   "n": 2,
+   "net_sum": 31.1
+  },
+  "XLF": {
+   "n": 4,
+   "net_sum": 76.5
+  },
+  "XLE": {
+   "n": 1,
+   "net_sum": -37.8
+  },
+  "XLK": {
+   "n": 4,
+   "net_sum": 135.3
+  },
+  "ARKK": {
+   "n": 1,
+   "net_sum": 49.3
+  },
+  "TLT": {
+   "n": 1,
+   "net_sum": 74.4
+  },
+  "TTMI": {
+   "n": 2,
+   "net_sum": -11.1
+  },
+  "PENG": {
+   "n": 4,
+   "net_sum": 166.8
+  },
+  "MXL": {
+   "n": 1,
+   "net_sum": -54.5
+  },
+  "DOCN": {
+   "n": 2,
+   "net_sum": 58.6
+  },
+  "HIMS": {
+   "n": 5,
+   "net_sum": 43.8
+  },
+  "GME": {
+   "n": 4,
+   "net_sum": 43.4
+  },
+  "DINO": {
+   "n": 1,
+   "net_sum": 47.8
+  },
+  "TOST": {
+   "n": 1,
+   "net_sum": -93.2
+  },
+  "PINS": {
+   "n": 1,
+   "net_sum": -6.1
+  },
+  "MP": {
+   "n": 3,
+   "net_sum": 69.5
+  },
+  "SEI": {
+   "n": 2,
+   "net_sum": -82.9
+  },
+  "KMX": {
+   "n": 5,
+   "net_sum": 143.1
+  },
+  "BROS": {
+   "n": 1,
+   "net_sum": 69.0
+  },
+  "VFC": {
+   "n": 1,
+   "net_sum": 70.6
+  },
+  "RMBS": {
+   "n": 2,
+   "net_sum": 264.1
+  },
+  "CHWY": {
+   "n": 1,
+   "net_sum": 126.6
+  },
+  "LYFT": {
+   "n": 1,
+   "net_sum": 91.4
+  },
+  "SPHR": {
+   "n": 1,
+   "net_sum": 65.0
+  },
+  "FLR": {
+   "n": 5,
+   "net_sum": 151.8
+  },
+  "LEU": {
+   "n": 2,
+   "net_sum": 106.7
+  },
+  "JXN": {
+   "n": 1,
+   "net_sum": 18.9
+  },
+  "DOCS": {
+   "n": 5,
+   "net_sum": 33.8
+  },
+  "RYN": {
+   "n": 4,
+   "net_sum": -53.6
+  },
+  "DXC": {
+   "n": 1,
+   "net_sum": 190.3
+  },
+  "ROAD": {
+   "n": 2,
+   "net_sum": -115.7
+  },
+  "GTES": {
+   "n": 2,
+   "net_sum": 149.2
+  },
+  "BCO": {
+   "n": 2,
+   "net_sum": -18.9
+  },
+  "XRAY": {
+   "n": 2,
+   "net_sum": 43.5
+  },
+  "PRGO": {
+   "n": 2,
+   "net_sum": 60.5
+  },
+  "UTI": {
+   "n": 6,
+   "net_sum": -31.1
+  },
+  "DV": {
+   "n": 2,
+   "net_sum": 11.3
+  },
+  "PZZA": {
+   "n": 1,
+   "net_sum": 33.6
+  },
+  "STRA": {
+   "n": 2,
+   "net_sum": 113.9
+  },
+  "UPWK": {
+   "n": 1,
+   "net_sum": 71.2
+  }
+ },
+ "all_strategies": {
+  "n": 457,
+  "net": 12.25,
+  "win": 48.6,
+  "pf": 1.52,
+  "bars": 5.7
+ },
+ "completed_at": "2026-10-22T17:07:00.330058",
+ "seconds": 143
+}

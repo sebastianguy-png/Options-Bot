@@ -26,7 +26,7 @@ FALLBACK = dict(ob.SPREAD_FALLBACK)
 
 
 def main():
-    tickers = list(dict.fromkeys(ob.FOCUS_LIST))
+    tickers = ob.focus_universe()          # the live universe (focus + small/mid extension)
     hist = ob._bulk_download(tickers, "5d")
     rows, by_ticker, t0 = [], {}, time.time()
     for i, sym in enumerate(tickers, 1):

@@ -1,0 +1,276 @@
+{
+ "universe": [
+  "TTMI",
+  "PENG",
+  "MXL",
+  "DOCN",
+  "HIMS",
+  "GME",
+  "DINO",
+  "TOST",
+  "PINS",
+  "MP",
+  "PBF",
+  "SEI",
+  "KMX",
+  "BROS",
+  "VFC",
+  "RMBS",
+  "CHWY",
+  "LYFT",
+  "SPHR",
+  "FLR",
+  "KRMN",
+  "LEU",
+  "JXN",
+  "BOX",
+  "WHR",
+  "DOCS",
+  "RYN",
+  "DXC",
+  "TCBI",
+  "ROAD",
+  "GTES",
+  "BCO",
+  "XRAY",
+  "PRGO",
+  "WHD",
+  "UTI",
+  "DV",
+  "PZZA",
+  "STRA",
+  "UPWK",
+  "PRDO"
+ ],
+ "n_tickers": 41,
+ "params": {
+  "rsi_oversold": 35,
+  "rsi_overbought": 65,
+  "bull_min": 1,
+  "bear_min": 2,
+  "adx_threshold": 30,
+  "garch_mode": "gate",
+  "put_trend_gate": "off",
+  "yield_block_calls": false,
+  "max_spread_pct": 15,
+  "entry_mode": "escape",
+  "escape_normal": "skip",
+  "escape_breakout_vol": 99.0,
+  "otm_factor_call": 0.97,
+  "otm_factor_put": 1.0,
+  "dte_target": 30,
+  "escape_breakout_trend": "any",
+  "escape_require_uptrend": false,
+  "breadth_chg5_min": -0.15,
+  "escape_put_on_collapse": false,
+  "require_green_candle": false,
+  "require_red_candle": false,
+  "stop_loss_pct": 0,
+  "profit_target_pct": 0,
+  "trail_activate_pct": 0,
+  "stagnant_days": 0,
+  "hold_days": 21,
+  "stock_stop_pct": 0,
+  "stock_trail_pct": 7
+ },
+ "calls": {
+  "n": 75,
+  "net": 27.36,
+  "win": 61.3,
+  "pf": 2.08,
+  "bars": 7.8
+ },
+ "by_year": {
+  "2022": {
+   "n": 46,
+   "net": 6.04,
+   "win": 50.0,
+   "pf": 1.19,
+   "bars": 7.8
+  },
+  "2023": {
+   "n": 15,
+   "net": 70.79,
+   "win": 86.7,
+   "pf": 6.61,
+   "bars": 8.5
+  },
+  "2025": {
+   "n": 5,
+   "net": 55.98,
+   "win": 80.0,
+   "pf": 4.64,
+   "bars": 7.4
+  },
+  "2026": {
+   "n": 9,
+   "net": 48.04,
+   "win": 66.7,
+   "pf": 3.62,
+   "bars": 6.9
+  }
+ },
+ "by_index": {
+  "sp400": {
+   "n": 40,
+   "net": 23.08,
+   "win": 57.5,
+   "pf": 1.82,
+   "bars": 6.7
+  },
+  "sp600": {
+   "n": 35,
+   "net": 32.26,
+   "win": 65.7,
+   "pf": 2.45,
+   "bars": 9.1
+  }
+ },
+ "exits": {
+  "rsi_target": 46,
+  "stock_trail": 29
+ },
+ "per_ticker": {
+  "PENG": {
+   "n": 3,
+   "net_sum": 77.4
+  },
+  "MXL": {
+   "n": 1,
+   "net_sum": -25.8
+  },
+  "DOCN": {
+   "n": 2,
+   "net_sum": 58.6
+  },
+  "HIMS": {
+   "n": 5,
+   "net_sum": 43.8
+  },
+  "GME": {
+   "n": 3,
+   "net_sum": -15.0
+  },
+  "DINO": {
+   "n": 2,
+   "net_sum": 93.5
+  },
+  "TOST": {
+   "n": 1,
+   "net_sum": -93.2
+  },
+  "PINS": {
+   "n": 1,
+   "net_sum": -6.1
+  },
+  "MP": {
+   "n": 3,
+   "net_sum": 69.5
+  },
+  "SEI": {
+   "n": 3,
+   "net_sum": 88.6
+  },
+  "KMX": {
+   "n": 5,
+   "net_sum": 262.4
+  },
+  "BROS": {
+   "n": 1,
+   "net_sum": 69.0
+  },
+  "VFC": {
+   "n": 1,
+   "net_sum": 70.6
+  },
+  "RMBS": {
+   "n": 2,
+   "net_sum": 264.1
+  },
+  "CHWY": {
+   "n": 1,
+   "net_sum": 126.6
+  },
+  "LYFT": {
+   "n": 1,
+   "net_sum": 91.4
+  },
+  "SPHR": {
+   "n": 1,
+   "net_sum": 65.0
+  },
+  "FLR": {
+   "n": 5,
+   "net_sum": 151.8
+  },
+  "LEU": {
+   "n": 2,
+   "net_sum": 106.7
+  },
+  "JXN": {
+   "n": 1,
+   "net_sum": 18.9
+  },
+  "DOCS": {
+   "n": 5,
+   "net_sum": 62.0
+  },
+  "RYN": {
+   "n": 4,
+   "net_sum": -53.6
+  },
+  "DXC": {
+   "n": 1,
+   "net_sum": 190.3
+  },
+  "ROAD": {
+   "n": 2,
+   "net_sum": -115.7
+  },
+  "GTES": {
+   "n": 2,
+   "net_sum": 149.2
+  },
+  "BCO": {
+   "n": 3,
+   "net_sum": 158.5
+  },
+  "XRAY": {
+   "n": 1,
+   "net_sum": -77.0
+  },
+  "PRGO": {
+   "n": 2,
+   "net_sum": 63.5
+  },
+  "UTI": {
+   "n": 5,
+   "net_sum": -0.2
+  },
+  "DV": {
+   "n": 1,
+   "net_sum": 14.9
+  },
+  "PZZA": {
+   "n": 1,
+   "net_sum": 33.6
+  },
+  "STRA": {
+   "n": 2,
+   "net_sum": 113.9
+  },
+  "UPWK": {
+   "n": 2,
+   "net_sum": -5.1
+  }
+ },
+ "all_strategies": {
+  "n": 133,
+  "net": 10.6,
+  "win": 49.6,
+  "pf": 1.47,
+  "bars": 5.1
+ },
+ "completed_at": "2026-10-22T16:53:19.782053",
+ "seconds": 333
+}
