@@ -1,0 +1,7210 @@
+{
+ "screened_at": "2026-10-22T16:44",
+ "criteria": {
+  "price": [
+   8.0,
+   150.0
+  ],
+  "min_dollar_vol": 15000000.0,
+  "min_bars": 250
+ },
+ "spread_source": "yahoo",
+ "tickers": {
+  "AAL": {
+   "price": 12.6,
+   "dollar_vol_m": 785.7,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 17.86,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SMTC": {
+   "price": 125.12,
+   "dollar_vol_m": 588.6,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 15.57,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CDE": {
+   "price": 13.88,
+   "dollar_vol_m": 552.7,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 21.35,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HL": {
+   "price": 14.11,
+   "dollar_vol_m": 502.0,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 21.68,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CTVA": {
+   "price": 12.86,
+   "dollar_vol_m": 492.1,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 39.39,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DT": {
+   "price": 63.37,
+   "dollar_vol_m": 420.1,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 21.54,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PATH": {
+   "price": 13.94,
+   "dollar_vol_m": 404.5,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 29.52,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TTMI": {
+   "price": 73.89,
+   "dollar_vol_m": 385.3,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 10.71,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DKS": {
+   "price": 148.78,
+   "dollar_vol_m": 356.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 16.81,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NVT": {
+   "price": 127.67,
+   "dollar_vol_m": 345.8,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 18.26,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ENTG": {
+   "price": 128.31,
+   "dollar_vol_m": 345.4,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 20.65,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PENG": {
+   "price": 51.91,
+   "dollar_vol_m": 337.9,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 8.12,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AGNC": {
+   "price": 8.89,
+   "dollar_vol_m": 326.4,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 17.69,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CLF": {
+   "price": 13.05,
+   "dollar_vol_m": 307.6,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 17.96,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MXL": {
+   "price": 65.28,
+   "dollar_vol_m": 293.1,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 12.1,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DOCN": {
+   "price": 92.0,
+   "dollar_vol_m": 290.9,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 13.31,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HIMS": {
+   "price": 29.13,
+   "dollar_vol_m": 287.5,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 7.21,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GME": {
+   "price": 25.39,
+   "dollar_vol_m": 287.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 13.26,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FORM": {
+   "price": 95.03,
+   "dollar_vol_m": 280.3,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 19.57,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HALO": {
+   "price": 124.54,
+   "dollar_vol_m": 277.8,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 52.8,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NLY": {
+   "price": 18.34,
+   "dollar_vol_m": 271.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 31.33,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DINO": {
+   "price": 122.32,
+   "dollar_vol_m": 249.0,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 13.9,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TOST": {
+   "price": 33.42,
+   "dollar_vol_m": 248.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 13.51,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PINS": {
+   "price": 22.93,
+   "dollar_vol_m": 240.4,
+   "sector": "Communication Services",
+   "index": "sp400",
+   "spread_pct": 9.98,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ETSY": {
+   "price": 90.82,
+   "dollar_vol_m": 239.4,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 17.86,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MP": {
+   "price": 38.56,
+   "dollar_vol_m": 237.4,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 9.95,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PBF": {
+   "price": 79.25,
+   "dollar_vol_m": 237.0,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 9.95,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VIAV": {
+   "price": 30.3,
+   "dollar_vol_m": 229.0,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 21.36,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LQDA": {
+   "price": 39.69,
+   "dollar_vol_m": 228.7,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 36.3,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TRU": {
+   "price": 83.46,
+   "dollar_vol_m": 228.1,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 22.2,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ROIV": {
+   "price": 37.45,
+   "dollar_vol_m": 227.8,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 104.2,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BJ": {
+   "price": 106.63,
+   "dollar_vol_m": 226.5,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 31.54,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LSCC": {
+   "price": 96.4,
+   "dollar_vol_m": 226.1,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 20.0,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KNX": {
+   "price": 62.52,
+   "dollar_vol_m": 221.1,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 37.04,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OPCH": {
+   "price": 31.29,
+   "dollar_vol_m": 218.6,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 66.67,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AA": {
+   "price": 38.7,
+   "dollar_vol_m": 207.9,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 24.87,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OVV": {
+   "price": 69.3,
+   "dollar_vol_m": 205.0,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 17.65,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SEI": {
+   "price": 58.61,
+   "dollar_vol_m": 203.4,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 15.0,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KMX": {
+   "price": 52.96,
+   "dollar_vol_m": 202.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 12.82,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PR": {
+   "price": 24.4,
+   "dollar_vol_m": 200.5,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 20.0,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CAG": {
+   "price": 15.07,
+   "dollar_vol_m": 194.6,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 23.91,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DOCU": {
+   "price": 84.41,
+   "dollar_vol_m": 194.2,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 20.73,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AVAV": {
+   "price": 117.7,
+   "dollar_vol_m": 193.7,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 45.54,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KTOS": {
+   "price": 38.27,
+   "dollar_vol_m": 192.4,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 18.56,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NBIX": {
+   "price": 143.29,
+   "dollar_vol_m": 191.6,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 38.25,
+   "n_contracts": 11,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CZR": {
+   "price": 29.07,
+   "dollar_vol_m": 182.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 84.21,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CLSK": {
+   "price": 8.15,
+   "dollar_vol_m": 180.7,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 28.78,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FTI": {
+   "price": 66.82,
+   "dollar_vol_m": 176.9,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 33.33,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "USFD": {
+   "price": 104.05,
+   "dollar_vol_m": 176.9,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 35.56,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NTNX": {
+   "price": 69.55,
+   "dollar_vol_m": 176.7,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 34.85,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AMKR": {
+   "price": 39.05,
+   "dollar_vol_m": 176.5,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 23.09,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CRBG": {
+   "price": 35.59,
+   "dollar_vol_m": 175.0,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 27.33,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RBA": {
+   "price": 84.39,
+   "dollar_vol_m": 173.9,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 34.57,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RRX": {
+   "price": 148.71,
+   "dollar_vol_m": 173.8,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 43.2,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BWXT": {
+   "price": 127.3,
+   "dollar_vol_m": 173.7,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 18.58,
+   "n_contracts": 11,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CNH": {
+   "price": 11.58,
+   "dollar_vol_m": 173.1,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 108.48,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BROS": {
+   "price": 41.75,
+   "dollar_vol_m": 171.5,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 14.69,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VFC": {
+   "price": 17.48,
+   "dollar_vol_m": 170.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 13.79,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NXT": {
+   "price": 77.63,
+   "dollar_vol_m": 168.1,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 20.45,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CAVA": {
+   "price": 54.68,
+   "dollar_vol_m": 166.0,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 15.77,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ALLY": {
+   "price": 39.31,
+   "dollar_vol_m": 165.7,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 30.22,
+   "n_contracts": 16,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BWA": {
+   "price": 55.46,
+   "dollar_vol_m": 164.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 21.13,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FHN": {
+   "price": 23.54,
+   "dollar_vol_m": 161.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 30.1,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CELH": {
+   "price": 28.36,
+   "dollar_vol_m": 161.7,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 20.97,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SYNA": {
+   "price": 117.04,
+   "dollar_vol_m": 161.6,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 116.83,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ALK": {
+   "price": 35.38,
+   "dollar_vol_m": 161.3,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 15.38,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RMBS": {
+   "price": 85.73,
+   "dollar_vol_m": 161.3,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 13.36,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CPB": {
+   "price": 21.26,
+   "dollar_vol_m": 158.6,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 24.32,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CHWY": {
+   "price": 22.33,
+   "dollar_vol_m": 158.5,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 7.96,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "M": {
+   "price": 24.17,
+   "dollar_vol_m": 158.0,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 16.71,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SGI": {
+   "price": 65.99,
+   "dollar_vol_m": 157.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 19.35,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LYFT": {
+   "price": 17.43,
+   "dollar_vol_m": 154.9,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 13.91,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MAT": {
+   "price": 16.94,
+   "dollar_vol_m": 154.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 72.0,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ENPH": {
+   "price": 31.35,
+   "dollar_vol_m": 154.2,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 19.82,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LW": {
+   "price": 55.18,
+   "dollar_vol_m": 153.7,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 21.3,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TOL": {
+   "price": 141.08,
+   "dollar_vol_m": 151.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 17.73,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OLLI": {
+   "price": 92.63,
+   "dollar_vol_m": 150.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 20.21,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CART": {
+   "price": 51.68,
+   "dollar_vol_m": 149.5,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 25.65,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AVTR": {
+   "price": 17.15,
+   "dollar_vol_m": 147.4,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 46.05,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SFM": {
+   "price": 68.86,
+   "dollar_vol_m": 147.3,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 37.05,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NYT": {
+   "price": 69.42,
+   "dollar_vol_m": 144.4,
+   "sector": "Communication Services",
+   "index": "sp400",
+   "spread_pct": 38.71,
+   "n_contracts": 11,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CRGY": {
+   "price": 13.33,
+   "dollar_vol_m": 144.3,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 32.8,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AHR": {
+   "price": 53.4,
+   "dollar_vol_m": 143.7,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 107.36,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UNM": {
+   "price": 93.75,
+   "dollar_vol_m": 143.4,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 27.83,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ESI": {
+   "price": 33.11,
+   "dollar_vol_m": 142.0,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 51.43,
+   "n_contracts": 11,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AR": {
+   "price": 39.04,
+   "dollar_vol_m": 139.5,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 21.43,
+   "n_contracts": 13,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MHK": {
+   "price": 128.7,
+   "dollar_vol_m": 139.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 36.26,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WING": {
+   "price": 120.87,
+   "dollar_vol_m": 138.9,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 62.8,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BMRN": {
+   "price": 56.63,
+   "dollar_vol_m": 138.8,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 113.6,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EXEL": {
+   "price": 65.31,
+   "dollar_vol_m": 136.9,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 57.36,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RPM": {
+   "price": 101.72,
+   "dollar_vol_m": 135.7,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 82.81,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VSXY": {
+   "price": 88.42,
+   "dollar_vol_m": 135.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 20.0,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MTCH": {
+   "price": 45.92,
+   "dollar_vol_m": 135.0,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 21.26,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ONB": {
+   "price": 25.16,
+   "dollar_vol_m": 134.5,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BRKR": {
+   "price": 57.31,
+   "dollar_vol_m": 134.3,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 35.29,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EHC": {
+   "price": 126.01,
+   "dollar_vol_m": 133.8,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 79.7,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SOLS": {
+   "price": 59.8,
+   "dollar_vol_m": 133.1,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 18.47,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EQH": {
+   "price": 55.04,
+   "dollar_vol_m": 132.5,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 53.08,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GGG": {
+   "price": 69.28,
+   "dollar_vol_m": 132.2,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 82.95,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BBWI": {
+   "price": 21.6,
+   "dollar_vol_m": 131.9,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 28.89,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CAKE": {
+   "price": 112.44,
+   "dollar_vol_m": 131.6,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 20.88,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ELF": {
+   "price": 114.99,
+   "dollar_vol_m": 131.4,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 17.64,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MTN": {
+   "price": 148.23,
+   "dollar_vol_m": 130.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 26.42,
+   "n_contracts": 11,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CG": {
+   "price": 39.2,
+   "dollar_vol_m": 130.4,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 31.09,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GAP": {
+   "price": 22.91,
+   "dollar_vol_m": 130.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 54.48,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SUI": {
+   "price": 119.86,
+   "dollar_vol_m": 130.2,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 88.0,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ARMK": {
+   "price": 52.52,
+   "dollar_vol_m": 129.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 57.78,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CYTK": {
+   "price": 62.33,
+   "dollar_vol_m": 129.4,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 71.09,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OC": {
+   "price": 116.49,
+   "dollar_vol_m": 129.4,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 66.99,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DAR": {
+   "price": 55.64,
+   "dollar_vol_m": 128.1,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 31.37,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AVT": {
+   "price": 88.64,
+   "dollar_vol_m": 127.7,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 22.68,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VSH": {
+   "price": 27.03,
+   "dollar_vol_m": 126.8,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 16.85,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DUOL": {
+   "price": 141.39,
+   "dollar_vol_m": 126.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 20.61,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RXO": {
+   "price": 28.92,
+   "dollar_vol_m": 124.4,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BTSG": {
+   "price": 60.86,
+   "dollar_vol_m": 124.3,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 75.27,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VSAT": {
+   "price": 59.0,
+   "dollar_vol_m": 124.2,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 22.68,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FND": {
+   "price": 48.17,
+   "dollar_vol_m": 123.6,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 66.67,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ELS": {
+   "price": 61.17,
+   "dollar_vol_m": 122.4,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 79.07,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "POR": {
+   "price": 44.9,
+   "dollar_vol_m": 120.5,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 109.69,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BAH": {
+   "price": 78.57,
+   "dollar_vol_m": 120.1,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 17.97,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PFGC": {
+   "price": 97.89,
+   "dollar_vol_m": 119.6,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 46.01,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SPHR": {
+   "price": 111.61,
+   "dollar_vol_m": 117.9,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 10.55,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ADC": {
+   "price": 67.07,
+   "dollar_vol_m": 117.5,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 52.78,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ARWR": {
+   "price": 58.36,
+   "dollar_vol_m": 117.4,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 65.57,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CROX": {
+   "price": 120.99,
+   "dollar_vol_m": 117.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 24.0,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ITGR": {
+   "price": 126.56,
+   "dollar_vol_m": 116.9,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 46.77,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PRIM": {
+   "price": 66.94,
+   "dollar_vol_m": 116.9,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 24.92,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ELAN": {
+   "price": 22.69,
+   "dollar_vol_m": 116.5,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 40.0,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EPAM": {
+   "price": 138.67,
+   "dollar_vol_m": 116.3,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 15.69,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DBX": {
+   "price": 37.48,
+   "dollar_vol_m": 115.5,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 62.14,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RNG": {
+   "price": 79.42,
+   "dollar_vol_m": 115.1,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 24.78,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "JEF": {
+   "price": 45.64,
+   "dollar_vol_m": 115.0,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 27.03,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EWBC": {
+   "price": 132.65,
+   "dollar_vol_m": 114.8,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 68.67,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FLR": {
+   "price": 43.42,
+   "dollar_vol_m": 114.7,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 13.71,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FLS": {
+   "price": 67.76,
+   "dollar_vol_m": 113.5,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 49.06,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PTGX": {
+   "price": 139.53,
+   "dollar_vol_m": 113.4,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 69.57,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GMED": {
+   "price": 81.66,
+   "dollar_vol_m": 112.8,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 39.22,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PNFP": {
+   "price": 100.46,
+   "dollar_vol_m": 112.8,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 32.48,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MSM": {
+   "price": 112.43,
+   "dollar_vol_m": 112.5,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 44.66,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CGNX": {
+   "price": 54.6,
+   "dollar_vol_m": 111.8,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 37.33,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ACI": {
+   "price": 13.87,
+   "dollar_vol_m": 111.7,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 35.0,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LTH": {
+   "price": 41.99,
+   "dollar_vol_m": 111.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 30.77,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DTM": {
+   "price": 123.4,
+   "dollar_vol_m": 111.2,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 100.14,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LNTH": {
+   "price": 100.1,
+   "dollar_vol_m": 110.5,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KRMN": {
+   "price": 34.58,
+   "dollar_vol_m": 110.0,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 14.1,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RRC": {
+   "price": 43.86,
+   "dollar_vol_m": 109.5,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 30.95,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "APG": {
+   "price": 38.8,
+   "dollar_vol_m": 109.4,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 107.69,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PLNT": {
+   "price": 53.27,
+   "dollar_vol_m": 109.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 17.6,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LEU": {
+   "price": 104.15,
+   "dollar_vol_m": 108.7,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 12.49,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NNN": {
+   "price": 42.13,
+   "dollar_vol_m": 108.2,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 43.26,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SIRI": {
+   "price": 27.54,
+   "dollar_vol_m": 107.7,
+   "sector": "Communication Services",
+   "index": "sp400",
+   "spread_pct": 64.86,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HXL": {
+   "price": 81.27,
+   "dollar_vol_m": 106.4,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 57.89,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BKH": {
+   "price": 79.31,
+   "dollar_vol_m": 105.7,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 68.29,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WPC": {
+   "price": 64.54,
+   "dollar_vol_m": 105.4,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 68.12,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CCK": {
+   "price": 119.26,
+   "dollar_vol_m": 103.9,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 69.57,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RH": {
+   "price": 140.15,
+   "dollar_vol_m": 103.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 31.4,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "JXN": {
+   "price": 133.32,
+   "dollar_vol_m": 102.1,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 13.74,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FNF": {
+   "price": 41.38,
+   "dollar_vol_m": 101.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 96.3,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FNB": {
+   "price": 18.18,
+   "dollar_vol_m": 101.7,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 153.85,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ALGM": {
+   "price": 31.69,
+   "dollar_vol_m": 101.2,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 24.51,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PEGA": {
+   "price": 36.65,
+   "dollar_vol_m": 100.8,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 18.85,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "REXR": {
+   "price": 36.28,
+   "dollar_vol_m": 100.7,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 30.62,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GLPI": {
+   "price": 40.02,
+   "dollar_vol_m": 100.5,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 76.92,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OGE": {
+   "price": 48.92,
+   "dollar_vol_m": 100.3,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 131.16,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MGY": {
+   "price": 25.27,
+   "dollar_vol_m": 99.6,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 38.69,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BOX": {
+   "price": 42.78,
+   "dollar_vol_m": 99.3,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 12.77,
+   "n_contracts": 11,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WHR": {
+   "price": 28.8,
+   "dollar_vol_m": 99.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 10.53,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ZION": {
+   "price": 66.39,
+   "dollar_vol_m": 98.3,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 36.36,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SF": {
+   "price": 67.85,
+   "dollar_vol_m": 97.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 47.27,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CALM": {
+   "price": 63.83,
+   "dollar_vol_m": 97.3,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 28.3,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DOCS": {
+   "price": 33.68,
+   "dollar_vol_m": 96.9,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 6.45,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WAL": {
+   "price": 76.67,
+   "dollar_vol_m": 96.2,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 29.07,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WH": {
+   "price": 75.07,
+   "dollar_vol_m": 95.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 44.7,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VLY": {
+   "price": 13.81,
+   "dollar_vol_m": 95.2,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 80.4,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SM": {
+   "price": 38.42,
+   "dollar_vol_m": 95.1,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 18.92,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TFX": {
+   "price": 136.58,
+   "dollar_vol_m": 95.0,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 30.29,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EMN": {
+   "price": 65.31,
+   "dollar_vol_m": 94.9,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 31.13,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ACA": {
+   "price": 149.15,
+   "dollar_vol_m": 94.7,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 60.33,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HLI": {
+   "price": 133.24,
+   "dollar_vol_m": 94.6,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 46.48,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WMS": {
+   "price": 130.92,
+   "dollar_vol_m": 94.6,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 41.21,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WTRG": {
+   "price": 43.3,
+   "dollar_vol_m": 94.3,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 65.88,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MLI": {
+   "price": 54.53,
+   "dollar_vol_m": 94.0,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 19.75,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ALKS": {
+   "price": 44.18,
+   "dollar_vol_m": 93.8,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 109.85,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KGS": {
+   "price": 44.07,
+   "dollar_vol_m": 93.7,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 40.02,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AGCO": {
+   "price": 106.17,
+   "dollar_vol_m": 93.3,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 46.99,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TKR": {
+   "price": 108.4,
+   "dollar_vol_m": 93.3,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 39.34,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BOOT": {
+   "price": 119.76,
+   "dollar_vol_m": 93.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 35.81,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PCRX": {
+   "price": 36.34,
+   "dollar_vol_m": 93.3,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CTRE": {
+   "price": 36.62,
+   "dollar_vol_m": 93.1,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 90.74,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OZK": {
+   "price": 49.67,
+   "dollar_vol_m": 92.7,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 32.26,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SHAK": {
+   "price": 67.88,
+   "dollar_vol_m": 92.5,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 19.84,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RAL": {
+   "price": 65.64,
+   "dollar_vol_m": 92.4,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 35.05,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KSS": {
+   "price": 24.78,
+   "dollar_vol_m": 92.0,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 25.45,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VNOM": {
+   "price": 45.35,
+   "dollar_vol_m": 91.5,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 37.5,
+   "n_contracts": 15,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MRP": {
+   "price": 23.97,
+   "dollar_vol_m": 91.2,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 16.54,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VOYA": {
+   "price": 98.42,
+   "dollar_vol_m": 90.8,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 43.48,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "INSW": {
+   "price": 108.42,
+   "dollar_vol_m": 90.7,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 18.45,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ALV": {
+   "price": 118.88,
+   "dollar_vol_m": 90.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 62.21,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CHDN": {
+   "price": 84.45,
+   "dollar_vol_m": 89.9,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 65.55,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CUBE": {
+   "price": 40.15,
+   "dollar_vol_m": 89.1,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 124.53,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AEO": {
+   "price": 17.89,
+   "dollar_vol_m": 88.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 36.54,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "IDA": {
+   "price": 142.06,
+   "dollar_vol_m": 88.6,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 92.31,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OSK": {
+   "price": 134.29,
+   "dollar_vol_m": 88.3,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 45.05,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AMH": {
+   "price": 31.9,
+   "dollar_vol_m": 88.2,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ACM": {
+   "price": 60.83,
+   "dollar_vol_m": 87.9,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 48.37,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TEX": {
+   "price": 52.11,
+   "dollar_vol_m": 87.6,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 52.46,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AAON": {
+   "price": 69.62,
+   "dollar_vol_m": 87.4,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 36.27,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "INDV": {
+   "price": 35.33,
+   "dollar_vol_m": 87.4,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 160.92,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BRX": {
+   "price": 28.26,
+   "dollar_vol_m": 87.1,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 150.0,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HR": {
+   "price": 17.93,
+   "dollar_vol_m": 87.1,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 88.89,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SIG": {
+   "price": 116.94,
+   "dollar_vol_m": 86.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 16.29,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "STWD": {
+   "price": 12.58,
+   "dollar_vol_m": 86.6,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 48.72,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UCTT": {
+   "price": 44.46,
+   "dollar_vol_m": 85.9,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 29.35,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CORT": {
+   "price": 107.5,
+   "dollar_vol_m": 85.2,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 47.62,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CRUS": {
+   "price": 110.49,
+   "dollar_vol_m": 84.7,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 25.64,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BYD": {
+   "price": 72.27,
+   "dollar_vol_m": 84.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 85.5,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VVV": {
+   "price": 32.44,
+   "dollar_vol_m": 84.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 88.52,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WTFC": {
+   "price": 149.75,
+   "dollar_vol_m": 83.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 84.22,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VSEC": {
+   "price": 148.15,
+   "dollar_vol_m": 83.9,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 25.66,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BSY": {
+   "price": 39.41,
+   "dollar_vol_m": 83.6,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 24.66,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ACMR": {
+   "price": 49.12,
+   "dollar_vol_m": 83.4,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 29.94,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LBRT": {
+   "price": 15.38,
+   "dollar_vol_m": 83.3,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 28.57,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LPX": {
+   "price": 74.85,
+   "dollar_vol_m": 83.2,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 40.96,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TGTX": {
+   "price": 53.16,
+   "dollar_vol_m": 83.1,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 39.54,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EXLS": {
+   "price": 42.91,
+   "dollar_vol_m": 83.0,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 40.0,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NFG": {
+   "price": 80.93,
+   "dollar_vol_m": 83.0,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 75.36,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "URBN": {
+   "price": 88.29,
+   "dollar_vol_m": 83.0,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 51.85,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FR": {
+   "price": 55.29,
+   "dollar_vol_m": 82.6,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 126.53,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HAE": {
+   "price": 116.16,
+   "dollar_vol_m": 81.9,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 38.27,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OHI": {
+   "price": 46.3,
+   "dollar_vol_m": 81.4,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 54.5,
+   "n_contracts": 12,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UMBF": {
+   "price": 136.16,
+   "dollar_vol_m": 81.3,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WFRD": {
+   "price": 81.18,
+   "dollar_vol_m": 81.3,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 37.62,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CMC": {
+   "price": 63.79,
+   "dollar_vol_m": 80.9,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 28.57,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ESAB": {
+   "price": 66.89,
+   "dollar_vol_m": 80.9,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 56.0,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WRBY": {
+   "price": 25.67,
+   "dollar_vol_m": 80.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 21.85,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HRB": {
+   "price": 50.08,
+   "dollar_vol_m": 79.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 23.16,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GVA": {
+   "price": 107.45,
+   "dollar_vol_m": 79.6,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 69.39,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SEDG": {
+   "price": 32.94,
+   "dollar_vol_m": 79.6,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 24.95,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GEO": {
+   "price": 26.94,
+   "dollar_vol_m": 79.5,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 16.41,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ORA": {
+   "price": 88.1,
+   "dollar_vol_m": 79.3,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 24.02,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SEIC": {
+   "price": 104.5,
+   "dollar_vol_m": 79.3,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 74.74,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ASO": {
+   "price": 61.78,
+   "dollar_vol_m": 78.6,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 47.27,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TXNM": {
+   "price": 58.73,
+   "dollar_vol_m": 78.3,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 186.81,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ULS": {
+   "price": 73.63,
+   "dollar_vol_m": 78.2,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 41.32,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SSB": {
+   "price": 105.22,
+   "dollar_vol_m": 77.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FBIN": {
+   "price": 43.79,
+   "dollar_vol_m": 77.8,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 69.77,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LNC": {
+   "price": 41.11,
+   "dollar_vol_m": 77.4,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 24.15,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HQY": {
+   "price": 100.97,
+   "dollar_vol_m": 77.3,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 31.33,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "THRM": {
+   "price": 26.15,
+   "dollar_vol_m": 77.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 76.92,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SARO": {
+   "price": 21.72,
+   "dollar_vol_m": 77.0,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 32.47,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MAC": {
+   "price": 23.95,
+   "dollar_vol_m": 76.6,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 40.0,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VIRT": {
+   "price": 56.25,
+   "dollar_vol_m": 76.5,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 55.45,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TREX": {
+   "price": 51.07,
+   "dollar_vol_m": 76.2,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 65.21,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PTEN": {
+   "price": 11.34,
+   "dollar_vol_m": 76.0,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 40.56,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AMRX": {
+   "price": 20.48,
+   "dollar_vol_m": 75.8,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 182.61,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "COLB": {
+   "price": 29.89,
+   "dollar_vol_m": 75.4,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 104.4,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SCI": {
+   "price": 83.69,
+   "dollar_vol_m": 75.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 48.78,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ALSN": {
+   "price": 109.57,
+   "dollar_vol_m": 75.2,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 45.18,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FOUR": {
+   "price": 40.17,
+   "dollar_vol_m": 74.5,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 15.18,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MTG": {
+   "price": 27.74,
+   "dollar_vol_m": 74.3,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RDN": {
+   "price": 34.7,
+   "dollar_vol_m": 74.3,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 133.5,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CNM": {
+   "price": 42.33,
+   "dollar_vol_m": 74.1,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 64.17,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RYN": {
+   "price": 18.72,
+   "dollar_vol_m": 73.8,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 14.18,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VAL": {
+   "price": 92.19,
+   "dollar_vol_m": 73.6,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 34.34,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "COCO": {
+   "price": 59.0,
+   "dollar_vol_m": 73.6,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 37.0,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MTDR": {
+   "price": 56.79,
+   "dollar_vol_m": 73.5,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 27.24,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CNK": {
+   "price": 39.61,
+   "dollar_vol_m": 73.5,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 48.28,
+   "n_contracts": 11,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CENX": {
+   "price": 32.65,
+   "dollar_vol_m": 73.3,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 26.05,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "COHU": {
+   "price": 46.26,
+   "dollar_vol_m": 73.2,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 40.73,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SDGR": {
+   "price": 22.6,
+   "dollar_vol_m": 73.2,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 22.24,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ALHC": {
+   "price": 8.43,
+   "dollar_vol_m": 73.0,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 52.63,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AIR": {
+   "price": 96.67,
+   "dollar_vol_m": 72.8,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 72.34,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LKQ": {
+   "price": 22.47,
+   "dollar_vol_m": 72.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 67.65,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FAF": {
+   "price": 65.07,
+   "dollar_vol_m": 70.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 192.16,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FLG": {
+   "price": 11.44,
+   "dollar_vol_m": 70.8,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 30.41,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KEX": {
+   "price": 131.5,
+   "dollar_vol_m": 70.7,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 80.6,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WMG": {
+   "price": 31.69,
+   "dollar_vol_m": 70.7,
+   "sector": "Communication Services",
+   "index": "sp400",
+   "spread_pct": 122.29,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ORI": {
+   "price": 40.08,
+   "dollar_vol_m": 70.1,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 38.53,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RYAN": {
+   "price": 44.49,
+   "dollar_vol_m": 68.5,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 91.45,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ARR": {
+   "price": 12.69,
+   "dollar_vol_m": 68.4,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 69.73,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PARR": {
+   "price": 80.18,
+   "dollar_vol_m": 68.3,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 15.11,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PTCT": {
+   "price": 63.04,
+   "dollar_vol_m": 67.9,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 110.45,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CE": {
+   "price": 47.22,
+   "dollar_vol_m": 67.6,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 19.77,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LRN": {
+   "price": 80.68,
+   "dollar_vol_m": 67.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 34.66,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EPRT": {
+   "price": 26.26,
+   "dollar_vol_m": 66.9,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 41.03,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TDS": {
+   "price": 34.78,
+   "dollar_vol_m": 66.9,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 46.49,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CXW": {
+   "price": 29.33,
+   "dollar_vol_m": 66.7,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 20.41,
+   "n_contracts": 11,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FRPT": {
+   "price": 67.0,
+   "dollar_vol_m": 66.5,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 43.5,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AAP": {
+   "price": 46.69,
+   "dollar_vol_m": 66.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 15.73,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PIPR": {
+   "price": 65.54,
+   "dollar_vol_m": 66.2,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 73.02,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RELY": {
+   "price": 25.32,
+   "dollar_vol_m": 65.8,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 20.0,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "YOU": {
+   "price": 45.62,
+   "dollar_vol_m": 65.7,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 18.13,
+   "n_contracts": 18,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DXC": {
+   "price": 16.08,
+   "dollar_vol_m": 65.4,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 12.35,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MUR": {
+   "price": 42.37,
+   "dollar_vol_m": 65.3,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 24.09,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KBH": {
+   "price": 46.19,
+   "dollar_vol_m": 64.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 21.78,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LXP": {
+   "price": 61.09,
+   "dollar_vol_m": 64.6,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 34.48,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PJT": {
+   "price": 142.85,
+   "dollar_vol_m": 64.6,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 80.95,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NOV": {
+   "price": 18.76,
+   "dollar_vol_m": 64.5,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 72.04,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NVST": {
+   "price": 23.97,
+   "dollar_vol_m": 64.5,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BILL": {
+   "price": 50.67,
+   "dollar_vol_m": 64.4,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 75.41,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RITM": {
+   "price": 8.68,
+   "dollar_vol_m": 64.4,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 49.12,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "INGR": {
+   "price": 97.18,
+   "dollar_vol_m": 64.3,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 44.92,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PK": {
+   "price": 16.66,
+   "dollar_vol_m": 64.3,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 66.67,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VCTR": {
+   "price": 107.39,
+   "dollar_vol_m": 64.3,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RHP": {
+   "price": 131.26,
+   "dollar_vol_m": 64.2,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 62.75,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GPK": {
+   "price": 9.04,
+   "dollar_vol_m": 63.9,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CHEF": {
+   "price": 107.29,
+   "dollar_vol_m": 63.8,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 40.0,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TTEK": {
+   "price": 36.81,
+   "dollar_vol_m": 63.7,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 78.26,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KNTK": {
+   "price": 54.64,
+   "dollar_vol_m": 63.7,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 76.99,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RHI": {
+   "price": 37.68,
+   "dollar_vol_m": 63.7,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 24.44,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "G": {
+   "price": 41.78,
+   "dollar_vol_m": 63.6,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 39.02,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PVH": {
+   "price": 84.26,
+   "dollar_vol_m": 63.6,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 42.41,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MIR": {
+   "price": 14.92,
+   "dollar_vol_m": 63.6,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 33.09,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WLK": {
+   "price": 64.14,
+   "dollar_vol_m": 63.5,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 58.22,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SLM": {
+   "price": 21.76,
+   "dollar_vol_m": 63.4,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 49.09,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "THO": {
+   "price": 70.71,
+   "dollar_vol_m": 63.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 29.24,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TMDX": {
+   "price": 72.06,
+   "dollar_vol_m": 63.1,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 56.66,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HWC": {
+   "price": 73.48,
+   "dollar_vol_m": 62.8,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 145.35,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GNTX": {
+   "price": 21.74,
+   "dollar_vol_m": 62.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 54.55,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NEOG": {
+   "price": 11.98,
+   "dollar_vol_m": 62.4,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 50.98,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FIVN": {
+   "price": 35.1,
+   "dollar_vol_m": 62.2,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 33.15,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AXTA": {
+   "price": 35.05,
+   "dollar_vol_m": 62.0,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PB": {
+   "price": 69.85,
+   "dollar_vol_m": 60.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 40.0,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RAMP": {
+   "price": 38.24,
+   "dollar_vol_m": 60.8,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CWST": {
+   "price": 96.89,
+   "dollar_vol_m": 60.6,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 38.44,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "INSP": {
+   "price": 72.66,
+   "dollar_vol_m": 60.6,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 38.67,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MC": {
+   "price": 55.06,
+   "dollar_vol_m": 60.5,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 34.15,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LEA": {
+   "price": 118.61,
+   "dollar_vol_m": 60.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 70.59,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SMG": {
+   "price": 59.15,
+   "dollar_vol_m": 60.1,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 16.67,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LAZ": {
+   "price": 37.3,
+   "dollar_vol_m": 60.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 87.55,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SNEX": {
+   "price": 57.3,
+   "dollar_vol_m": 59.7,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 109.17,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ASB": {
+   "price": 29.81,
+   "dollar_vol_m": 59.6,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CNX": {
+   "price": 35.73,
+   "dollar_vol_m": 59.4,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 77.99,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TTC": {
+   "price": 105.32,
+   "dollar_vol_m": 59.4,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 51.99,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NOVT": {
+   "price": 136.66,
+   "dollar_vol_m": 59.3,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 25.47,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ATR": {
+   "price": 128.1,
+   "dollar_vol_m": 59.1,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 134.21,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CBRL": {
+   "price": 67.31,
+   "dollar_vol_m": 58.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 25.74,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "YETI": {
+   "price": 44.03,
+   "dollar_vol_m": 58.4,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 30.64,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MAN": {
+   "price": 46.6,
+   "dollar_vol_m": 58.3,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 25.87,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "STAG": {
+   "price": 36.51,
+   "dollar_vol_m": 57.7,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 43.34,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WAY": {
+   "price": 28.98,
+   "dollar_vol_m": 57.7,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 114.86,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UGI": {
+   "price": 38.61,
+   "dollar_vol_m": 57.5,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 23.38,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TALO": {
+   "price": 17.66,
+   "dollar_vol_m": 57.5,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 101.82,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SON": {
+   "price": 50.27,
+   "dollar_vol_m": 57.2,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 45.76,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TCBI": {
+   "price": 98.78,
+   "dollar_vol_m": 57.1,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 13.2,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ROAD": {
+   "price": 83.93,
+   "dollar_vol_m": 57.1,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 5.22,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KBR": {
+   "price": 39.53,
+   "dollar_vol_m": 57.0,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 50.26,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BFH": {
+   "price": 102.45,
+   "dollar_vol_m": 57.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 43.37,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BMI": {
+   "price": 149.64,
+   "dollar_vol_m": 57.0,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 40.67,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RLI": {
+   "price": 67.01,
+   "dollar_vol_m": 56.5,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 132.2,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ECG": {
+   "price": 97.05,
+   "dollar_vol_m": 56.4,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 37.56,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VCYT": {
+   "price": 46.04,
+   "dollar_vol_m": 56.3,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 61.27,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MTH": {
+   "price": 63.63,
+   "dollar_vol_m": 56.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 31.37,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CHH": {
+   "price": 111.98,
+   "dollar_vol_m": 56.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 68.49,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RSI": {
+   "price": 16.36,
+   "dollar_vol_m": 55.9,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 46.15,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HLNE": {
+   "price": 85.31,
+   "dollar_vol_m": 55.6,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 73.39,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SWX": {
+   "price": 91.08,
+   "dollar_vol_m": 55.6,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KD": {
+   "price": 15.2,
+   "dollar_vol_m": 54.4,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 20.44,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WT": {
+   "price": 21.21,
+   "dollar_vol_m": 54.4,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 27.07,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SEZL": {
+   "price": 139.3,
+   "dollar_vol_m": 54.3,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 20.57,
+   "n_contracts": 10,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "IRT": {
+   "price": 15.17,
+   "dollar_vol_m": 54.0,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 129.55,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OLED": {
+   "price": 87.45,
+   "dollar_vol_m": 54.0,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 20.0,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MMSI": {
+   "price": 93.94,
+   "dollar_vol_m": 54.0,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 37.63,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FSS": {
+   "price": 115.54,
+   "dollar_vol_m": 53.9,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 47.93,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AM": {
+   "price": 20.61,
+   "dollar_vol_m": 53.7,
+   "sector": "Energy",
+   "index": "sp400",
+   "spread_pct": 50.0,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SAIC": {
+   "price": 143.54,
+   "dollar_vol_m": 53.7,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 47.76,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HOG": {
+   "price": 29.11,
+   "dollar_vol_m": 53.5,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 20.69,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MIDD": {
+   "price": 112.75,
+   "dollar_vol_m": 53.5,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ITRI": {
+   "price": 88.17,
+   "dollar_vol_m": 53.5,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 35.64,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KRC": {
+   "price": 35.96,
+   "dollar_vol_m": 53.3,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 100.0,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FHB": {
+   "price": 26.13,
+   "dollar_vol_m": 53.2,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "JBTM": {
+   "price": 109.69,
+   "dollar_vol_m": 53.2,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 86.59,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SRPT": {
+   "price": 18.18,
+   "dollar_vol_m": 53.2,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 19.16,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TDC": {
+   "price": 34.21,
+   "dollar_vol_m": 52.5,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 52.29,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KRG": {
+   "price": 24.77,
+   "dollar_vol_m": 52.4,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 94.74,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ESNT": {
+   "price": 65.7,
+   "dollar_vol_m": 51.8,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 73.02,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HCC": {
+   "price": 83.0,
+   "dollar_vol_m": 51.8,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 25.21,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AUB": {
+   "price": 40.1,
+   "dollar_vol_m": 51.7,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KLIC": {
+   "price": 73.4,
+   "dollar_vol_m": 51.6,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 42.82,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CNO": {
+   "price": 55.5,
+   "dollar_vol_m": 51.2,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 31.33,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HOMB": {
+   "price": 30.15,
+   "dollar_vol_m": 51.0,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 180.95,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PPLI": {
+   "price": 39.58,
+   "dollar_vol_m": 50.7,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 114.66,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EBC": {
+   "price": 22.11,
+   "dollar_vol_m": 50.2,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "POST": {
+   "price": 82.0,
+   "dollar_vol_m": 50.1,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 113.62,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PECO": {
+   "price": 38.29,
+   "dollar_vol_m": 49.8,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ST": {
+   "price": 40.7,
+   "dollar_vol_m": 49.7,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 33.76,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PSN": {
+   "price": 47.8,
+   "dollar_vol_m": 49.6,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 81.57,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FTDR": {
+   "price": 86.03,
+   "dollar_vol_m": 49.6,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GTES": {
+   "price": 25.1,
+   "dollar_vol_m": 49.4,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 11.76,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RCUS": {
+   "price": 19.36,
+   "dollar_vol_m": 49.3,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 98.32,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CBSH": {
+   "price": 56.51,
+   "dollar_vol_m": 49.1,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 186.81,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WSC": {
+   "price": 16.49,
+   "dollar_vol_m": 49.1,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 32.82,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NOG": {
+   "price": 27.26,
+   "dollar_vol_m": 49.0,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 20.22,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BCO": {
+   "price": 111.22,
+   "dollar_vol_m": 48.9,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 10.39,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EEFT": {
+   "price": 67.06,
+   "dollar_vol_m": 48.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 80.96,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PEB": {
+   "price": 20.67,
+   "dollar_vol_m": 48.8,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GXO": {
+   "price": 48.91,
+   "dollar_vol_m": 48.7,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 25.91,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VNO": {
+   "price": 34.34,
+   "dollar_vol_m": 48.6,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 73.17,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CARG": {
+   "price": 32.73,
+   "dollar_vol_m": 48.3,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 50.68,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DCI": {
+   "price": 86.12,
+   "dollar_vol_m": 48.1,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 60.78,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CNXC": {
+   "price": 34.25,
+   "dollar_vol_m": 48.1,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 27.78,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "IRDM": {
+   "price": 43.79,
+   "dollar_vol_m": 48.1,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 173.55,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GBCI": {
+   "price": 45.99,
+   "dollar_vol_m": 47.5,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 184.62,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AESI": {
+   "price": 8.6,
+   "dollar_vol_m": 47.4,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DIOD": {
+   "price": 81.64,
+   "dollar_vol_m": 47.4,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 31.82,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SLGN": {
+   "price": 39.76,
+   "dollar_vol_m": 47.3,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 54.79,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BTU": {
+   "price": 22.43,
+   "dollar_vol_m": 47.3,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 26.09,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LIVN": {
+   "price": 81.27,
+   "dollar_vol_m": 47.2,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PENN": {
+   "price": 15.46,
+   "dollar_vol_m": 47.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 63.29,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CVI": {
+   "price": 58.63,
+   "dollar_vol_m": 47.1,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 43.47,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OGS": {
+   "price": 78.25,
+   "dollar_vol_m": 47.0,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 79.25,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KTB": {
+   "price": 77.78,
+   "dollar_vol_m": 46.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 51.09,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SLG": {
+   "price": 49.19,
+   "dollar_vol_m": 46.5,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 68.03,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SBRA": {
+   "price": 19.6,
+   "dollar_vol_m": 46.4,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 32.46,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NE": {
+   "price": 43.95,
+   "dollar_vol_m": 46.4,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 114.75,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SHOO": {
+   "price": 44.42,
+   "dollar_vol_m": 46.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 53.53,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AZTA": {
+   "price": 36.01,
+   "dollar_vol_m": 46.2,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 88.89,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "APAM": {
+   "price": 34.4,
+   "dollar_vol_m": 46.1,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 136.36,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AROC": {
+   "price": 28.39,
+   "dollar_vol_m": 45.7,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 37.72,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ICHR": {
+   "price": 37.86,
+   "dollar_vol_m": 45.7,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 46.64,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LAUR": {
+   "price": 38.79,
+   "dollar_vol_m": 45.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KNF": {
+   "price": 53.85,
+   "dollar_vol_m": 45.5,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 42.23,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UBSI": {
+   "price": 48.46,
+   "dollar_vol_m": 45.5,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 100.45,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SFNC": {
+   "price": 23.32,
+   "dollar_vol_m": 45.2,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SXT": {
+   "price": 130.94,
+   "dollar_vol_m": 45.2,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 19.61,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BC": {
+   "price": 68.29,
+   "dollar_vol_m": 45.0,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 59.74,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TRNO": {
+   "price": 65.64,
+   "dollar_vol_m": 45.0,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EPR": {
+   "price": 56.36,
+   "dollar_vol_m": 44.8,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": 61.22,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BFAM": {
+   "price": 70.94,
+   "dollar_vol_m": 44.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FUL": {
+   "price": 50.89,
+   "dollar_vol_m": 44.0,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 22.68,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VC": {
+   "price": 81.7,
+   "dollar_vol_m": 43.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 90.91,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "XRAY": {
+   "price": 9.5,
+   "dollar_vol_m": 43.8,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 8.74,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NATL": {
+   "price": 47.19,
+   "dollar_vol_m": 43.7,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RRR": {
+   "price": 50.43,
+   "dollar_vol_m": 43.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 48.54,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SKY": {
+   "price": 79.72,
+   "dollar_vol_m": 43.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 34.17,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DRH": {
+   "price": 13.89,
+   "dollar_vol_m": 43.6,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "STEP": {
+   "price": 43.47,
+   "dollar_vol_m": 43.5,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 17.39,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HAYW": {
+   "price": 12.71,
+   "dollar_vol_m": 43.4,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TDW": {
+   "price": 79.61,
+   "dollar_vol_m": 43.4,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 36.36,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NWE": {
+   "price": 77.13,
+   "dollar_vol_m": 43.2,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 125.57,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CAR": {
+   "price": 101.55,
+   "dollar_vol_m": 43.0,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 38.44,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OPLN": {
+   "price": 38.05,
+   "dollar_vol_m": 43.0,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 115.82,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PATK": {
+   "price": 70.27,
+   "dollar_vol_m": 43.0,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 61.82,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BKU": {
+   "price": 43.76,
+   "dollar_vol_m": 42.9,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 122.81,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MMS": {
+   "price": 63.38,
+   "dollar_vol_m": 42.6,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 85.0,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TNL": {
+   "price": 67.32,
+   "dollar_vol_m": 42.5,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 57.14,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MRCY": {
+   "price": 75.56,
+   "dollar_vol_m": 42.5,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 22.56,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FHI": {
+   "price": 57.67,
+   "dollar_vol_m": 42.4,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CON": {
+   "price": 39.97,
+   "dollar_vol_m": 42.4,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CRC": {
+   "price": 52.96,
+   "dollar_vol_m": 42.4,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 31.58,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KMT": {
+   "price": 29.59,
+   "dollar_vol_m": 42.4,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 40.24,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EXPO": {
+   "price": 77.11,
+   "dollar_vol_m": 41.9,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 58.7,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ACAD": {
+   "price": 20.31,
+   "dollar_vol_m": 41.8,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 64.62,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "APLE": {
+   "price": 18.16,
+   "dollar_vol_m": 41.4,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 85.53,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ACHC": {
+   "price": 31.88,
+   "dollar_vol_m": 41.3,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 25.87,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ACLS": {
+   "price": 104.74,
+   "dollar_vol_m": 41.2,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 32.04,
+   "n_contracts": 9,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PII": {
+   "price": 56.69,
+   "dollar_vol_m": 40.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 42.7,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SIGI": {
+   "price": 91.74,
+   "dollar_vol_m": 40.7,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PRGO": {
+   "price": 16.37,
+   "dollar_vol_m": 40.6,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 7.41,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CRI": {
+   "price": 33.93,
+   "dollar_vol_m": 40.5,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 66.0,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KFY": {
+   "price": 76.35,
+   "dollar_vol_m": 40.5,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FIBK": {
+   "price": 36.88,
+   "dollar_vol_m": 40.4,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 123.97,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SPSC": {
+   "price": 91.94,
+   "dollar_vol_m": 40.1,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BNL": {
+   "price": 17.55,
+   "dollar_vol_m": 40.0,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 73.81,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ZWS": {
+   "price": 48.66,
+   "dollar_vol_m": 40.0,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 137.78,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CNR": {
+   "price": 88.35,
+   "dollar_vol_m": 39.8,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 49.01,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FULT": {
+   "price": 23.35,
+   "dollar_vol_m": 39.8,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 43.32,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LFST": {
+   "price": 12.56,
+   "dollar_vol_m": 39.8,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 90.91,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HZO": {
+   "price": 52.38,
+   "dollar_vol_m": 39.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VNT": {
+   "price": 34.54,
+   "dollar_vol_m": 39.6,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 52.5,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HP": {
+   "price": 37.13,
+   "dollar_vol_m": 39.6,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 96.91,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OUT": {
+   "price": 31.4,
+   "dollar_vol_m": 39.6,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 112.38,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DNOW": {
+   "price": 15.41,
+   "dollar_vol_m": 39.4,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 43.14,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CURB": {
+   "price": 28.86,
+   "dollar_vol_m": 39.1,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FTRE": {
+   "price": 23.92,
+   "dollar_vol_m": 39.1,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 54.53,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MZTI": {
+   "price": 112.33,
+   "dollar_vol_m": 39.0,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 74.4,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ROG": {
+   "price": 128.89,
+   "dollar_vol_m": 38.9,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 111.69,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CVSA": {
+   "price": 131.62,
+   "dollar_vol_m": 38.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 34.99,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "INDB": {
+   "price": 83.43,
+   "dollar_vol_m": 38.8,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FBP": {
+   "price": 27.31,
+   "dollar_vol_m": 38.5,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MHO": {
+   "price": 123.3,
+   "dollar_vol_m": 38.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 28.57,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DAN": {
+   "price": 28.23,
+   "dollar_vol_m": 38.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 109.09,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "COLM": {
+   "price": 62.07,
+   "dollar_vol_m": 37.9,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 65.74,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NMIH": {
+   "price": 41.49,
+   "dollar_vol_m": 37.8,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ASH": {
+   "price": 73.57,
+   "dollar_vol_m": 37.7,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 58.29,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ACIW": {
+   "price": 56.19,
+   "dollar_vol_m": 37.7,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 125.0,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BGC": {
+   "price": 11.89,
+   "dollar_vol_m": 37.7,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 52.27,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OII": {
+   "price": 36.62,
+   "dollar_vol_m": 37.7,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 30.59,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "POWI": {
+   "price": 47.12,
+   "dollar_vol_m": 37.6,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 62.86,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VECO": {
+   "price": 41.15,
+   "dollar_vol_m": 37.6,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 112.78,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CUZ": {
+   "price": 28.67,
+   "dollar_vol_m": 37.5,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DLB": {
+   "price": 63.28,
+   "dollar_vol_m": 37.5,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 82.61,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NJR": {
+   "price": 53.63,
+   "dollar_vol_m": 37.5,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": 192.16,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NEO": {
+   "price": 16.39,
+   "dollar_vol_m": 37.5,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 57.14,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UCB": {
+   "price": 37.23,
+   "dollar_vol_m": 37.2,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null
+  },
+  "HRMY": {
+   "price": 36.03,
+   "dollar_vol_m": 37.1,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 66.67,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ABCB": {
+   "price": 82.37,
+   "dollar_vol_m": 37.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HASI": {
+   "price": 36.54,
+   "dollar_vol_m": 37.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 74.13,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SUPN": {
+   "price": 42.07,
+   "dollar_vol_m": 36.9,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BHF": {
+   "price": 46.35,
+   "dollar_vol_m": 36.8,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": 100.3,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AZZ": {
+   "price": 133.39,
+   "dollar_vol_m": 36.8,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 38.94,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PPC": {
+   "price": 28.09,
+   "dollar_vol_m": 36.7,
+   "sector": "Consumer Staples",
+   "index": "sp400",
+   "spread_pct": 145.95,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SR": {
+   "price": 85.56,
+   "dollar_vol_m": 36.7,
+   "sector": "Utilities",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "QTWO": {
+   "price": 69.34,
+   "dollar_vol_m": 36.6,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 25.95,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BDC": {
+   "price": 103.46,
+   "dollar_vol_m": 36.5,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 60.01,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CALX": {
+   "price": 36.91,
+   "dollar_vol_m": 36.4,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 33.33,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UFPI": {
+   "price": 83.72,
+   "dollar_vol_m": 36.3,
+   "sector": "Industrials",
+   "index": "sp400",
+   "spread_pct": 78.26,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AAMI": {
+   "price": 92.79,
+   "dollar_vol_m": 36.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BANC": {
+   "price": 17.74,
+   "dollar_vol_m": 36.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 30.69,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HUBG": {
+   "price": 26.47,
+   "dollar_vol_m": 35.9,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 101.47,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HGV": {
+   "price": 37.08,
+   "dollar_vol_m": 35.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp400",
+   "spread_pct": 54.55,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AVNT": {
+   "price": 40.58,
+   "dollar_vol_m": 35.6,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SKT": {
+   "price": 36.11,
+   "dollar_vol_m": 35.6,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 107.92,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VAC": {
+   "price": 112.93,
+   "dollar_vol_m": 35.6,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 45.56,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WHD": {
+   "price": 60.38,
+   "dollar_vol_m": 35.4,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 6.26,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GNW": {
+   "price": 8.94,
+   "dollar_vol_m": 35.2,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 30.95,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FA": {
+   "price": 21.22,
+   "dollar_vol_m": 35.1,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RDNT": {
+   "price": 70.26,
+   "dollar_vol_m": 34.8,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 47.73,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SHC": {
+   "price": 18.13,
+   "dollar_vol_m": 34.7,
+   "sector": "Health Care",
+   "index": "sp400",
+   "spread_pct": 81.82,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BXMT": {
+   "price": 10.58,
+   "dollar_vol_m": 34.5,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 65.0,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CWK": {
+   "price": 12.1,
+   "dollar_vol_m": 34.5,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 69.39,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TNDM": {
+   "price": 17.15,
+   "dollar_vol_m": 34.5,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 161.64,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WAFD": {
+   "price": 29.44,
+   "dollar_vol_m": 34.5,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 146.67,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CWEN": {
+   "price": 31.43,
+   "dollar_vol_m": 34.3,
+   "sector": "Utilities",
+   "index": "sp600",
+   "spread_pct": 53.42,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KALU": {
+   "price": 114.99,
+   "dollar_vol_m": 34.3,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 90.71,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FFIN": {
+   "price": 30.33,
+   "dollar_vol_m": 34.2,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": null
+  },
+  "SHO": {
+   "price": 12.6,
+   "dollar_vol_m": 34.2,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AMTM": {
+   "price": 21.29,
+   "dollar_vol_m": 33.9,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 88.0,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HIW": {
+   "price": 30.47,
+   "dollar_vol_m": 33.8,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 92.86,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "XNCR": {
+   "price": 25.84,
+   "dollar_vol_m": 33.4,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 77.65,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AMN": {
+   "price": 46.82,
+   "dollar_vol_m": 33.3,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 16.73,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BOH": {
+   "price": 70.26,
+   "dollar_vol_m": 33.2,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 120.82,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GFF": {
+   "price": 97.0,
+   "dollar_vol_m": 33.1,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ALGT": {
+   "price": 70.36,
+   "dollar_vol_m": 32.9,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 24.67,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CRK": {
+   "price": 13.97,
+   "dollar_vol_m": 32.9,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 23.93,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MDU": {
+   "price": 19.37,
+   "dollar_vol_m": 32.4,
+   "sector": "Utilities",
+   "index": "sp600",
+   "spread_pct": 133.33,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "REZI": {
+   "price": 17.79,
+   "dollar_vol_m": 32.2,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 129.81,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SONO": {
+   "price": 17.7,
+   "dollar_vol_m": 32.0,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 35.64,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EXTR": {
+   "price": 22.04,
+   "dollar_vol_m": 31.9,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 91.31,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NTST": {
+   "price": 17.02,
+   "dollar_vol_m": 31.9,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 114.29,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TPC": {
+   "price": 76.88,
+   "dollar_vol_m": 31.9,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 33.71,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WKC": {
+   "price": 36.5,
+   "dollar_vol_m": 31.9,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 51.61,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MCY": {
+   "price": 106.71,
+   "dollar_vol_m": 31.8,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 77.55,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ADMA": {
+   "price": 10.95,
+   "dollar_vol_m": 31.4,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 77.27,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AX": {
+   "price": 92.53,
+   "dollar_vol_m": 31.4,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 32.48,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CVBF": {
+   "price": 23.05,
+   "dollar_vol_m": 31.4,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 111.11,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LCII": {
+   "price": 86.6,
+   "dollar_vol_m": 31.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 101.54,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BBT": {
+   "price": 29.95,
+   "dollar_vol_m": 31.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null
+  },
+  "DORM": {
+   "price": 127.49,
+   "dollar_vol_m": 30.9,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 99.39,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OGN": {
+   "price": 13.75,
+   "dollar_vol_m": 30.7,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CDP": {
+   "price": 33.83,
+   "dollar_vol_m": 30.6,
+   "sector": "Real Estate",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WSBC": {
+   "price": 39.13,
+   "dollar_vol_m": 30.5,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GEF": {
+   "price": 83.13,
+   "dollar_vol_m": 30.4,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LPG": {
+   "price": 51.44,
+   "dollar_vol_m": 30.3,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 75.25,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ATMU": {
+   "price": 44.75,
+   "dollar_vol_m": 30.1,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 127.5,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HTO": {
+   "price": 58.66,
+   "dollar_vol_m": 30.1,
+   "sector": "Utilities",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PLMR": {
+   "price": 144.53,
+   "dollar_vol_m": 30.1,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SNDR": {
+   "price": 31.12,
+   "dollar_vol_m": 30.1,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MWA": {
+   "price": 22.27,
+   "dollar_vol_m": 29.9,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 75.11,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "IPGP": {
+   "price": 69.41,
+   "dollar_vol_m": 29.8,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": 48.78,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ATEN": {
+   "price": 24.56,
+   "dollar_vol_m": 29.8,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 174.03,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CC": {
+   "price": 13.03,
+   "dollar_vol_m": 29.8,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 20.69,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ADEA": {
+   "price": 21.27,
+   "dollar_vol_m": 29.5,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 74.4,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CBT": {
+   "price": 74.33,
+   "dollar_vol_m": 29.4,
+   "sector": "Materials",
+   "index": "sp400",
+   "spread_pct": 56.41,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PGNY": {
+   "price": 29.12,
+   "dollar_vol_m": 29.4,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 26.67,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BHE": {
+   "price": 66.3,
+   "dollar_vol_m": 29.1,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 76.19,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CXT": {
+   "price": 58.23,
+   "dollar_vol_m": 28.8,
+   "sector": "Information Technology",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RUSHA": {
+   "price": 45.54,
+   "dollar_vol_m": 28.8,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AGO": {
+   "price": 70.31,
+   "dollar_vol_m": 28.7,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 133.22,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UTI": {
+   "price": 21.66,
+   "dollar_vol_m": 28.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 8.88,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BL": {
+   "price": 34.37,
+   "dollar_vol_m": 28.5,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 75.86,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "QDEL": {
+   "price": 13.48,
+   "dollar_vol_m": 28.4,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 75.56,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SBCF": {
+   "price": 33.65,
+   "dollar_vol_m": 28.4,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FBK": {
+   "price": 53.62,
+   "dollar_vol_m": 28.3,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 92.86,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PDFS": {
+   "price": 39.47,
+   "dollar_vol_m": 28.3,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 70.34,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VVX": {
+   "price": 73.36,
+   "dollar_vol_m": 28.3,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 67.34,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DGII": {
+   "price": 72.8,
+   "dollar_vol_m": 27.6,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "REYN": {
+   "price": 23.61,
+   "dollar_vol_m": 27.6,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 194.2,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DV": {
+   "price": 13.56,
+   "dollar_vol_m": 27.4,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 13.95,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PRVA": {
+   "price": 22.89,
+   "dollar_vol_m": 27.4,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 76.42,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BJRI": {
+   "price": 58.79,
+   "dollar_vol_m": 27.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 118.37,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TRIP": {
+   "price": 9.67,
+   "dollar_vol_m": 27.2,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 31.79,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FELE": {
+   "price": 99.21,
+   "dollar_vol_m": 27.1,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FFBC": {
+   "price": 32.47,
+   "dollar_vol_m": 27.1,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 163.89,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PBI": {
+   "price": 17.54,
+   "dollar_vol_m": 27.0,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 39.96,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PZZA": {
+   "price": 18.66,
+   "dollar_vol_m": 27.0,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 10.43,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AGYS": {
+   "price": 120.07,
+   "dollar_vol_m": 26.9,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GO": {
+   "price": 13.9,
+   "dollar_vol_m": 26.9,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 48.08,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CATY": {
+   "price": 64.24,
+   "dollar_vol_m": 26.6,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CERT": {
+   "price": 10.09,
+   "dollar_vol_m": 26.6,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PBH": {
+   "price": 49.46,
+   "dollar_vol_m": 26.6,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PRGS": {
+   "price": 45.98,
+   "dollar_vol_m": 26.5,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 81.56,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UNFI": {
+   "price": 47.28,
+   "dollar_vol_m": 26.4,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 53.06,
+   "n_contracts": 13,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EYE": {
+   "price": 18.87,
+   "dollar_vol_m": 26.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 92.38,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HE": {
+   "price": 8.75,
+   "dollar_vol_m": 26.3,
+   "sector": "Utilities",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "RNST": {
+   "price": 41.44,
+   "dollar_vol_m": 26.3,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ZD": {
+   "price": 57.95,
+   "dollar_vol_m": 26.3,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 64.0,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ALRM": {
+   "price": 62.49,
+   "dollar_vol_m": 26.1,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 140.3,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ENOV": {
+   "price": 21.59,
+   "dollar_vol_m": 26.1,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 61.82,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CALY": {
+   "price": 14.36,
+   "dollar_vol_m": 26.0,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 30.12,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GOLF": {
+   "price": 81.97,
+   "dollar_vol_m": 25.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 94.74,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SKYW": {
+   "price": 95.73,
+   "dollar_vol_m": 25.6,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 72.09,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ALG": {
+   "price": 147.23,
+   "dollar_vol_m": 25.4,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FCPT": {
+   "price": 22.05,
+   "dollar_vol_m": 25.4,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 133.33,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LIF": {
+   "price": 46.46,
+   "dollar_vol_m": 25.4,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 68.13,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WERN": {
+   "price": 29.18,
+   "dollar_vol_m": 25.3,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 179.49,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ARCB": {
+   "price": 130.3,
+   "dollar_vol_m": 25.1,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ANIP": {
+   "price": 73.75,
+   "dollar_vol_m": 25.0,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 117.24,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CNS": {
+   "price": 72.07,
+   "dollar_vol_m": 24.9,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 93.07,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LTC": {
+   "price": 43.33,
+   "dollar_vol_m": 24.8,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 40.0,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "IPAR": {
+   "price": 116.07,
+   "dollar_vol_m": 24.7,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 97.85,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SFBS": {
+   "price": 41.3,
+   "dollar_vol_m": 24.7,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "IOSP": {
+   "price": 98.67,
+   "dollar_vol_m": 24.5,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BCC": {
+   "price": 78.29,
+   "dollar_vol_m": 24.4,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 118.95,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PHIN": {
+   "price": 57.14,
+   "dollar_vol_m": 24.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 53.19,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "YELP": {
+   "price": 20.7,
+   "dollar_vol_m": 24.1,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": 59.0,
+   "n_contracts": 8,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AVA": {
+   "price": 37.74,
+   "dollar_vol_m": 24.0,
+   "sector": "Utilities",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KMPR": {
+   "price": 29.91,
+   "dollar_vol_m": 24.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "KN": {
+   "price": 33.38,
+   "dollar_vol_m": 23.8,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UE": {
+   "price": 19.55,
+   "dollar_vol_m": 23.8,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": null
+  },
+  "HNI": {
+   "price": 48.21,
+   "dollar_vol_m": 23.7,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 169.23,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AKR": {
+   "price": 18.78,
+   "dollar_vol_m": 23.3,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "IIPR": {
+   "price": 54.56,
+   "dollar_vol_m": 23.3,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 28.0,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WSFS": {
+   "price": 77.51,
+   "dollar_vol_m": 23.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 113.51,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "IBOC": {
+   "price": 67.28,
+   "dollar_vol_m": 22.9,
+   "sector": "Financials",
+   "index": "sp400",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TBBK": {
+   "price": 51.14,
+   "dollar_vol_m": 22.9,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 105.25,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EZPW": {
+   "price": 29.35,
+   "dollar_vol_m": 22.8,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 46.15,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PRKS": {
+   "price": 31.08,
+   "dollar_vol_m": 22.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PLAB": {
+   "price": 27.9,
+   "dollar_vol_m": 22.6,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 25.45,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ANDE": {
+   "price": 65.1,
+   "dollar_vol_m": 22.5,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 37.5,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BRC": {
+   "price": 82.65,
+   "dollar_vol_m": 22.5,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EFC": {
+   "price": 11.63,
+   "dollar_vol_m": 22.3,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 25.64,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "EFOR": {
+   "price": 41.0,
+   "dollar_vol_m": 22.3,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 40.56,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GRBK": {
+   "price": 64.94,
+   "dollar_vol_m": 22.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 100.33,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SBH": {
+   "price": 17.62,
+   "dollar_vol_m": 22.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 33.33,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WGO": {
+   "price": 28.57,
+   "dollar_vol_m": 22.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 50.0,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CPK": {
+   "price": 134.17,
+   "dollar_vol_m": 22.0,
+   "sector": "Utilities",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VCEL": {
+   "price": 42.97,
+   "dollar_vol_m": 21.9,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "STRA": {
+   "price": 81.59,
+   "dollar_vol_m": 21.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 13.08,
+   "n_contracts": 5,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DEI": {
+   "price": 10.09,
+   "dollar_vol_m": 21.5,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 150.0,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ADUS": {
+   "price": 122.67,
+   "dollar_vol_m": 21.4,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "IVT": {
+   "price": 30.14,
+   "dollar_vol_m": 21.4,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": null
+  },
+  "VIR": {
+   "price": 10.43,
+   "dollar_vol_m": 21.2,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 116.98,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LMAT": {
+   "price": 85.33,
+   "dollar_vol_m": 21.0,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 80.0,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NHI": {
+   "price": 66.96,
+   "dollar_vol_m": 21.0,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 28.75,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NTCT": {
+   "price": 38.31,
+   "dollar_vol_m": 20.9,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 50.0,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SMPL": {
+   "price": 11.08,
+   "dollar_vol_m": 20.9,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 83.15,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BLKB": {
+   "price": 56.48,
+   "dollar_vol_m": 20.8,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CUBI": {
+   "price": 78.73,
+   "dollar_vol_m": 20.7,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 107.07,
+   "n_contracts": 6,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ECPG": {
+   "price": 100.36,
+   "dollar_vol_m": 20.6,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 41.86,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TRN": {
+   "price": 25.82,
+   "dollar_vol_m": 20.6,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 66.67,
+   "n_contracts": 7,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ARLO": {
+   "price": 12.6,
+   "dollar_vol_m": 20.4,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 190.78,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UPWK": {
+   "price": 9.39,
+   "dollar_vol_m": 20.2,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 14.72,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VYX": {
+   "price": 8.64,
+   "dollar_vol_m": 20.2,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WD": {
+   "price": 34.68,
+   "dollar_vol_m": 20.2,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 43.81,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "AWR": {
+   "price": 85.05,
+   "dollar_vol_m": 20.1,
+   "sector": "Utilities",
+   "index": "sp600",
+   "spread_pct": 37.5,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NBHC": {
+   "price": 38.96,
+   "dollar_vol_m": 20.1,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WLY": {
+   "price": 54.05,
+   "dollar_vol_m": 19.9,
+   "sector": "Communication Services",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PLUS": {
+   "price": 96.15,
+   "dollar_vol_m": 19.8,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 163.64,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SAH": {
+   "price": 63.14,
+   "dollar_vol_m": 19.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 106.01,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "STC": {
+   "price": 49.24,
+   "dollar_vol_m": 19.8,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ABM": {
+   "price": 53.88,
+   "dollar_vol_m": 19.7,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 19.72,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ENR": {
+   "price": 23.43,
+   "dollar_vol_m": 19.7,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 31.9,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GSHD": {
+   "price": 50.62,
+   "dollar_vol_m": 19.7,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 66.67,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NSP": {
+   "price": 53.48,
+   "dollar_vol_m": 19.7,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 38.14,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PRLB": {
+   "price": 84.36,
+   "dollar_vol_m": 19.6,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 24.67,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WOR": {
+   "price": 64.44,
+   "dollar_vol_m": 19.6,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 42.89,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CWT": {
+   "price": 47.54,
+   "dollar_vol_m": 19.4,
+   "sector": "Utilities",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VSTS": {
+   "price": 14.55,
+   "dollar_vol_m": 19.3,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 55.77,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PRDO": {
+   "price": 33.82,
+   "dollar_vol_m": 19.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 9.09,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WS": {
+   "price": 40.47,
+   "dollar_vol_m": 19.1,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 58.24,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PFS": {
+   "price": 23.12,
+   "dollar_vol_m": 19.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PRG": {
+   "price": 31.83,
+   "dollar_vol_m": 18.9,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 52.17,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "VRTS": {
+   "price": 122.35,
+   "dollar_vol_m": 18.9,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null
+  },
+  "FCF": {
+   "price": 21.06,
+   "dollar_vol_m": 18.7,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null
+  },
+  "GTY": {
+   "price": 28.45,
+   "dollar_vol_m": 18.7,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": 171.43,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HWKN": {
+   "price": 133.17,
+   "dollar_vol_m": 18.6,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SPNT": {
+   "price": 25.96,
+   "dollar_vol_m": 18.6,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MD": {
+   "price": 29.55,
+   "dollar_vol_m": 18.5,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 47.06,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SCHL": {
+   "price": 39.01,
+   "dollar_vol_m": 18.5,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 93.88,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NGVT": {
+   "price": 69.84,
+   "dollar_vol_m": 18.4,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": null
+  },
+  "BKE": {
+   "price": 47.48,
+   "dollar_vol_m": 18.2,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 57.28,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ACT": {
+   "price": 46.92,
+   "dollar_vol_m": 18.1,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "MCRI": {
+   "price": 113.5,
+   "dollar_vol_m": 18.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LNN": {
+   "price": 111.99,
+   "dollar_vol_m": 17.8,
+   "sector": "Materials",
+   "index": "sp600",
+   "spread_pct": 102.44,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CNMD": {
+   "price": 49.44,
+   "dollar_vol_m": 17.7,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 49.62,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FOXF": {
+   "price": 15.33,
+   "dollar_vol_m": 17.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 63.64,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LZB": {
+   "price": 30.4,
+   "dollar_vol_m": 17.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 26.77,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OTTR": {
+   "price": 90.78,
+   "dollar_vol_m": 17.5,
+   "sector": "Utilities",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "JJSF": {
+   "price": 84.9,
+   "dollar_vol_m": 17.4,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 124.15,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CASH": {
+   "price": 76.75,
+   "dollar_vol_m": 17.3,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 69.3,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UPBD": {
+   "price": 17.37,
+   "dollar_vol_m": 17.3,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 62.61,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TRMK": {
+   "price": 46.35,
+   "dollar_vol_m": 17.2,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "WWW": {
+   "price": 20.68,
+   "dollar_vol_m": 17.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 52.63,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "LGIH": {
+   "price": 42.77,
+   "dollar_vol_m": 17.0,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 41.8,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TFIN": {
+   "price": 62.21,
+   "dollar_vol_m": 16.7,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 62.54,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DCOM": {
+   "price": 42.52,
+   "dollar_vol_m": 16.6,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OMCL": {
+   "price": 37.1,
+   "dollar_vol_m": 16.3,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 98.8,
+   "n_contracts": 3,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "XHR": {
+   "price": 19.5,
+   "dollar_vol_m": 16.3,
+   "sector": "Real Estate",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HCSG": {
+   "price": 24.79,
+   "dollar_vol_m": 16.2,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "IART": {
+   "price": 12.32,
+   "dollar_vol_m": 16.2,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 126.32,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NBTB": {
+   "price": 52.79,
+   "dollar_vol_m": 16.2,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 22.22,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ADNT": {
+   "price": 17.19,
+   "dollar_vol_m": 16.1,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 25.42,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "COLL": {
+   "price": 23.5,
+   "dollar_vol_m": 16.1,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 122.94,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "INVX": {
+   "price": 27.93,
+   "dollar_vol_m": 16.1,
+   "sector": "Energy",
+   "index": "sp600",
+   "spread_pct": 73.71,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BANR": {
+   "price": 70.1,
+   "dollar_vol_m": 15.9,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CHCO": {
+   "price": 143.4,
+   "dollar_vol_m": 15.9,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "BANF": {
+   "price": 112.36,
+   "dollar_vol_m": 15.8,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "OSW": {
+   "price": 24.29,
+   "dollar_vol_m": 15.8,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "DFH": {
+   "price": 10.12,
+   "dollar_vol_m": 15.7,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 180.95,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "TILE": {
+   "price": 36.51,
+   "dollar_vol_m": 15.7,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 125.22,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "HLIT": {
+   "price": 10.09,
+   "dollar_vol_m": 15.6,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": 44.47,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "GIII": {
+   "price": 29.78,
+   "dollar_vol_m": 15.5,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 53.97,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "PRSU": {
+   "price": 56.29,
+   "dollar_vol_m": 15.5,
+   "sector": "Consumer Discretionary",
+   "index": "sp600",
+   "spread_pct": 176.92,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "ROCK": {
+   "price": 39.27,
+   "dollar_vol_m": 15.3,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 112.5,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "APOG": {
+   "price": 44.29,
+   "dollar_vol_m": 15.2,
+   "sector": "Industrials",
+   "index": "sp600",
+   "spread_pct": 16.09,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "CBU": {
+   "price": 62.37,
+   "dollar_vol_m": 15.1,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 90.91,
+   "n_contracts": 1,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "SCSC": {
+   "price": 59.96,
+   "dollar_vol_m": 15.1,
+   "sector": "Information Technology",
+   "index": "sp600",
+   "spread_pct": null,
+   "n_contracts": 0,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "STAA": {
+   "price": 22.49,
+   "dollar_vol_m": 15.1,
+   "sector": "Health Care",
+   "index": "sp600",
+   "spread_pct": 46.4,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "UVV": {
+   "price": 39.67,
+   "dollar_vol_m": 15.1,
+   "sector": "Consumer Staples",
+   "index": "sp600",
+   "spread_pct": 41.73,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "FG": {
+   "price": 21.45,
+   "dollar_vol_m": 15.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 65.64,
+   "n_contracts": 4,
+   "dte": 29,
+   "exp": "2026-11-20"
+  },
+  "NWBI": {
+   "price": 15.44,
+   "dollar_vol_m": 15.0,
+   "sector": "Financials",
+   "index": "sp600",
+   "spread_pct": 184.31,
+   "n_contracts": 2,
+   "dte": 29,
+   "exp": "2026-11-20"
+  }
+ }
+}
