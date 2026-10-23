@@ -6688,6 +6688,42 @@ _STRAT_BUCKET = {"sell_put": "sell_puts", "buy_call": "buy_calls", "buy_put": "b
                  "covered_call": "covered_calls", "iron_condor": "iron_condors"}
 
 
+SCAN_STATE_FILE = "scan_state.json"
+
+
+def _save_scan_state():
+    """Persist the last scan (timestamp + result cards) so a restart does not start from 'Not yet scanned'."""
+    try:
+        with scan_lock:
+            snap = {"last_scan": scan_state.get("last_scan"), "mode": SCAN_MODE,
+                    "results": json.loads(json.dumps(scan_state.get("results") or {}, default=_json_default))}
+        _atomic_json_write(SCAN_STATE_FILE, snap)
+    except Exception as e:
+        print(f"  [Scan] could not save scan state: {e}")
+
+
+def _load_scan_state(max_age_h=20):
+    """Startup: restore the last scan if it is recent enough to still mean something today."""
+    if not os.path.exists(SCAN_STATE_FILE):
+        return
+    try:
+        snap = _load_json(SCAN_STATE_FILE, {}, "Scan")
+        ts = snap.get("last_scan")
+        if not ts:
+            return
+        age_h = (datetime.now() - datetime.fromisoformat(ts)).total_seconds() / 3600
+        if age_h > max_age_h:
+            print(f"  [Scan] Saved scan is {age_h:.0f}h old — not restored")
+            return
+        results = snap.get("results") or {}
+        with scan_lock:
+            scan_state.update(last_scan=ts, results={**_empty_totals(), **{k: v for k, v in results.items() if isinstance(v, list)}})
+        n = sum(len(v) for v in results.values() if isinstance(v, list))
+        print(f"  [Scan] Restored the {ts[11:16]} scan ({n} signals, {snap.get('mode', '?')} mode) from {SCAN_STATE_FILE}")
+    except Exception as e:
+        print(f"  [Scan] could not restore scan state: {e}")
+
+
 def _empty_totals():
     return {k: [] for k in _STRAT_BUCKET.values()}
 
@@ -6760,6 +6796,7 @@ def _run_scan(mode=None):
 
         with scan_lock:
             scan_state.update(last_scan=datetime.now().isoformat(), results=totals)
+        _save_scan_state()                                 # survives a restart (dashboard + autotrader freshness)
         print(f"\n  Scan complete in {time.time() - t0:.0f}s — " +
               "  ".join(f"{k}:{len(v)}" for k, v in totals.items()))
 
@@ -11801,6 +11838,13 @@ window.onload = async () => {
       document.getElementById('scan-info').textContent = `Last scan: ${new Date(s.last_scan).toLocaleTimeString()}${_nextStr}`;
       ['sell_puts','buy_calls','buy_puts','covered_calls'].forEach(loadStrategy);
       loadCondorResults();
+    } else {
+      // No scan in this process yet: say so instead of leaving a black panel.
+      document.getElementById('scan-info').textContent = 'No scan since the bot started — the next scheduled scan fills this in';
+      ['sell_puts','buy_calls','buy_puts','covered_calls'].forEach(st => {
+        const p = document.getElementById('panel-'+st);
+        if (p && !p.innerHTML.trim()) p.innerHTML = `<div class="empty-state"><h3>No scan yet</h3><p>The bot scans every 30 minutes during market hours (first at 07:35 ET). Press ▶ Run Scan to scan now.</p></div>`;
+      });
     }
   } catch(e) { console.error('status load failed', e); }
   // Restore WFO results if saved from a previous session
@@ -12675,6 +12719,9 @@ def main():
 
     # Restore Hold Horizon Analysis results from disk (used by tracked-position UI)
     _load_hs_results()
+
+    # Restore the last scan (cards + timestamp) so the dashboard and the autotrader's freshness check survive a restart
+    _load_scan_state()
 
     # Restore prefetch cache (info/calendar 24h TTL — saves ~50% of repeat scan calls)
     _load_prefetch_cache()
