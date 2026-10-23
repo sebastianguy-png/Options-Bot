@@ -8317,6 +8317,35 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
 
 .empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
 .empty-state h3{color:var(--text);margin-bottom:8px}
+
+/* ── Responsive: the page never scrolls sideways; strips and tables scroll inside themselves ── */
+html,body{max-width:100%;overflow-x:hidden}
+header>div{flex-wrap:wrap}
+.tabs{overflow-x:auto;scrollbar-width:thin;-webkit-overflow-scrolling:touch}
+.tabs::-webkit-scrollbar{height:4px}
+.tabs::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.tab{flex:0 0 auto}
+.panel{overflow-x:auto}
+.cards{grid-template-columns:repeat(auto-fill,minmax(min(480px,100%),1fr))}
+.card-footer,.card-head{flex-wrap:wrap}
+@media (max-width:760px){
+  header{padding:10px 14px;gap:10px}
+  header h1{font-size:16px}
+  header .tagline{flex-basis:100%;order:9;font-size:11px;line-height:1.4}
+  header>div{width:100%}
+  #ticker-search{flex:1;width:auto!important;min-width:0}
+  #scan-mode-toggle button,#btn-green-candle,#btn-red-candle{padding:6px 10px!important;font-size:11px!important}
+  .tabs{padding:0 10px}
+  .tab{padding:10px 12px;font-size:12px}
+  .panel{padding:12px 14px}
+  .scan-status{padding:10px 12px;gap:10px}
+  .stat{min-width:calc(50% - 6px);padding:10px 12px}
+  .stat .sval{font-size:18px}
+  .charts{grid-template-columns:1fr}
+  .opt-grid,.mc-grid{grid-template-columns:repeat(2,1fr)}
+  .modal{padding:18px;width:94%}
+  .queue-table th,.queue-table td{padding:8px 6px;font-size:12px}
+}
 </style>
 </head>
 <body>
@@ -8324,7 +8353,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
 
 <header>
   <h1>⚡ Options Bot</h1>
-  <span class="tagline">⚡ Focus: ~100 liquid names · 📊 Full: S&amp;P 500 (~503) · 5 strategies · SoFi execution</span>
+  <span class="tagline">Band-escape reversion calls · 140-name universe · entries 14:45–15:55 ET · Alpaca paper autotrader</span>
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <div id="scan-info" style="font-size:12px;color:var(--muted)">Not yet scanned</div>
     <div id="live-badge" style="display:none;align-items:center;gap:6px;font-size:11px;
@@ -8393,11 +8422,26 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
 </div>
 
 <div class="tabs">
-  <div class="tab active" onclick="switchTab('sell_puts')">
-    Sell Puts <span class="badge-count" id="cnt-sell_puts">0</span>
-  </div>
-  <div class="tab" onclick="switchTab('buy_calls')">
+  <!-- what the bot trades and watches first; the retired strategies' tabs stay at the end for reference -->
+  <div class="tab active" onclick="switchTab('buy_calls')">
     Buy Calls <span class="badge-count" id="cnt-buy_calls">0</span>
+  </div>
+  <div class="tab" onclick="switchTab('tracked')">
+    📍 Tracked <span class="badge-count" id="cnt-tracked">0</span>
+  </div>
+  <div class="tab" onclick="switchTab('autotrade')">🤖 Autotrade</div>
+  <div class="tab" onclick="switchTab('performance')">📊 Performance</div>
+  <div class="tab" onclick="switchTab('history')">
+    History <span class="badge-count" id="cnt-history">0</span>
+  </div>
+  <div class="tab" onclick="switchTab('queue')">
+    Trade Queue <span class="badge-count" id="cnt-queue">0</span>
+  </div>
+  <div class="tab" onclick="switchTab('calibrate')">🎯 Calibrate</div>
+  <div class="tab" onclick="switchTab('backtest')">📈 Backtest</div>
+  <div class="tab" onclick="switchTab('bsmodel')">⚖️ B-S Model</div>
+  <div class="tab" onclick="switchTab('sell_puts')">
+    Sell Puts <span class="badge-count" id="cnt-sell_puts">0</span>
   </div>
   <div class="tab" onclick="switchTab('buy_puts')">
     Buy Puts <span class="badge-count" id="cnt-buy_puts">0</span>
@@ -8408,25 +8452,11 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
   <div class="tab" onclick="switchTab('iron_condors')">
     Iron Condors <span class="badge-count" id="cnt-iron_condors">0</span>
   </div>
-  <div class="tab" onclick="switchTab('tracked')">
-    📍 Tracked <span class="badge-count" id="cnt-tracked">0</span>
-  </div>
-  <div class="tab" onclick="switchTab('queue')">
-    Trade Queue <span class="badge-count" id="cnt-queue">0</span>
-  </div>
-  <div class="tab" onclick="switchTab('history')">
-    History <span class="badge-count" id="cnt-history">0</span>
-  </div>
-  <div class="tab" onclick="switchTab('backtest')">📈 Backtest</div>
-  <div class="tab" onclick="switchTab('bsmodel')">⚖️ B-S Model</div>
-  <div class="tab" onclick="switchTab('performance')">📊 Performance</div>
-  <div class="tab" onclick="switchTab('calibrate')">🎯 Calibrate</div>
-  <div class="tab" onclick="switchTab('autotrade')">🤖 Autotrade</div>
 </div>
 
 <!-- PANELS -->
-<div class="panel active" id="panel-sell_puts"></div>
-<div class="panel" id="panel-buy_calls"></div>
+<div class="panel" id="panel-sell_puts"></div>
+<div class="panel active" id="panel-buy_calls"></div>
 <div class="panel" id="panel-buy_puts"></div>
 <div class="panel" id="panel-covered_calls"></div>
 <div class="panel" id="panel-iron_condors">
@@ -9270,7 +9300,7 @@ header .tagline{font-size:12px;color:var(--muted);flex:1}
 
 <script>
 // ── State ──────────────────────────────────────────────────────
-let activeTab  = 'sell_puts';
+let activeTab  = 'buy_calls';           // the strategy the bot actually trades lands first
 let pendingExec = null;
 let scanPoll   = null;
 let resultPoll = null;
