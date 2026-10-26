@@ -64,6 +64,10 @@ DEFAULT_CONFIG = {
     "max_new_per_cycle":      2,
     "max_position_usd":       500.0,            # most premium paid per long trade (sets the contract count)
     "min_one_contract":       True,             # a contract that costs more than the budget is still bought, one lot (paper: never let the cap block a signal)
+    "position_pct_equity":    0.0,              # > 0: premium budget per long trade = this % of account equity (overrides max_position_usd; quarter-Kelly on the 6y trades ≈ 4.7%)
+    "portfolio_pct_equity":   0.0,              # > 0: no new entry while premium already at risk (open + working) ≥ this % of equity (2022 clustered up to 23 open)
+    "daily_loss_cap_pct":     0.0,              # > 0: daily loss cap = this % of equity (overrides daily_loss_cap_usd)
+    "weekly_loss_cap_pct":    0.0,              # > 0: weekly loss cap = this % of equity (overrides weekly_loss_cap_usd)
     "max_collateral_usd":     5000.0,           # most cash secured per short put (strike × 100 × qty)
     "daily_loss_cap_usd":     300.0,            # realised auto P&L today ≤ −this → no new entries until tomorrow
     "max_spread_pct":         15.0,             # (ask − bid) / mid; wider quotes are skipped
@@ -182,6 +186,10 @@ def _coerce(cfg: dict) -> dict:
     cfg["max_new_per_cycle"]  = i("max_new_per_cycle", 0, 20)
     cfg["max_position_usd"]   = f("max_position_usd", 0.0, 1e7)
     cfg["min_one_contract"]   = bool(cfg.get("min_one_contract", True))
+    cfg["position_pct_equity"]  = f("position_pct_equity", 0.0, 25.0)
+    cfg["portfolio_pct_equity"] = f("portfolio_pct_equity", 0.0, 100.0)
+    cfg["daily_loss_cap_pct"]   = f("daily_loss_cap_pct", 0.0, 50.0)
+    cfg["weekly_loss_cap_pct"]  = f("weekly_loss_cap_pct", 0.0, 50.0)
     cfg["max_collateral_usd"] = f("max_collateral_usd", 0.0, 1e8)
     cfg["daily_loss_cap_usd"] = f("daily_loss_cap_usd", 0.0, 1e8)
     cfg["max_spread_pct"]     = f("max_spread_pct", 0.0, 100.0)
@@ -903,13 +911,21 @@ def _candidates(cfg) -> tuple[list, list]:
     return out, skipped
 
 
-def _budget(cand: dict, cfg: dict) -> tuple[float, str]:
+def _equity(account: dict | None) -> float:
+    return _ob._as_float((account or {}).get("equity")) if account else 0.0
+
+
+def _budget(cand: dict, cfg: dict, account: dict | None = None) -> tuple[float, str]:
     """
-    $ budget for one long trade: max_position_usd, scaled by volatility (35% / HV30,
-    clamped 0.5–1.5×) and by conviction (squeeze-release breakout or high-VIX reversion).
-    Returns (budget, note).
+    $ budget for one long trade: position_pct_equity % of account equity when set (else
+    max_position_usd), scaled by volatility (35% / HV30, clamped 0.5–1.5×) and by conviction
+    (squeeze-release breakout or high-VIX reversion).  Returns (budget, note).
     """
     budget, notes = float(cfg["max_position_usd"]), []
+    eq = _equity(account)
+    if cfg.get("position_pct_equity", 0) > 0 and eq > 0:
+        budget = eq * cfg["position_pct_equity"] / 100.0
+        notes.append(f"{cfg['position_pct_equity']:g}% of ${eq:,.0f}")
     hv = _ob._as_float(cand.get("hv30"))                              # % on the card (e.g. 42.3)
     if cfg["vol_scale_sizing"] and hv > 0:
         k = max(0.5, min(1.5, 35.0 / hv))
@@ -936,7 +952,7 @@ def _size(cand: dict, cfg: dict, account: dict | None) -> tuple[int, float, floa
         if account is not None:
             qty = min(qty, int(max(bp, 0) // collateral))        # cash-secured
         return (qty, bid, mid, None) if qty >= 1 else (0, 0.0, mid, "not enough buying power for one cash-secured contract")
-    budget, note = _budget(cand, cfg)
+    budget, note = _budget(cand, cfg, account)
     cand["budget_note"] = note
     cost = ask * 100
     if cost <= 0:
@@ -957,14 +973,28 @@ def _open_entries(br, cfg, market_open: bool = True) -> tuple[int, list]:
     with _state_lock:
         d = dict(_daily())
         n_pending = len(_state["pending"])
-    if cfg["daily_loss_cap_usd"] > 0 and d["realized"] <= -cfg["daily_loss_cap_usd"]:
-        return 0, [f"daily loss cap hit (realised {d['realized']:+,.2f})"]
-    if cfg["weekly_loss_cap_usd"] > 0:
+        pending_premium = sum(_ob._as_float(p.get("limit")) * 100 * _ob._as_int(p.get("qty"), 0) for p in _state["pending"]
+                              if p.get("side") == "buy")
+    account0 = _account_info(br)
+    eq = _equity(account0)
+    daily_cap  = eq * cfg["daily_loss_cap_pct"] / 100.0 if (cfg.get("daily_loss_cap_pct", 0) > 0 and eq > 0) else cfg["daily_loss_cap_usd"]
+    weekly_cap = eq * cfg["weekly_loss_cap_pct"] / 100.0 if (cfg.get("weekly_loss_cap_pct", 0) > 0 and eq > 0) else cfg["weekly_loss_cap_usd"]
+    if daily_cap > 0 and d["realized"] <= -daily_cap:
+        return 0, [f"daily loss cap hit (realised {d['realized']:+,.2f} vs cap {daily_cap:,.0f})"]
+    if weekly_cap > 0:
         week_start = (date.today() - timedelta(days=date.today().weekday())).isoformat()
         with _state_lock:
             week = round(sum(v.get("realized", 0.0) for k, v in _state["daily"].items() if k >= week_start), 2)
-        if week <= -cfg["weekly_loss_cap_usd"]:
-            return 0, [f"weekly loss cap hit (realised this week {week:+,.2f})"]
+        if week <= -weekly_cap:
+            return 0, [f"weekly loss cap hit (realised this week {week:+,.2f} vs cap {weekly_cap:,.0f})"]
+    if cfg.get("portfolio_pct_equity", 0) > 0 and eq > 0:
+        with _ob.track_lock:
+            open_premium = sum(_ob._as_float(p.get("entry_price")) * 100 * _ob._as_int(p.get("contracts"), 0)
+                               for p in _ob.load_tracked() if p.get("auto") and p.get("strategy") not in _ob.SHORT_PREMIUM_STRATS)
+        at_risk = open_premium + pending_premium
+        cap = eq * cfg["portfolio_pct_equity"] / 100.0
+        if at_risk >= cap:
+            return 0, [f"portfolio cap: premium at risk ${at_risk:,.0f} ≥ {cfg['portfolio_pct_equity']:g}% of equity (${cap:,.0f})"]
     if market_open and _results_pre_open():
         return 0, ["results are from before the open (closing / pre-market quotes) — waiting for the first in-session scan"]
     if market_open and not _in_entry_window(cfg):
