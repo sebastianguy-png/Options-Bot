@@ -79,6 +79,7 @@ DEFAULT_CONFIG = {
     "reentry_cooldown_days":  3,                # trading days before the same ticker+strategy can be re-entered
     "pending_order_timeout_mins": 20,           # cancel an unfilled broker order after this long
     "premarket_scan_time":    "07:35",          # ET; a full scan before the open so the cards are ready ("" = off)
+    "surface_log_time":       "15:25",          # ET; record the daily vol-surface slice (tests/surface_log.py) once per trading day ("" = off)
     "entry_window_et":        "",               # "HH:MM-HH:MM" ET: open new positions only inside this window ("" = any time the market is open)
     "work_orders":            True,             # start at the mid (+1 tick) and step toward the ask/bid instead of crossing the spread
     "order_step_mins":        2,                # minutes an unfilled rung waits before the next one (checked each cycle)
@@ -206,6 +207,12 @@ def _coerce(cfg: dict) -> dict:
         cfg["premarket_scan_time"] = f"{hh:02d}:{mm:02d}" if (0 <= hh < 24 and 0 <= mm < 60) else ""
     except ValueError:
         cfg["premarket_scan_time"] = ""
+    t2 = str(cfg.get("surface_log_time", "15:25") or "").strip()
+    try:
+        hh, mm = (int(x) for x in t2.split(":"))
+        cfg["surface_log_time"] = f"{hh:02d}:{mm:02d}" if (0 <= hh < 24 and 0 <= mm < 60) else ""
+    except ValueError:
+        cfg["surface_log_time"] = ""
     cfg["work_orders"]        = bool(cfg.get("work_orders", True))
     cfg["order_step_mins"]    = i("order_step_mins", 1, 60)
     cfg["exit_patient_step_mins"] = i("exit_patient_step_mins", 1, 120)
@@ -480,6 +487,7 @@ def run_cycle(force: bool = False) -> dict:
             market_open = bool(br.is_market_open())
             _state["market_open"] = market_open
             summary["premarket"] = _maybe_premarket_scan(cfg)
+            summary["surface_log"] = _maybe_surface_log(cfg)
             if cfg["market_hours_only"] and not market_open and not force:
                 summary["reason"] = "market closed"
                 return summary
@@ -833,6 +841,39 @@ def _maybe_premarket_scan(cfg) -> str:
         _state["last_premarket_scan"] = today
     _save_state()
     return "started" if _start_scan(f"{t} ET pre-market scan", "premarket-scan") else "scan already running"
+
+
+def _maybe_surface_log(cfg) -> str:
+    """Once per trading day at surface_log_time ET: record the vol-surface slice (tests/surface_log.py) in a thread."""
+    t = cfg.get("surface_log_time") or ""
+    if not t:
+        return "off"
+    from broker import _eastern_now, _NYSE_HOLIDAYS
+    now = _eastern_now()
+    if now.weekday() >= 5 or now.strftime("%Y-%m-%d") in _NYSE_HOLIDAYS:
+        return "not a trading day"
+    hh, mm = (int(x) for x in t.split(":"))
+    if now.hour * 60 + now.minute < hh * 60 + mm:
+        return "not yet"
+    today = now.date().isoformat()
+    with _state_lock:
+        if _state.get("last_surface_log") == today:
+            return "done today"
+        _state["last_surface_log"] = today
+    _save_state()
+
+    def _run():
+        import subprocess, sys as _sys
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            p = subprocess.run([_sys.executable, os.path.join(here, "tests", "surface_log.py")], cwd=here,
+                               capture_output=True, text=True, timeout=1200)
+            tail = (p.stdout or p.stderr or "").strip().splitlines()
+            _log("surface_logged", detail=(tail[-1] if tail else f"exit {p.returncode}")[:200])
+        except Exception as e:
+            _log("surface_log_error", detail=str(e)[:200])
+    threading.Thread(target=_run, daemon=True, name="surface-log").start()
+    return "started"
 
 
 def _maybe_scan(cfg, allowed: bool, market_open: bool = False) -> str:

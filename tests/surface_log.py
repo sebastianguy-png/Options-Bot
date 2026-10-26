@@ -38,11 +38,15 @@ def _iv_at(df, strike_target):
 
 def main():
     t0 = time.time()
+    today = datetime.now().strftime("%Y-%m-%d")
+    if os.path.exists(OUT) and "--force" not in sys.argv:
+        with open(OUT, encoding="utf-8") as f:
+            if any(line.startswith(today + ",") for line in f):
+                print(f"{today}: already logged — nothing to do (use --force to append anyway)"); return
     tickers = ob.focus_universe()
     hist = ob._bulk_download(tickers, "3mo")
     ad = ob._alpaca_data()
     source = "alpaca" if ad is not None else "yahoo"
-    today = datetime.now().strftime("%Y-%m-%d")
     rows, done = [], 0
     for sym in tickers:
         h = hist.get(sym)
