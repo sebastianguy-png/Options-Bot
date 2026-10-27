@@ -98,7 +98,10 @@ def main():
            "by_index": {i: stats([t for t in calls if keep.get(t["ticker"], {}).get("index") == i]) for i in ("focus", "sp400", "sp600")},
            "with_focus": with_focus,
            "exits": dict(exits), "per_ticker": {s: {"n": len(v), "net_sum": round(sum(v), 1)} for s, v in per.items()},
-           "all_strategies": stats(trades), "completed_at": datetime.now().isoformat(), "seconds": round(time.time() - t0)}
+           "all_strategies": stats(trades), "completed_at": datetime.now().isoformat(), "seconds": round(time.time() - t0),
+           "trades": [{**{k: t.get(k) for k in ("ticker", "strategy", "entry_date", "exit_date", "entry_price", "strike", "entry_opt", "exit_opt",
+                                                 "pnl_pct", "cost_pct", "exit_reason", "iv_est", "sig_escape_reversion", "sig_escape_breakout")},
+                       "index": keep.get(t["ticker"], {}).get("index")} for t in trades]}
     with open(os.path.join(ROOT, "tests", "smallmid_report.json"), "w", encoding="utf-8") as f:
         json.dump(ob._json_clean(rep), f, indent=1)
     print(f"  exits: {dict(exits)}\n({time.time()-t0:.0f}s) → tests/smallmid_report.json")

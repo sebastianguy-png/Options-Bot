@@ -4,6 +4,7 @@ Prints the stats of ALL trades and of the CALLS only (what the live bot trades),
 by year and by escape case, and writes the trade list to
 tests/calls_only_trades_<tag>.json so two runs can be diffed
 (py tests/calls_only_check.py tagA ; py tests/calls_only_check.py tagB).
+A fourth argument "live" runs the bot's universe (focus + small/mid) instead of the focus list.
 A third argument "nobreak" switches the breakout leg off (escape_breakout_vol 99 = the
 applied live rules since Oct 21); the dump then carries the escape-case flags.
 """
@@ -30,7 +31,8 @@ def main():
     tag = sys.argv[1] if len(sys.argv) > 1 else datetime.now().strftime("%H%M")
     t0 = time.time()
     ob._load_garch_cache()
-    precomp, _, _ = ob._wfo_prepare(list(dict.fromkeys(ob.FOCUS_LIST)), label=f"CallsOnly-{tag}")
+    universe = ob.focus_universe() if (len(sys.argv) > 4 and sys.argv[4] == "live") else list(dict.fromkeys(ob.FOCUS_LIST))   # "live" = focus + small/mid, the bot's universe
+    precomp, _, _ = ob._wfo_prepare(universe, label=f"CallsOnly-{tag}")
     ctx = ob.market_context_history()
     print(f"  context: {len(ctx)} dates, vix NaN {int(ctx['vix'].isna().sum())}, regime counts {ctx['regime'].value_counts().to_dict()}, "
           f"breadth NaN {int(ctx['breadth50_chg5'].isna().sum()) if 'breadth50_chg5' in ctx else 'n/a'}")
