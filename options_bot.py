@@ -1587,6 +1587,7 @@ def safe_list(series, n=60):
 
 # ── Option data source: Alpaca when configured, Yahoo otherwise ──────────────
 _opt_data = {"obj": None, "ts": 0.0}
+_opt_data_tr = {"obj": None, "ts": 0.0}
 
 
 def implied_vol(price, S, K, T, r, option_type):
@@ -1642,27 +1643,64 @@ def _alpaca_data():
         return None
 
 
+def _tradier_data():
+    """
+    The Tradier feed (tradier_data.TradierData: real-time OPRA quotes, chains
+    with ORATS IV and Greeks) when `tradier_token` is in autotrade_config.json
+    and a probe call succeeds; None otherwise.  A failed probe is retried every
+    30 minutes.  Market-data endpoints only — it cannot place orders.
+    """
+    if _opt_data_tr["obj"] is not None:
+        return _opt_data_tr["obj"]
+    if time.time() - _opt_data_tr["ts"] < 1800:
+        return None
+    _opt_data_tr["ts"] = time.time()
+    try:
+        cfg = autotrader.load_config()
+        if not cfg.get("tradier_token"):
+            return None
+        import tradier_data
+        td = tradier_data.TradierData(cfg["tradier_token"], sandbox=bool(cfg.get("tradier_sandbox_data", False)),
+                                      iv_solver=implied_vol, risk_free=lambda: RISK_FREE_RATE)
+        td.probe()
+        _opt_data_tr["obj"] = td
+        print("  [Data] Tradier feed active — real-time quotes, chains with ORATS IV and Greeks")
+        return td
+    except Exception as e:
+        print(f"  [Data] Tradier feed unavailable ({e}) — Alpaca / Yahoo")
+        return None
+
+
+def _market_data():
+    """The best option/stock feed that answers: Tradier, else Alpaca, else None (Yahoo)."""
+    return _tradier_data() or _alpaca_data()
+
+
+def _data_feeds():
+    return [f for f in (_tradier_data(), _alpaca_data()) if f is not None]
+
+
 def _option_expirations(tkr_obj, sym=None):
-    """Listed expiries for a ticker: Alpaca when the feed is up, else Yahoo."""
+    """Listed expiries for a ticker: Tradier, else Alpaca, else Yahoo."""
     sym = sym or getattr(tkr_obj, "ticker", None)
-    ad = _alpaca_data()
-    if ad is not None and sym:
-        try:
-            return ad.expirations(sym)
-        except Exception as e:
-            print(f"  [Data] {sym} Alpaca expirations failed ({e}) — Yahoo")
+    if sym:
+        for feed in _data_feeds():
+            try:
+                return feed.expirations(sym)
+            except Exception as e:
+                print(f"  [Data] {sym} {feed.name} expirations failed ({e}) — next source")
     return _yf_call(lambda: tkr_obj.options)
 
 
 def _option_chain(tkr_obj, exp, sym=None):
-    """One expiry's option chain (.calls / .puts): Alpaca when the feed is up, else Yahoo."""
+    """One expiry's option chain (.calls / .puts): Tradier, else Alpaca, else Yahoo."""
     sym = sym or getattr(tkr_obj, "ticker", None)
-    ad = _alpaca_data()
-    if ad is not None and sym:
-        try:
-            return ad.chain(sym, exp)
-        except Exception as e:
-            print(f"  [Data] {sym} Alpaca chain failed ({e}) — Yahoo")
+    if sym:
+        for feed in _data_feeds():
+            try:
+                return feed.chain(sym, exp)
+            except Exception as e:
+                print(f"  [Data] {sym} {feed.name} chain failed ({e}) — next source")
     return _yf_call(tkr_obj.option_chain, exp)
 
 
@@ -12728,6 +12766,7 @@ def main():
 
     # Autotrader loop (does nothing until enabled in the 🤖 Autotrade tab / autotrade_config.json)
     autotrader.init(sys.modules[__name__])
+    _tradier_data(); _alpaca_data()          # probe the option feeds now so the log says which one the scanner will use
     autotrader.start()
     _at_cfg = autotrader.load_config()
     print(f"  Autotrade   : {'ENABLED — ' + _at_cfg['broker'] + ('' if _at_cfg['broker'] != 'alpaca' else (' paper' if _at_cfg['paper'] else ' LIVE ⚠')) if _at_cfg['enabled'] else 'disabled'}"

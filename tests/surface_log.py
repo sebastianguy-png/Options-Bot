@@ -13,6 +13,7 @@ Columns: date, ticker, price, hv30, iv_atm30, iv_atm60, iv_put95, iv_call105,
 import csv, os, sys, time, warnings
 from datetime import datetime
 import numpy as np
+import pandas as pd
 warnings.filterwarnings("ignore")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -21,6 +22,7 @@ import yfinance as yf                                 # noqa: E402
 import options_bot as ob                              # noqa: E402
 
 OUT = os.path.join(ROOT, "surface_history.csv")
+CHAIN_DIR = os.path.join(ROOT, "chains")        # one gzip per day: every contract of the 30/60-DTE expiries (Tradier only)
 COLS = ["date", "ticker", "price", "hv30", "iv_atm30", "iv_atm60", "iv_put95", "iv_call105", "skew", "term", "vrp", "dte30", "dte60", "source"]
 
 
@@ -45,9 +47,9 @@ def main():
                 print(f"{today}: already logged — nothing to do (use --force to append anyway)"); return
     tickers = ob.focus_universe()
     hist = ob._bulk_download(tickers, "3mo")
-    ad = ob._alpaca_data()
-    source = "alpaca" if ad is not None else "yahoo"
-    rows, done = [], 0
+    ad = ob._market_data()
+    source = getattr(ad, "name", "yahoo") if ad is not None else "yahoo"
+    rows, done, chains = [], 0, []
     for sym in tickers:
         h = hist.get(sym)
         if h is None or len(h) < 35:
@@ -67,6 +69,11 @@ def main():
             iv_atm30 = round((iv_c + iv_p) / 2, 1) if (iv_c and iv_p) else (iv_c or iv_p)
             iv_put95 = _iv_at(c30.puts, price * 0.95) if c30 else None
             iv_call105 = _iv_at(c30.calls, price * 1.05) if c30 else None
+            for ch in (c30, c60):
+                if ch is not None and getattr(ch, "source", "") == "tradier":
+                    for df in (ch.calls, ch.puts):
+                        if df is not None and not df.empty:
+                            chains.append(df.assign(date=today, ticker=sym, price=round(price, 2)))
             iv_atm60 = None
             if c60:
                 a, b = _iv_at(c60.calls, price), _iv_at(c60.puts, price)
@@ -87,6 +94,15 @@ def main():
         if new:
             w.writeheader()
         w.writerows(rows)
+    if chains:
+        os.makedirs(CHAIN_DIR, exist_ok=True)
+        allc = pd.concat(chains, ignore_index=True)
+        keep = ["date", "ticker", "price", "expiration", "type", "contractSymbol", "strike", "bid", "ask", "lastPrice", "volume",
+                "openInterest", "impliedVolatility", "delta", "gamma", "theta", "vega", "bid_iv", "ask_iv", "greeks_updated"]
+        allc = allc[[c for c in keep if c in allc.columns]]
+        cpath = os.path.join(CHAIN_DIR, f"{today}.csv.gz")
+        allc.to_csv(cpath, index=False, compression="gzip")
+        print(f"{today}: {len(allc)} contracts archived → {cpath}")
     vrp = [r["vrp"] for r in rows if r["vrp"] is not None]
     print(f"{today}: {done}/{len(tickers)} names logged from {source} in {time.time()-t0:.0f}s → {OUT}"
           + (f"; median IV−HV {np.median(vrp):+.1f} pts, {np.mean([v > 0 for v in vrp])*100:.0f}% of names have IV above realized" if vrp else ""))

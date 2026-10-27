@@ -4,6 +4,8 @@ Prints the stats of ALL trades and of the CALLS only (what the live bot trades),
 by year and by escape case, and writes the trade list to
 tests/calls_only_trades_<tag>.json so two runs can be diffed
 (py tests/calls_only_check.py tagA ; py tests/calls_only_check.py tagB).
+A third argument "nobreak" switches the breakout leg off (escape_breakout_vol 99 = the
+applied live rules since Oct 21); the dump then carries the escape-case flags.
 """
 import json, os, sys, time, warnings
 from collections import defaultdict
@@ -20,6 +22,8 @@ ob.BT_HISTORY_PERIOD = sys.argv[2] if len(sys.argv) > 2 else "6y"      # py test
 BASE = {**ob.BT_DEFAULT_PARAMS, "entry_mode": "escape", "escape_normal": "skip", "escape_breakout_vol": 2.0, "garch_mode": "gate",
         "max_spread_pct": 15, "otm_factor_call": 0.97, "dte_target": 30, "stop_loss_pct": 0, "profit_target_pct": 0,
         "trail_activate_pct": 0, "stagnant_days": 0, "hold_days": 21, "stock_stop_pct": 0, "stock_trail_pct": 7, "breadth_chg5_min": -0.15}
+if len(sys.argv) > 3 and sys.argv[3] == "nobreak":
+    BASE["escape_breakout_vol"] = 99.0                                 # reversion only (what the bot trades)
 
 
 def main():
@@ -44,7 +48,8 @@ def main():
     with open(out, "w", encoding="utf-8") as f:
         json.dump(ob._json_clean({"tag": tag, "when": datetime.now().isoformat(), "bars": bars, "calls": stats(calls), "all": stats(tr),
                                   "trades": [{k: t.get(k) for k in ("ticker", "strategy", "entry_date", "exit_date", "entry_price", "strike",
-                                                                    "entry_opt", "exit_opt", "pnl_pct", "cost_pct", "exit_reason", "iv_est")} for t in tr]}), f)
+                                                                    "entry_opt", "exit_opt", "pnl_pct", "cost_pct", "exit_reason", "iv_est",
+                                                                    "sig_escape_reversion", "sig_escape_breakout")} for t in tr]}), f)
     print(f"({time.time()-t0:.0f}s) → {out}")
 
 

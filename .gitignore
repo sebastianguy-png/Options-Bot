@@ -23,3 +23,5 @@ STOP_AUTOTRADE
 Thumbs.db
 desktop.ini
 scan_state.json
+chains/
+tests/orats_cache/

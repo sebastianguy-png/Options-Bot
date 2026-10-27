@@ -56,6 +56,10 @@ DEFAULT_CONFIG = {
     "paper":                  True,             # alpaca: paper endpoint (live also needs OPTIONS_BOT_ALLOW_LIVE=1)
     "alpaca_key_id":          "",
     "alpaca_secret":          "",
+    "tradier_token":          "",               # Tradier production token: market data now (chains with ORATS IV), orders once the live gate passes
+    "tradier_sandbox_token":  "",               # developer sandbox (paper account, delayed data) for order tests
+    "tradier_sandbox_data":   False,            # True: point the data feed at the sandbox (delayed) instead of production
+    "orats_token":            "",               # ORATS Data API (historical option quotes for the backtest)
     "paper_starting_cash":    10000.0,
     "paper_slippage_pct":     1.0,              # local paper fills this much worse than the quote mid
     "allowed_strategies":     ["buy_call", "buy_put", "sell_put"],
@@ -91,7 +95,7 @@ DEFAULT_CONFIG = {
     "conviction_boost":       1.25,             # × budget for a breakout on a band squeeze release / a reversion in a high-VIX regime
     "weekly_loss_cap_usd":    800.0,            # realised auto P&L this week ≤ −this → no new entries until next week (0 = off)
 }
-_SECRET_KEYS   = ("alpaca_key_id", "alpaca_secret")
+_SECRET_KEYS   = ("alpaca_key_id", "alpaca_secret", "tradier_token", "tradier_sandbox_token", "orats_token")
 _STRAT_BUCKET  = {"sell_put": "sell_puts", "buy_call": "buy_calls", "buy_put": "buy_puts"}   # covered calls need shares, condors are 4 legs
 _ORDER_DONE    = {"filled"}
 _ORDER_FAILED  = {"canceled", "cancelled", "expired", "rejected", "stopped", "suspended", "done_for_day", "replaced"}
@@ -144,7 +148,14 @@ def _today():
 
 
 def load_config() -> dict:
-    raw = _ob._load_json(CONFIG_FILE, {}, "Autotrade") if _ob else {}
+    if _ob:
+        raw = _ob._load_json(CONFIG_FILE, {}, "Autotrade")
+    else:                                   # standalone scripts (tests/, surface_log) read the file directly
+        try:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            raw = {}
     cfg = dict(DEFAULT_CONFIG)
     if isinstance(raw, dict):
         for k, v in raw.items():
@@ -173,6 +184,9 @@ def _coerce(cfg: dict) -> dict:
     cfg["paper"]              = bool(cfg.get("paper", True))
     cfg["alpaca_key_id"]      = str(cfg.get("alpaca_key_id") or "")
     cfg["alpaca_secret"]      = str(cfg.get("alpaca_secret") or "")
+    for k in ("tradier_token", "tradier_sandbox_token", "orats_token"):
+        cfg[k] = str(cfg.get(k) or "")
+    cfg["tradier_sandbox_data"] = bool(cfg.get("tradier_sandbox_data", False))
     cfg["paper_starting_cash"]= f("paper_starting_cash", 100.0, 1e9)
     cfg["paper_slippage_pct"] = f("paper_slippage_pct", 0.0, 10.0)
     strats = cfg.get("allowed_strategies")
@@ -1165,7 +1179,7 @@ def manual_entry(ticker: str, strategy: str = "buy_call", note: str = "", force:
         if hist is None or len(hist) == 0:
             return {"ok": False, "message": f"{ticker}: no price history"}
         price = float(hist["Close"].iloc[-1])
-        ad = _ob._alpaca_data()
+        ad = _ob._market_data()
         if ad is not None:
             try:
                 px, _ts = ad.stock_last(ticker)

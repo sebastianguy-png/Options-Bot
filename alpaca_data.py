@@ -50,6 +50,8 @@ class Chain:
 
 
 class AlpacaData:
+    name = "alpaca"
+
     def __init__(self, key_id: str, secret: str, paper: bool = True, feed: str = "indicative",
                  iv_solver: Optional[Callable] = None, risk_free: Callable[[], float] = lambda: 0.04,
                  timeout: int = 20, ttl_open: int = 300, ttl_closed: int = 1800, max_dte: int = 60):
